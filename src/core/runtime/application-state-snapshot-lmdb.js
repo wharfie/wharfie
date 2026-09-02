@@ -34,7 +34,10 @@ import {
 } from './content-id.js';
 import { cloneBoundedJsonObject } from './json-value.js';
 import { assertApplicationStateSnapshotDistribution } from './application-state-snapshot-distribution.js';
-import { createApplicationStateSnapshotControlStore } from './application-state-snapshot-control.js';
+import {
+  APPLICATION_STATE_SNAPSHOT_PUBLICATION_PREFIX,
+  createApplicationStateSnapshotControlStore,
+} from './application-state-snapshot-control.js';
 import {
   assertSettledApplicationStateHistory,
   inventoryApplicationStateHistory,
@@ -78,6 +81,10 @@ const PHASES = new Set([
   'hydration-recovery-recorded',
   'hydration-recovery-target-removed',
   'hydration-recovery-claim-released',
+  'hydration-recovery-successor-repair-recorded',
+  'hydration-recovery-successor-repair-authorized',
+  'hydration-recovery-successor-repair-target-retired',
+  'hydration-recovery-successor-repair-claim-retired',
 ]);
 
 const REPLICA_ID_FILE = '.wharfie-application-state-replica-id';
@@ -96,14 +103,35 @@ const HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX
 const HYDRATION_RECOVERY_CANDIDATE_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-candidate`;
 const HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-target`;
 const HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-claim`;
+const HYDRATION_RECOVERY_REPAIR_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair`;
+const HYDRATION_RECOVERY_REPAIR_RECEIPT_FILE_PREFIX = `${HYDRATION_RECOVERY_REPAIR_FILE_PREFIX}-receipt`;
+const HYDRATION_RECOVERY_REPAIR_CANDIDATE_FILE_PREFIX = `${HYDRATION_RECOVERY_REPAIR_FILE_PREFIX}-candidate`;
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_FILE_PREFIX = `${HYDRATION_RECOVERY_REPAIR_FILE_PREFIX}-authorization`;
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_CANDIDATE_FILE_PREFIX = `${HYDRATION_RECOVERY_REPAIR_FILE_PREFIX}-authorization-candidate`;
+const HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_REPAIR_FILE_PREFIX}-retired-target`;
+const HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_REPAIR_FILE_PREFIX}-retired-claim`;
 const HYDRATION_RECOVERY_KIND =
   'wharfie.application-state-snapshot-hydration-recovery.v1';
 const HYDRATION_RECOVERY_ID_PREFIX = 'washr1';
 const HYDRATION_RECOVERY_INSPECTION_KIND =
   'wharfie.application-state-snapshot-hydration-recovery-inspection.v1';
 const HYDRATION_RECOVERY_INSPECTION_ID_PREFIX = 'washri1';
+const HYDRATION_RECOVERY_REPAIR_KIND =
+  'wharfie.application-state-snapshot-hydration-recovery-successor-repair.v1';
+const HYDRATION_RECOVERY_REPAIR_ID_PREFIX = 'washrr1';
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_KIND =
+  'wharfie.application-state-snapshot-hydration-recovery-successor-repair-authorization.v1';
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_ID_PREFIX = 'washrra1';
+const HYDRATION_RECOVERY_REPAIR_INSPECTION_KIND =
+  'wharfie.application-state-snapshot-hydration-recovery-successor-repair-inspection.v1';
+const HYDRATION_RECOVERY_REPAIR_INSPECTION_ID_PREFIX = 'washrri1';
 const HYDRATION_RECOVERY_MAX_RECORD_BYTES = 256 * 1024;
+const HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES = 512 * 1024;
 const HYDRATION_RECOVERY_MAX_RECEIPTS = 128;
+const HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS = 128;
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_SLOT_WIDTH = String(
+  HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS - 1,
+).length;
 const HYDRATION_RECOVERY_STATES = new Set([
   'PARTIAL_TARGET',
   'RECOVERY_RECORDED',
@@ -127,6 +155,42 @@ const HYDRATION_RECOVERY_INSPECTION_KEYS = new Set([
   'inspectionId',
   'state',
   'recovery',
+]);
+const HYDRATION_RECOVERY_REPAIR_STARTING_STATES = new Set([
+  'RECOVERY_RECORDED',
+  'TARGET_REMOVED',
+]);
+const HYDRATION_RECOVERY_REPAIR_STATES = new Set([
+  'STALE_RECOVERY_RECORDED',
+  'STALE_TARGET_REMOVED',
+  'REPAIR_RECORDED',
+  'TARGET_RETIRED',
+  'REPAIRED',
+]);
+const HYDRATION_RECOVERY_REPAIR_RECORD_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'repairId',
+  'staleRecovery',
+  'publicationId',
+  'startingState',
+  'filesystem',
+]);
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'authorizationId',
+  'repairId',
+  'replacementBarrier',
+  'replacementAuthority',
+]);
+const HYDRATION_RECOVERY_REPAIR_INSPECTION_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'inspectionId',
+  'state',
+  'repair',
+  'authorization',
 ]);
 const HYDRATION_CLAIM_WAIT_ATTEMPTS = 200;
 const HYDRATION_CLAIM_WAIT_MS = 10;
@@ -173,13 +237,9 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
-/** @param {unknown} value @param {Set<string>} keys @param {string} label */
-function exactRecoveryObject(value, keys, label) {
-  const object = cloneBoundedJsonObject(
-    value,
-    HYDRATION_RECOVERY_MAX_RECORD_BYTES,
-    label,
-  );
+/** @param {unknown} value @param {Set<string>} keys @param {string} label @param {number} maxBytes */
+function exactBoundedRecoveryObject(value, keys, label, maxBytes) {
+  const object = cloneBoundedJsonObject(value, maxBytes, label);
   if (
     Object.keys(object).length !== keys.size ||
     Object.keys(object).some((key) => !keys.has(key))
@@ -187,6 +247,16 @@ function exactRecoveryObject(value, keys, label) {
     throw new TypeError(`${label} has unsupported or missing fields.`);
   }
   return object;
+}
+
+/** @param {unknown} value @param {Set<string>} keys @param {string} label */
+function exactRecoveryObject(value, keys, label) {
+  return exactBoundedRecoveryObject(
+    value,
+    keys,
+    label,
+    HYDRATION_RECOVERY_MAX_RECORD_BYTES,
+  );
 }
 
 /** @param {bigint} value @param {string} label */
@@ -803,6 +873,47 @@ function hydrationRecoveryRetiredClaimName(snapshotId, recoveryId) {
   return `${HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX}-${snapshotId}-${recoveryId}`;
 }
 
+/** @param {string} repairId */
+function hydrationRecoveryRepairName(repairId) {
+  assertDomainSeparatedSha256Id(
+    repairId,
+    HYDRATION_RECOVERY_REPAIR_ID_PREFIX,
+    'application-state hydration recovery successor repair repairId',
+  );
+  return `${HYDRATION_RECOVERY_REPAIR_RECEIPT_FILE_PREFIX}-${repairId}`;
+}
+
+/** @param {string} repairId @param {number} authorizationSlot */
+function hydrationRecoveryRepairAuthorizationName(repairId, authorizationSlot) {
+  hydrationRecoveryRepairName(repairId);
+  if (
+    !Number.isInteger(authorizationSlot) ||
+    authorizationSlot < 0 ||
+    authorizationSlot >= HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair authorization slot is invalid.',
+    );
+  }
+  const slot = String(authorizationSlot).padStart(
+    HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_SLOT_WIDTH,
+    '0',
+  );
+  return `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_FILE_PREFIX}-${repairId}-${slot}`;
+}
+
+/** @param {string} repairId */
+function hydrationRecoveryRepairRetiredTargetName(repairId) {
+  hydrationRecoveryRepairName(repairId);
+  return `${HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX}-${repairId}`;
+}
+
+/** @param {string} repairId */
+function hydrationRecoveryRepairRetiredClaimName(repairId) {
+  hydrationRecoveryRepairName(repairId);
+  return `${HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX}-${repairId}`;
+}
+
 /** @param {{transport: unknown, claim: unknown, replicaId: unknown, filesystem: unknown, replacementBarrier: unknown, replacementAuthority: unknown}} input */
 function createHydrationRecoveryRecord(input) {
   const transport = normalizeApplicationStateSnapshotTransport(input.transport);
@@ -959,6 +1070,270 @@ function validateHydrationRecoveryInspection(value) {
   return expected;
 }
 
+/** @param {unknown} value */
+function normalizeHydrationRecoveryRepairFilesystem(value) {
+  const filesystem = exactBoundedRecoveryObject(
+    value,
+    new Set(['staleReceiptFile']),
+    'application-state hydration recovery successor repair filesystem',
+    HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+  );
+  return deepFreeze(
+    sortCanonicalJsonValue({
+      staleReceiptFile: normalizeFilesystemIdentity(
+        filesystem.staleReceiptFile,
+        true,
+        'application-state hydration recovery successor repair stale receipt file',
+      ),
+    }),
+  );
+}
+
+/** @param {{staleRecovery: unknown, publicationId: unknown, startingState: unknown, filesystem: unknown}} input */
+function createHydrationRecoveryRepairRecord(input) {
+  const staleRecovery = validateHydrationRecoveryRecord(input.staleRecovery);
+  assertDomainSeparatedSha256Id(
+    input.publicationId,
+    APPLICATION_STATE_SNAPSHOT_PUBLICATION_PREFIX,
+    'application-state hydration recovery successor repair publicationId',
+  );
+  if (
+    typeof input.startingState !== 'string' ||
+    !HYDRATION_RECOVERY_REPAIR_STARTING_STATES.has(input.startingState)
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair startingState is invalid.',
+    );
+  }
+  const filesystem = normalizeHydrationRecoveryRepairFilesystem(
+    input.filesystem,
+  );
+  const payload = {
+    schemaVersion: 1,
+    kind: HYDRATION_RECOVERY_REPAIR_KIND,
+    staleRecovery,
+    publicationId: input.publicationId,
+    startingState: input.startingState,
+    filesystem,
+  };
+  const repairId = createCanonicalJsonSha256Id({
+    domain:
+      'wharfie:application-state-snapshot-hydration-recovery-successor-repair:v1',
+    prefix: HYDRATION_RECOVERY_REPAIR_ID_PREFIX,
+    value: payload,
+    valuePath: 'application-state hydration recovery successor repair record',
+  });
+  return deepFreeze(
+    sortCanonicalJsonValue(
+      cloneBoundedJsonObject(
+        { ...payload, repairId },
+        HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+        'application-state hydration recovery successor repair record',
+      ),
+    ),
+  );
+}
+
+/** @param {unknown} value */
+function validateHydrationRecoveryRepairRecord(value) {
+  const record = exactBoundedRecoveryObject(
+    value,
+    HYDRATION_RECOVERY_REPAIR_RECORD_KEYS,
+    'application-state hydration recovery successor repair record',
+    HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+  );
+  if (
+    record.schemaVersion !== 1 ||
+    record.kind !== HYDRATION_RECOVERY_REPAIR_KIND
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair record contract is invalid.',
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    record.repairId,
+    HYDRATION_RECOVERY_REPAIR_ID_PREFIX,
+    'application-state hydration recovery successor repair repairId',
+  );
+  const expected = createHydrationRecoveryRepairRecord({
+    staleRecovery: record.staleRecovery,
+    publicationId: record.publicationId,
+    startingState: record.startingState,
+    filesystem: record.filesystem,
+  });
+  if (!sameJson(record, expected)) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair record integrity is invalid.',
+    );
+  }
+  return expected;
+}
+
+/** @param {{repair: unknown, replacementBarrier: unknown, replacementAuthority: unknown}} input */
+function createHydrationRecoveryRepairAuthorization(input) {
+  const repair = validateHydrationRecoveryRepairRecord(input.repair);
+  const replacementBarrier = assertCoordinatorQuiescenceBarrierSnapshot(
+    input.replacementBarrier,
+    'application-state hydration recovery successor repair authorization replacementBarrier',
+  );
+  const replacementAuthority = assertCoordinatorAuthorityToken(
+    input.replacementAuthority,
+    'application-state hydration recovery successor repair authorization replacementAuthority',
+  );
+  const staleRecovery = repair.staleRecovery;
+  const staleAuthority = staleRecovery.replacementAuthority;
+  const staleBarrier = staleRecovery.replacementBarrier;
+  const appId =
+    staleRecovery.transport.snapshot.destination.configuration.namespace;
+  if (
+    replacementBarrier.state !== CoordinatorQuiescenceBarrierState.CLOSED ||
+    replacementBarrier.appId !== appId ||
+    replacementAuthority.appId !== appId ||
+    !sameAuthority(replacementBarrier.authority, replacementAuthority) ||
+    replacementBarrier.version <= staleBarrier.version ||
+    replacementBarrier.version <
+      staleRecovery.transport.snapshot.checkpoint.sourceBarrier.version ||
+    replacementAuthority.epoch < staleAuthority.epoch ||
+    (replacementAuthority.epoch === staleAuthority.epoch &&
+      !sameAuthority(replacementAuthority, staleAuthority))
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair authorization requires one causally newer exact CLOSED barrier and current authority.',
+    );
+  }
+  const payload = {
+    schemaVersion: 1,
+    kind: HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_KIND,
+    repairId: repair.repairId,
+    replacementBarrier,
+    replacementAuthority,
+  };
+  const authorizationId = createCanonicalJsonSha256Id({
+    domain:
+      'wharfie:application-state-snapshot-hydration-recovery-successor-repair-authorization:v1',
+    prefix: HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_ID_PREFIX,
+    value: payload,
+    valuePath:
+      'application-state hydration recovery successor repair authorization',
+  });
+  return deepFreeze(
+    sortCanonicalJsonValue(
+      cloneBoundedJsonObject(
+        { ...payload, authorizationId },
+        HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+        'application-state hydration recovery successor repair authorization',
+      ),
+    ),
+  );
+}
+
+/** @param {unknown} value @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair */
+function validateHydrationRecoveryRepairAuthorization(value, repair) {
+  const authorization = exactBoundedRecoveryObject(
+    value,
+    HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_KEYS,
+    'application-state hydration recovery successor repair authorization',
+    HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+  );
+  if (
+    authorization.schemaVersion !== 1 ||
+    authorization.kind !== HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_KIND ||
+    authorization.repairId !== repair.repairId
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair authorization contract is invalid.',
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    authorization.authorizationId,
+    HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_ID_PREFIX,
+    'application-state hydration recovery successor repair authorizationId',
+  );
+  const expected = createHydrationRecoveryRepairAuthorization({
+    repair,
+    replacementBarrier: authorization.replacementBarrier,
+    replacementAuthority: authorization.replacementAuthority,
+  });
+  if (!sameJson(authorization, expected)) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair authorization integrity is invalid.',
+    );
+  }
+  return expected;
+}
+
+/** @param {string} state @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair @param {ReturnType<typeof validateHydrationRecoveryRepairAuthorization>} authorization */
+function createHydrationRecoveryRepairInspection(state, repair, authorization) {
+  if (!HYDRATION_RECOVERY_REPAIR_STATES.has(state)) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair inspection state is invalid.',
+    );
+  }
+  const payload = {
+    schemaVersion: 1,
+    kind: HYDRATION_RECOVERY_REPAIR_INSPECTION_KIND,
+    state,
+    repair,
+    authorization,
+  };
+  const inspectionId = createCanonicalJsonSha256Id({
+    domain:
+      'wharfie:application-state-snapshot-hydration-recovery-successor-repair-inspection:v1',
+    prefix: HYDRATION_RECOVERY_REPAIR_INSPECTION_ID_PREFIX,
+    value: payload,
+    valuePath:
+      'application-state hydration recovery successor repair inspection',
+  });
+  return deepFreeze(
+    sortCanonicalJsonValue(
+      cloneBoundedJsonObject(
+        { ...payload, inspectionId },
+        HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+        'application-state hydration recovery successor repair inspection',
+      ),
+    ),
+  );
+}
+
+/** @param {unknown} value */
+function validateHydrationRecoveryRepairInspection(value) {
+  const inspection = exactBoundedRecoveryObject(
+    value,
+    HYDRATION_RECOVERY_REPAIR_INSPECTION_KEYS,
+    'application-state hydration recovery successor repair inspection',
+    HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+  );
+  if (
+    inspection.schemaVersion !== 1 ||
+    inspection.kind !== HYDRATION_RECOVERY_REPAIR_INSPECTION_KIND ||
+    !HYDRATION_RECOVERY_REPAIR_STATES.has(inspection.state)
+  ) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair inspection contract is invalid.',
+    );
+  }
+  assertDomainSeparatedSha256Id(
+    inspection.inspectionId,
+    HYDRATION_RECOVERY_REPAIR_INSPECTION_ID_PREFIX,
+    'application-state hydration recovery successor repair inspectionId',
+  );
+  const repair = validateHydrationRecoveryRepairRecord(inspection.repair);
+  const expected = createHydrationRecoveryRepairInspection(
+    inspection.state,
+    repair,
+    validateHydrationRecoveryRepairAuthorization(
+      inspection.authorization,
+      repair,
+    ),
+  );
+  if (!sameJson(inspection, expected)) {
+    throw new TypeError(
+      'Application-state hydration recovery successor repair inspection integrity is invalid.',
+    );
+  }
+  return expected;
+}
+
 /** @param {string} storePath @param {string} snapshotId @param {string} recoveryId */
 async function readHydrationRecoveryRecord(storePath, snapshotId, recoveryId) {
   try {
@@ -980,6 +1355,116 @@ async function readHydrationRecoveryRecord(storePath, snapshotId, recoveryId) {
     }
     throw new ApplicationStateSnapshotTargetCorruptionError(
       'hydration recovery record failed validation',
+      { cause },
+    );
+  }
+}
+
+/** @param {string} storePath @param {string} snapshotId @param {string} recoveryId */
+async function readHydrationRecoveryRecordEvidence(
+  storePath,
+  snapshotId,
+  recoveryId,
+) {
+  const path = join(storePath, hydrationRecoveryName(snapshotId, recoveryId));
+  let before;
+  try {
+    before = await fsp.lstat(path, { bigint: true });
+  } catch (cause) {
+    if (isNotFound(cause)) return null;
+    throw cause;
+  }
+  const recovery = await readHydrationRecoveryRecord(
+    storePath,
+    snapshotId,
+    recoveryId,
+  );
+  let after;
+  try {
+    after = await fsp.lstat(path, { bigint: true });
+  } catch (cause) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery receipt disappeared while it was inspected',
+      { cause },
+    );
+  }
+  const beforeIdentity = filesystemIdentityFromStats(
+    before,
+    true,
+    'hydration recovery receipt file',
+  );
+  const afterIdentity = filesystemIdentityFromStats(
+    after,
+    true,
+    'hydration recovery receipt file',
+  );
+  if (!recovery || !sameJson(beforeIdentity, afterIdentity)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery receipt changed while it was inspected',
+    );
+  }
+  return Object.freeze({ recovery, identity: beforeIdentity });
+}
+
+/** @param {string} storePath @param {string} repairId */
+async function readHydrationRecoveryRepairRecord(storePath, repairId) {
+  try {
+    return validateHydrationRecoveryRepairRecord(
+      JSON.parse(
+        (
+          await readSmallRegularFile(
+            join(storePath, hydrationRecoveryRepairName(repairId)),
+            HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+            'hydration recovery successor repair record',
+          )
+        ).toString('utf8'),
+      ),
+    );
+  } catch (cause) {
+    if (isNotFound(cause)) return null;
+    if (cause instanceof ApplicationStateSnapshotTargetCorruptionError) {
+      throw cause;
+    }
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair record failed validation',
+      { cause },
+    );
+  }
+}
+
+/** @param {string} storePath @param {string} repairId @param {number} authorizationSlot @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair */
+async function readHydrationRecoveryRepairAuthorization(
+  storePath,
+  repairId,
+  authorizationSlot,
+  repair,
+) {
+  try {
+    return validateHydrationRecoveryRepairAuthorization(
+      JSON.parse(
+        (
+          await readSmallRegularFile(
+            join(
+              storePath,
+              hydrationRecoveryRepairAuthorizationName(
+                repairId,
+                authorizationSlot,
+              ),
+            ),
+            HYDRATION_RECOVERY_REPAIR_MAX_RECORD_BYTES,
+            'hydration recovery successor repair authorization',
+          )
+        ).toString('utf8'),
+      ),
+      repair,
+    );
+  } catch (cause) {
+    if (isNotFound(cause)) return null;
+    if (cause instanceof ApplicationStateSnapshotTargetCorruptionError) {
+      throw cause;
+    }
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair authorization failed validation',
       { cause },
     );
   }
@@ -1134,13 +1619,170 @@ async function assertHydrationRecoveryControlState(scope) {
       'hydration recovery is forbidden after physical replica activation',
     );
   }
+  return publication;
 }
 
 const HYDRATION_RECOVERY_SNAPSHOT_ID_LENGTH = 'wass1_'.length + 43;
 const HYDRATION_RECOVERY_ID_LENGTH =
   `${HYDRATION_RECOVERY_ID_PREFIX}_`.length + 43;
+const HYDRATION_RECOVERY_REPAIR_ID_LENGTH =
+  `${HYDRATION_RECOVERY_REPAIR_ID_PREFIX}_`.length + 43;
 const HYDRATION_RECOVERY_TEMPORARY_SUFFIX_PATTERN =
   /^-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
+
+/** @param {string} name @param {string} prefix */
+function parseHydrationRecoveryRepairArtifactId(name, prefix) {
+  const artifactPrefix = `${prefix}-`;
+  if (!name.startsWith(artifactPrefix)) return null;
+  const suffix = name.slice(artifactPrefix.length);
+  const repairId = suffix.slice(0, HYDRATION_RECOVERY_REPAIR_ID_LENGTH);
+  const remainder = suffix.slice(HYDRATION_RECOVERY_REPAIR_ID_LENGTH);
+  try {
+    assertDomainSeparatedSha256Id(
+      repairId,
+      HYDRATION_RECOVERY_REPAIR_ID_PREFIX,
+      'hydration recovery successor repair artifact repairId',
+    );
+  } catch (cause) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery successor repair artifact name is malformed',
+      { cause },
+    );
+  }
+  return Object.freeze({ repairId, remainder });
+}
+
+/** @param {string} name */
+function parseHydrationRecoveryRepairAuthorizationArtifact(name) {
+  const parsed = parseHydrationRecoveryRepairArtifactId(
+    name,
+    HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_FILE_PREFIX,
+  );
+  if (!parsed) return null;
+  if (
+    parsed.remainder[0] !== '-' ||
+    parsed.remainder.length !==
+      HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_SLOT_WIDTH + 1
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery successor repair authorization name is malformed',
+    );
+  }
+  const slotName = parsed.remainder.slice(1);
+  const authorizationSlot = Number(slotName);
+  if (
+    !/^[0-9]+$/u.test(slotName) ||
+    !Number.isInteger(authorizationSlot) ||
+    authorizationSlot < 0 ||
+    authorizationSlot >= HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS ||
+    String(authorizationSlot).padStart(
+      HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_SLOT_WIDTH,
+      '0',
+    ) !== slotName
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'a hydration recovery successor repair authorization name is malformed',
+    );
+  }
+  return Object.freeze({
+    repairId: parsed.repairId,
+    authorizationSlot,
+  });
+}
+
+/** @param {string} name */
+function parseHydrationRecoveryRepairRegistryArtifact(name) {
+  const authorizationTemporary = parseHydrationRecoveryRepairArtifactId(
+    name,
+    HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_CANDIDATE_FILE_PREFIX,
+  );
+  if (authorizationTemporary) {
+    if (
+      !HYDRATION_RECOVERY_TEMPORARY_SUFFIX_PATTERN.test(
+        authorizationTemporary.remainder,
+      )
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery successor repair authorization candidate name is malformed',
+      );
+    }
+    return Object.freeze({
+      repairId: authorizationTemporary.repairId,
+      type: 'repair-authorization-temporary',
+    });
+  }
+  const temporary = parseHydrationRecoveryRepairArtifactId(
+    name,
+    HYDRATION_RECOVERY_REPAIR_CANDIDATE_FILE_PREFIX,
+  );
+  if (temporary) {
+    if (
+      !HYDRATION_RECOVERY_TEMPORARY_SUFFIX_PATTERN.test(temporary.remainder)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery successor repair candidate name is malformed',
+      );
+    }
+    return Object.freeze({
+      repairId: temporary.repairId,
+      type: 'repair-temporary',
+    });
+  }
+  const receipt = parseHydrationRecoveryRepairArtifactId(
+    name,
+    HYDRATION_RECOVERY_REPAIR_RECEIPT_FILE_PREFIX,
+  );
+  if (receipt) {
+    if (receipt.remainder !== '') {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery successor repair receipt name has an unsupported suffix',
+      );
+    }
+    return Object.freeze({
+      repairId: receipt.repairId,
+      type: 'repair-receipt',
+    });
+  }
+  const retiredTarget = parseHydrationRecoveryRepairArtifactId(
+    name,
+    HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX,
+  );
+  if (retiredTarget) {
+    if (retiredTarget.remainder !== '') {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a successor-repair retired hydration target name has an unsupported suffix',
+      );
+    }
+    return Object.freeze({
+      repairId: retiredTarget.repairId,
+      type: 'repair-retired-target',
+    });
+  }
+  const retiredClaim = parseHydrationRecoveryRepairArtifactId(
+    name,
+    HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX,
+  );
+  if (retiredClaim) {
+    if (retiredClaim.remainder !== '') {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a successor-repair retired hydration claim name has an unsupported suffix',
+      );
+    }
+    return Object.freeze({
+      repairId: retiredClaim.repairId,
+      type: 'repair-retired-claim',
+    });
+  }
+  const authorization = parseHydrationRecoveryRepairAuthorizationArtifact(name);
+  if (authorization) {
+    return Object.freeze({
+      repairId: authorization.repairId,
+      authorizationSlot: authorization.authorizationSlot,
+      type: 'repair-authorization',
+    });
+  }
+  return null;
+}
 
 /** @param {string} name @param {string} prefix */
 function parseHydrationRecoveryArtifactIds(name, prefix) {
@@ -1183,6 +1825,8 @@ function parseHydrationRecoveryArtifactIds(name, prefix) {
 
 /** @param {string} name */
 function parseHydrationRecoveryRegistryArtifact(name) {
+  const repair = parseHydrationRecoveryRepairRegistryArtifact(name);
+  if (repair) return repair;
   const temporary = parseHydrationRecoveryArtifactIds(
     name,
     HYDRATION_RECOVERY_CANDIDATE_FILE_PREFIX,
@@ -1264,9 +1908,39 @@ async function readHydrationRecoveryRegistry(
   storeRootIdentity,
 ) {
   const artifacts = new Map();
+  const repairArtifacts = new Map();
   for (const name of await fsp.readdir(storePath)) {
     const artifact = parseHydrationRecoveryRegistryArtifact(name);
-    if (!artifact || artifact.type === 'temporary') continue;
+    if (
+      !artifact ||
+      artifact.type === 'temporary' ||
+      artifact.type === 'repair-temporary' ||
+      artifact.type === 'repair-authorization-temporary'
+    ) {
+      continue;
+    }
+    if ('repairId' in artifact) {
+      const retained = repairArtifacts.get(artifact.repairId) ?? {};
+      if (artifact.type === 'repair-authorization') {
+        const authorizationSlots = retained.authorizationSlots ?? [];
+        if (authorizationSlots.includes(artifact.authorizationSlot)) {
+          throw new ApplicationStateSnapshotTargetCorruptionError(
+            'the hydration recovery successor repair registry contains a duplicate authorization slot',
+          );
+        }
+        authorizationSlots.push(artifact.authorizationSlot);
+        retained.authorizationSlots = authorizationSlots;
+      } else {
+        if (retained[artifact.type]) {
+          throw new ApplicationStateSnapshotTargetCorruptionError(
+            'the hydration recovery successor repair registry contains duplicate evidence',
+          );
+        }
+        retained[artifact.type] = true;
+      }
+      repairArtifacts.set(artifact.repairId, retained);
+      continue;
+    }
     const retained = artifacts.get(artifact.recoveryId) ?? {};
     if (
       retained.snapshotId !== undefined &&
@@ -1305,20 +1979,21 @@ async function readHydrationRecoveryRegistry(
   for (const recoveryId of receiptIds) {
     const retained = artifacts.get(recoveryId);
     const snapshotId = retained.snapshotId;
-    const recovery = await readHydrationRecoveryRecord(
+    const receiptEvidence = await readHydrationRecoveryRecordEvidence(
       storePath,
       snapshotId,
       recoveryId,
     );
     if (
-      !recovery ||
-      recovery.recoveryId !== recoveryId ||
-      recovery.transport.snapshot.snapshotId !== snapshotId
+      !receiptEvidence ||
+      receiptEvidence.recovery.recoveryId !== recoveryId ||
+      receiptEvidence.recovery.transport.snapshot.snapshotId !== snapshotId
     ) {
       throw new ApplicationStateSnapshotTargetCorruptionError(
         'a hydration recovery receipt does not match its exact registry name',
       );
     }
+    const recovery = receiptEvidence.recovery;
     assertHydrationRecoveryRegistryIdentity(
       recovery,
       replicaId,
@@ -1375,21 +2050,214 @@ async function readHydrationRecoveryRegistry(
     entries.push(
       Object.freeze({
         recovery,
+        receiptFile: receiptEvidence.identity,
         retiredTarget: retiredTarget !== null,
         retiredClaim: retiredClaim !== null,
         complete: retiredTarget !== null && retiredClaim !== null,
       }),
     );
   }
-  const incomplete = entries.filter((entry) => !entry.complete);
+  const repairReceiptIds = [...repairArtifacts.entries()]
+    .filter(([, retained]) => retained['repair-receipt'])
+    .map(([repairId]) => repairId)
+    .sort();
+  if (repairReceiptIds.length > HYDRATION_RECOVERY_MAX_RECEIPTS) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery successor repair registry exceeds its exact bounded capacity',
+    );
+  }
+  for (const [repairId, retained] of repairArtifacts) {
+    if (!retained['repair-receipt']) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        `hydration recovery successor repair evidence is orphaned for ${repairId}`,
+      );
+    }
+  }
+  const entriesByRecoveryId = new Map(
+    entries.map((entry) => [entry.recovery.recoveryId, entry]),
+  );
+  const repairs = [];
+  const repairsByRecoveryId = new Map();
+  for (const repairId of repairReceiptIds) {
+    const retained = repairArtifacts.get(repairId);
+    const repair = await readHydrationRecoveryRepairRecord(storePath, repairId);
+    if (!repair || repair.repairId !== repairId) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery successor repair receipt does not match its exact registry name',
+      );
+    }
+    const staleEntry = entriesByRecoveryId.get(repair.staleRecovery.recoveryId);
+    if (
+      !staleEntry ||
+      staleEntry.complete ||
+      !sameJson(staleEntry.recovery, repair.staleRecovery) ||
+      !sameJson(staleEntry.receiptFile, repair.filesystem.staleReceiptFile)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery successor repair does not match one exact retained incomplete receipt',
+      );
+    }
+    if (repairsByRecoveryId.has(staleEntry.recovery.recoveryId)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'one incomplete hydration recovery has multiple successor repairs',
+      );
+    }
+    if (
+      (repair.startingState === 'RECOVERY_RECORDED' &&
+        (staleEntry.retiredTarget || staleEntry.retiredClaim)) ||
+      (repair.startingState === 'TARGET_REMOVED' &&
+        (!staleEntry.retiredTarget || staleEntry.retiredClaim))
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a hydration recovery successor repair starting state does not match its stale receipt evidence',
+      );
+    }
+    const retiredTarget = retained['repair-retired-target']
+      ? await inspectEmptyHydrationDirectory(
+          join(storePath, hydrationRecoveryRepairRetiredTargetName(repairId)),
+          'successor-repair retired',
+        )
+      : null;
+    const retiredClaim = retained['repair-retired-claim']
+      ? await readHydrationRecoveryClaimEvidenceAtPath(
+          join(storePath, hydrationRecoveryRepairRetiredClaimName(repairId)),
+          'successor-repair retired',
+        )
+      : null;
+    if (
+      (retained['repair-retired-target'] && !retiredTarget) ||
+      (retained['repair-retired-claim'] && !retiredClaim)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery successor repair retirement evidence disappeared during registry inspection',
+      );
+    }
+    if (
+      repair.startingState === 'TARGET_REMOVED' &&
+      retained['repair-retired-target']
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a target-retired stale recovery must retain its original target evidence',
+      );
+    }
+    if (
+      retiredTarget &&
+      !sameJson(retiredTarget, repair.staleRecovery.filesystem.targetDirectory)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a successor-repair retired hydration target does not have its exact stale identity',
+      );
+    }
+    if (
+      retiredClaim &&
+      (!sameJson(retiredClaim.claim, repair.staleRecovery.claim) ||
+        !sameJson(
+          retiredClaim.identity,
+          repair.staleRecovery.filesystem.claimFile,
+        ))
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a successor-repair retired hydration claim does not have its exact stale identity and content',
+      );
+    }
+    const targetRetired =
+      repair.startingState === 'TARGET_REMOVED' || retiredTarget !== null;
+    if (retiredClaim && !targetRetired) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'a successor-repair retired hydration claim exists without ordered target retirement',
+      );
+    }
+    const authorizationSlots = /** @type {number[]} */ (
+      retained.authorizationSlots ?? []
+    ).sort((left, right) => left - right);
+    if (
+      authorizationSlots.length > HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery successor repair authorization registry is exhausted',
+      );
+    }
+    if (
+      authorizationSlots.some(
+        (authorizationSlot, index) => authorizationSlot !== index,
+      )
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery successor repair authorization registry has a noncanonical slot gap',
+      );
+    }
+    const authorizations = [];
+    const authorizationEntries = [];
+    const authorizationIds = new Set();
+    const authorizationScopes = new Set();
+    for (const authorizationSlot of authorizationSlots) {
+      const authorization = await readHydrationRecoveryRepairAuthorization(
+        storePath,
+        repairId,
+        authorizationSlot,
+        repair,
+      );
+      if (!authorization) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'a hydration recovery successor repair authorization disappeared from its exact registry slot',
+        );
+      }
+      if (authorizationIds.has(authorization.authorizationId)) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'a hydration recovery successor repair has duplicate authorization identity',
+        );
+      }
+      authorizationIds.add(authorization.authorizationId);
+      const scopeKey = JSON.stringify(
+        sortCanonicalJsonValue({
+          replacementAuthority: authorization.replacementAuthority,
+          replacementBarrier: authorization.replacementBarrier,
+        }),
+      );
+      if (authorizationScopes.has(scopeKey)) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'a hydration recovery successor repair has duplicate authorization scope',
+        );
+      }
+      authorizationScopes.add(scopeKey);
+      authorizations.push(authorization);
+      authorizationEntries.push(
+        Object.freeze({ slot: authorizationSlot, authorization }),
+      );
+    }
+    if ((retiredTarget || retiredClaim) && authorizations.length === 0) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery successor repair retirement lacks durable authorization evidence',
+      );
+    }
+    const repairEntry = Object.freeze({
+      repair,
+      authorizations: Object.freeze(authorizations),
+      authorizationEntries: Object.freeze(authorizationEntries),
+      retiredTarget: retiredTarget !== null,
+      retiredClaim: retiredClaim !== null,
+      complete: targetRetired && retiredClaim !== null,
+    });
+    repairs.push(repairEntry);
+    repairsByRecoveryId.set(staleEntry.recovery.recoveryId, repairEntry);
+  }
+  const incomplete = entries.filter((entry) => {
+    if (entry.complete) return false;
+    return !repairsByRecoveryId.get(entry.recovery.recoveryId)?.complete;
+  });
   if (incomplete.length > 1) {
     throw new ApplicationStateSnapshotTargetCorruptionError(
       'the hydration recovery registry contains multiple incomplete attempts',
     );
   }
+  const incompleteRepair = incomplete[0]
+    ? (repairsByRecoveryId.get(incomplete[0].recovery.recoveryId) ?? null)
+    : null;
   return Object.freeze({
     entries: Object.freeze(entries),
+    repairs: Object.freeze(repairs),
     incompleteRecoveryId: incomplete[0]?.recovery.recoveryId ?? null,
+    incompleteRepairId: incompleteRepair?.repair.repairId ?? null,
   });
 }
 
@@ -1447,10 +2315,53 @@ function classifyRetainedHydrationRecoveryAttempt(view, entry) {
   return 'TARGET_REMOVED';
 }
 
+/** @param {Readonly<Record<string, any>>} view @param {Readonly<Record<string, any>>} entry */
+function classifyRetainedHydrationRecoveryRepairAttempt(view, entry) {
+  const recovery = entry.repair.staleRecovery;
+  if (entry.complete) return 'REPAIRED';
+  const targetRetired =
+    entry.repair.startingState === 'TARGET_REMOVED' || entry.retiredTarget;
+  if (!targetRetired) {
+    assertActiveHydrationRecoveryAttempt(view, recovery);
+    return 'REPAIR_RECORDED';
+  }
+  if (
+    view.targetIdentity ||
+    !view.claimEvidence ||
+    !sameJson(view.claimEvidence.claim, recovery.claim) ||
+    !sameJson(view.claimEvidence.identity, recovery.filesystem.claimFile)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the active hydration claim does not match the target-retired successor repair attempt',
+    );
+  }
+  if (
+    entry.repair.startingState === 'TARGET_REMOVED' &&
+    entry.authorizations.length === 0
+  ) {
+    return 'REPAIR_RECORDED';
+  }
+  return 'TARGET_RETIRED';
+}
+
 /** @param {Readonly<Record<string, any>>} view */
 function assertHydrationRecoveryRegistryViewCanonical(view) {
   /** @type {Array<{recovery: ReturnType<typeof validateHydrationRecoveryRecord>, retiredTarget: boolean, retiredClaim: boolean, complete: boolean}>} */
   const registryEntries = view.registry.entries;
+  /** @type {Readonly<Record<string, any>>[]} */
+  const repairEntries = view.registry.repairs;
+  if (view.registry.incompleteRepairId) {
+    const incompleteRepair = repairEntries.find(
+      (entry) => entry.repair.repairId === view.registry.incompleteRepairId,
+    );
+    if (!incompleteRepair) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery registry lost its incomplete successor repair',
+      );
+    }
+    classifyRetainedHydrationRecoveryRepairAttempt(view, incompleteRepair);
+    return;
+  }
   if (view.registry.incompleteRecoveryId) {
     const incomplete = registryEntries.find(
       (entry) =>
@@ -1627,6 +2538,257 @@ async function inspectHydrationRecoveryScope(scope, requestedRecovery = null) {
     replicaId,
     first,
     requestedRecovery,
+  );
+}
+
+/** @param {{closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair */
+function hydrationRecoveryRepairAuthorizationForScope(scope, repair) {
+  return createHydrationRecoveryRepairAuthorization({
+    repair,
+    replacementBarrier: scope.closedBarrier,
+    replacementAuthority: scope.authority,
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} view @param {string} recoveryId */
+function hydrationRecoveryRegistryEntry(view, recoveryId) {
+  /** @type {Readonly<Record<string, any>>[]} */
+  const entries = view.registry.entries;
+  return (
+    entries.find((entry) => entry.recovery.recoveryId === recoveryId) ?? null
+  );
+}
+
+/** @param {Readonly<Record<string, any>>} view @param {string} repairId */
+function hydrationRecoveryRepairRegistryEntry(view, repairId) {
+  /** @type {Readonly<Record<string, any>>[]} */
+  const repairs = view.registry.repairs;
+  return repairs.find((entry) => entry.repair.repairId === repairId) ?? null;
+}
+
+/** @param {{transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {Readonly<Record<string, any>>} publication @param {string} replicaId @param {Readonly<Record<string, any>>} view @param {ReturnType<typeof validateHydrationRecoveryRepairRecord> | null} requestedRepair */
+function selectHydrationRecoveryRepairInspection(
+  scope,
+  publication,
+  replicaId,
+  view,
+  requestedRepair,
+) {
+  /** @type {Readonly<Record<string, any>>[]} */
+  const repairEntries = view.registry.repairs;
+  /** @type {Readonly<Record<string, any>> | null} */
+  let staleEntry = null;
+  /** @type {Readonly<Record<string, any>> | null} */
+  let retainedRepairEntry = null;
+  if (requestedRepair) {
+    assertHydrationRecoveryRegistryIdentity(
+      requestedRepair.staleRecovery,
+      replicaId,
+      view.storeRootIdentity,
+    );
+    if (
+      !sameJson(requestedRepair.staleRecovery.transport, scope.transport) ||
+      requestedRepair.publicationId !== publication.publicationId
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the requested hydration recovery successor repair does not match the exact transport and publication scope',
+      );
+    }
+    staleEntry = hydrationRecoveryRegistryEntry(
+      view,
+      requestedRepair.staleRecovery.recoveryId,
+    );
+    if (
+      !staleEntry ||
+      staleEntry.complete ||
+      !sameJson(staleEntry.recovery, requestedRepair.staleRecovery) ||
+      !sameJson(
+        staleEntry.receiptFile,
+        requestedRepair.filesystem.staleReceiptFile,
+      )
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the requested hydration recovery successor repair lost its exact stale receipt evidence',
+      );
+    }
+    retainedRepairEntry = hydrationRecoveryRepairRegistryEntry(
+      view,
+      requestedRepair.repairId,
+    );
+    if (
+      retainedRepairEntry &&
+      !sameJson(retainedRepairEntry.repair, requestedRepair)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the requested hydration recovery successor repair differs from its retained registry record',
+      );
+    }
+    const retainedForRecovery = repairEntries.find(
+      (entry) =>
+        entry.repair.staleRecovery.recoveryId ===
+        requestedRepair.staleRecovery.recoveryId,
+    );
+    if (
+      retainedForRecovery &&
+      retainedForRecovery.repair.repairId !== requestedRepair.repairId
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'another successor repair occupies the exact stale recovery scope',
+      );
+    }
+    if (
+      !retainedRepairEntry &&
+      view.registry.incompleteRecoveryId !== staleEntry.recovery.recoveryId
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the requested successor repair does not match the active incomplete hydration recovery',
+      );
+    }
+  } else if (view.registry.incompleteRecoveryId) {
+    staleEntry = hydrationRecoveryRegistryEntry(
+      view,
+      view.registry.incompleteRecoveryId,
+    );
+    if (!staleEntry) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery successor repair inspection lost its stale receipt',
+      );
+    }
+    retainedRepairEntry = view.registry.incompleteRepairId
+      ? hydrationRecoveryRepairRegistryEntry(
+          view,
+          view.registry.incompleteRepairId,
+        )
+      : null;
+  } else {
+    if (view.claimEvidence || view.targetIdentity) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery successor repair does not apply to an unrecorded partial target',
+      );
+    }
+    retainedRepairEntry =
+      repairEntries.find(
+        (entry) =>
+          entry.complete &&
+          sameJson(entry.repair.staleRecovery.transport, scope.transport),
+      ) ?? null;
+    if (!retainedRepairEntry) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery successor repair requires exact stale or completed repair evidence',
+      );
+    }
+    staleEntry = hydrationRecoveryRegistryEntry(
+      view,
+      retainedRepairEntry.repair.staleRecovery.recoveryId,
+    );
+  }
+  if (!staleEntry) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair requires one exact stale receipt',
+    );
+  }
+  if (!sameJson(staleEntry.recovery.transport, scope.transport)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the stale hydration recovery receipt does not match the exact repair transport',
+    );
+  }
+  let repair;
+  let state;
+  if (retainedRepairEntry) {
+    repair = retainedRepairEntry.repair;
+    const expectedRepair = createHydrationRecoveryRepairRecord({
+      staleRecovery: staleEntry.recovery,
+      publicationId: publication.publicationId,
+      startingState: repair.startingState,
+      filesystem: { staleReceiptFile: staleEntry.receiptFile },
+    });
+    if (!sameJson(repair, expectedRepair)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the retained hydration recovery successor repair does not match its exact stale subject',
+      );
+    }
+    state = classifyRetainedHydrationRecoveryRepairAttempt(
+      view,
+      retainedRepairEntry,
+    );
+  } else {
+    const staleState = classifyRetainedHydrationRecoveryAttempt(
+      view,
+      staleEntry,
+    );
+    if (!HYDRATION_RECOVERY_REPAIR_STARTING_STATES.has(staleState)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'hydration recovery successor repair requires an incomplete retained recovery receipt',
+      );
+    }
+    repair = createHydrationRecoveryRepairRecord({
+      staleRecovery: staleEntry.recovery,
+      publicationId: publication.publicationId,
+      startingState: staleState,
+      filesystem: { staleReceiptFile: staleEntry.receiptFile },
+    });
+    if (requestedRepair && !sameJson(repair, requestedRepair)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the proposed hydration recovery successor repair changed after inspection',
+      );
+    }
+    state =
+      staleState === 'RECOVERY_RECORDED'
+        ? 'STALE_RECOVERY_RECORDED'
+        : 'STALE_TARGET_REMOVED';
+  }
+  const authorization = hydrationRecoveryRepairAuthorizationForScope(
+    scope,
+    repair,
+  );
+  if (retainedRepairEntry && state !== 'REPAIRED') {
+    /** @type {Readonly<Record<string, any>>[]} */
+    const retainedAuthorizations = retainedRepairEntry.authorizations;
+    const retainedAuthorization = retainedAuthorizations.find(
+      (value) => value.authorizationId === authorization.authorizationId,
+    );
+    if (
+      !retainedAuthorization &&
+      retainedAuthorizations.length >=
+        HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the hydration recovery successor repair authorization registry is exhausted',
+      );
+    }
+  }
+  return createHydrationRecoveryRepairInspection(state, repair, authorization);
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord> | null} [requestedRepair] */
+async function inspectHydrationRecoveryRepairScope(
+  scope,
+  requestedRepair = null,
+) {
+  const firstPublication = await assertHydrationRecoveryControlState(scope);
+  const replicaId = await readPhysicalReplicaId(scope.configuration.storePath);
+  const first = await readHydrationRecoveryFilesystem(scope, replicaId);
+  const secondReplicaId = await readPhysicalReplicaId(
+    scope.configuration.storePath,
+  );
+  const second = await readHydrationRecoveryFilesystem(scope, secondReplicaId);
+  const secondPublication = await assertHydrationRecoveryControlState(scope);
+  if (
+    replicaId !== secondReplicaId ||
+    !sameJson(first, second) ||
+    !sameJson(firstPublication, secondPublication)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair evidence changed during inspection',
+    );
+  }
+  assertHydrationRecoveryRegistryViewCanonical(first);
+  return selectHydrationRecoveryRepairInspection(
+    scope,
+    firstPublication,
+    replicaId,
+    first,
+    requestedRepair,
   );
 }
 
@@ -1978,6 +3140,598 @@ async function syncAndVerifyCompletedHydrationRecovery(storePath, recovery) {
   return receipt;
 }
 
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} expected */
+async function persistHydrationRecoveryRepairRecord(scope, expected) {
+  const storePath = scope.configuration.storePath;
+  const path = join(storePath, hydrationRecoveryRepairName(expected.repairId));
+  const replicaId = await readPhysicalReplicaId(storePath);
+  const view = await readHydrationRecoveryFilesystem(scope, replicaId);
+  assertHydrationRecoveryRegistryViewCanonical(view);
+  const existing = hydrationRecoveryRepairRegistryEntry(
+    view,
+    expected.repairId,
+  )?.repair;
+  if (existing) {
+    if (!sameJson(existing, expected)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'another successor repair record occupies the exact repair identity',
+      );
+    }
+    await syncDirectory(storePath);
+    const durableExisting = await readHydrationRecoveryRepairRecord(
+      storePath,
+      expected.repairId,
+    );
+    if (!durableExisting || !sameJson(durableExisting, expected)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the existing successor repair receipt failed durable replay verification',
+      );
+    }
+    return durableExisting;
+  }
+  if (
+    view.registry.repairs.some(
+      (entry) =>
+        entry.repair.staleRecovery.recoveryId ===
+        expected.staleRecovery.recoveryId,
+    )
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'another successor repair already occupies the stale recovery scope',
+    );
+  }
+  if (
+    view.registry.incompleteRecoveryId !== expected.staleRecovery.recoveryId ||
+    view.registry.incompleteRepairId
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the stale recovery is no longer eligible for successor repair receipt persistence',
+    );
+  }
+  if (view.registry.repairs.length >= HYDRATION_RECOVERY_MAX_RECEIPTS) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery successor repair registry is exhausted',
+    );
+  }
+  const staleEntry = hydrationRecoveryRegistryEntry(
+    view,
+    expected.staleRecovery.recoveryId,
+  );
+  if (
+    !staleEntry ||
+    !sameJson(staleEntry.recovery, expected.staleRecovery) ||
+    !sameJson(staleEntry.receiptFile, expected.filesystem.staleReceiptFile)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the exact stale recovery subject changed before successor repair persistence',
+    );
+  }
+  const temporaryPath = join(
+    storePath,
+    `${HYDRATION_RECOVERY_REPAIR_CANDIDATE_FILE_PREFIX}-${expected.repairId}-${randomUUID()}.tmp`,
+  );
+  try {
+    await writeAndSync(
+      temporaryPath,
+      Buffer.from(
+        `${JSON.stringify(sortCanonicalJsonValue(expected))}\n`,
+        'utf8',
+      ),
+    );
+    await assertHydrationRecoveryControlState(scope);
+    try {
+      await fsp.link(temporaryPath, path);
+    } catch (error) {
+      if (/** @type {{code?: unknown}} */ (error)?.code !== 'EEXIST') {
+        throw error;
+      }
+    }
+    await syncDirectory(storePath);
+  } finally {
+    try {
+      await fsp.unlink(temporaryPath);
+    } catch {
+      // Private repair candidates are never consulted as retained evidence.
+    }
+  }
+  const retained = await readHydrationRecoveryRepairRecord(
+    storePath,
+    expected.repairId,
+  );
+  const retainedRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (
+    !retained ||
+    !sameJson(retained, expected) ||
+    !sameJson(retainedRoot, expected.staleRecovery.filesystem.storeRoot)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the successor repair record was not durably readable',
+    );
+  }
+  return retained;
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair @param {ReturnType<typeof validateHydrationRecoveryRepairAuthorization>} expected */
+async function inspectDurableHydrationRecoveryRepairAuthorization(
+  scope,
+  repair,
+  expected,
+) {
+  const storePath = scope.configuration.storePath;
+  await syncDirectory(storePath);
+  const replicaId = await readPhysicalReplicaId(storePath);
+  const view = await readHydrationRecoveryFilesystem(scope, replicaId);
+  assertHydrationRecoveryRegistryViewCanonical(view);
+  const repairEntry = hydrationRecoveryRepairRegistryEntry(
+    view,
+    repair.repairId,
+  );
+  if (!repairEntry || !sameJson(repairEntry.repair, repair)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the successor repair receipt changed while authorization durability was verified',
+    );
+  }
+  /** @type {Array<{slot: number, authorization: Readonly<Record<string, any>>}>} */
+  const authorizationEntries = repairEntry.authorizationEntries;
+  const retained =
+    authorizationEntries.find(
+      (entry) =>
+        entry.authorization.authorizationId === expected.authorizationId,
+    ) ?? null;
+  if (retained && !sameJson(retained.authorization, expected)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the retained successor repair authorization differs from the exact current scope',
+    );
+  }
+  await assertHydrationRecoveryControlState(scope);
+  return Object.freeze({
+    retained,
+    authorizationCount: authorizationEntries.length,
+  });
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair @param {ReturnType<typeof validateHydrationRecoveryRepairAuthorization>} expected */
+async function persistHydrationRecoveryRepairAuthorization(
+  scope,
+  repair,
+  expected,
+) {
+  const currentExpected = hydrationRecoveryRepairAuthorizationForScope(
+    scope,
+    repair,
+  );
+  if (!sameJson(expected, currentExpected)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the proposed successor repair authorization is not the exact current scope',
+    );
+  }
+  const storePath = scope.configuration.storePath;
+  const replicaId = await readPhysicalReplicaId(storePath);
+  const view = await readHydrationRecoveryFilesystem(scope, replicaId);
+  assertHydrationRecoveryRegistryViewCanonical(view);
+  const repairEntry = hydrationRecoveryRepairRegistryEntry(
+    view,
+    repair.repairId,
+  );
+  if (!repairEntry || !sameJson(repairEntry.repair, repair)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the successor repair receipt changed before authorization persistence',
+    );
+  }
+  /** @type {Array<{slot: number, authorization: Readonly<Record<string, any>>}>} */
+  const authorizationEntries = repairEntry.authorizationEntries;
+  const existing = authorizationEntries.find(
+    (entry) => entry.authorization.authorizationId === expected.authorizationId,
+  );
+  if (existing) {
+    if (!sameJson(existing.authorization, expected)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the retained successor repair authorization differs from the exact current scope',
+      );
+    }
+    const durable = await inspectDurableHydrationRecoveryRepairAuthorization(
+      scope,
+      repair,
+      expected,
+    );
+    if (!durable.retained || durable.retained.slot !== existing.slot) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the exact successor repair authorization changed slots during durable replay verification',
+      );
+    }
+    return durable.retained.authorization;
+  }
+  if (
+    authorizationEntries.length >= HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery successor repair authorization registry is exhausted',
+    );
+  }
+  const temporaryPath = join(
+    storePath,
+    `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_CANDIDATE_FILE_PREFIX}-${repair.repairId}-${randomUUID()}.tmp`,
+  );
+  try {
+    await writeAndSync(
+      temporaryPath,
+      Buffer.from(
+        `${JSON.stringify(sortCanonicalJsonValue(expected))}\n`,
+        'utf8',
+      ),
+    );
+    for (
+      let authorizationSlot = 0;
+      authorizationSlot < HYDRATION_RECOVERY_REPAIR_MAX_AUTHORIZATIONS;
+      authorizationSlot += 1
+    ) {
+      const path = join(
+        storePath,
+        hydrationRecoveryRepairAuthorizationName(
+          repair.repairId,
+          authorizationSlot,
+        ),
+      );
+      const occupied = await readHydrationRecoveryRepairAuthorization(
+        storePath,
+        repair.repairId,
+        authorizationSlot,
+        repair,
+      );
+      if (occupied) {
+        if (!sameJson(occupied, expected)) continue;
+        const replay = await inspectDurableHydrationRecoveryRepairAuthorization(
+          scope,
+          repair,
+          expected,
+        );
+        if (!replay.retained || replay.retained.slot !== authorizationSlot) {
+          throw new ApplicationStateSnapshotTargetCorruptionError(
+            'the exact successor repair authorization changed slots during concurrent replay verification',
+          );
+        }
+        return replay.retained.authorization;
+      }
+      const reservation =
+        await inspectDurableHydrationRecoveryRepairAuthorization(
+          scope,
+          repair,
+          expected,
+        );
+      if (reservation.retained) return reservation.retained.authorization;
+      if (reservation.authorizationCount > authorizationSlot) continue;
+      if (reservation.authorizationCount < authorizationSlot) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the successor repair authorization registry changed before atomic slot reservation',
+        );
+      }
+      try {
+        await fsp.link(temporaryPath, path);
+      } catch (error) {
+        if (/** @type {{code?: unknown}} */ (error)?.code !== 'EEXIST') {
+          throw error;
+        }
+        const winner = await readHydrationRecoveryRepairAuthorization(
+          storePath,
+          repair.repairId,
+          authorizationSlot,
+          repair,
+        );
+        if (!winner) {
+          throw new ApplicationStateSnapshotTargetCorruptionError(
+            'an occupied successor repair authorization slot disappeared during atomic reservation',
+            { cause: error },
+          );
+        }
+        if (!sameJson(winner, expected)) continue;
+        const replay = await inspectDurableHydrationRecoveryRepairAuthorization(
+          scope,
+          repair,
+          expected,
+        );
+        if (!replay.retained || replay.retained.slot !== authorizationSlot) {
+          throw new ApplicationStateSnapshotTargetCorruptionError(
+            'the exact successor repair authorization changed slots after an atomic replay collision',
+          );
+        }
+        return replay.retained.authorization;
+      }
+      await syncDirectory(storePath);
+      const retained = await inspectDurableHydrationRecoveryRepairAuthorization(
+        scope,
+        repair,
+        expected,
+      );
+      if (!retained.retained || retained.retained.slot !== authorizationSlot) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the successor repair authorization was not durably retained in its exact reserved slot',
+        );
+      }
+      return retained.retained.authorization;
+    }
+    const replay = await inspectDurableHydrationRecoveryRepairAuthorization(
+      scope,
+      repair,
+      expected,
+    );
+    if (replay.retained) return replay.retained.authorization;
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the hydration recovery successor repair authorization registry is exhausted',
+    );
+  } finally {
+    try {
+      await fsp.unlink(temporaryPath);
+    } catch {
+      // Private authorization candidates are never retained evidence.
+    }
+  }
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair @param {ReturnType<typeof validateHydrationRecoveryRepairAuthorization>} authorization */
+async function assertHydrationRecoveryRepairMutationAuthority(
+  scope,
+  repair,
+  authorization,
+) {
+  const expected = hydrationRecoveryRepairAuthorizationForScope(scope, repair);
+  if (!sameJson(expected, authorization)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the retained successor repair authorization is not current',
+    );
+  }
+  await assertHydrationRecoveryControlState(scope);
+  const replicaId = await readPhysicalReplicaId(scope.configuration.storePath);
+  const view = await readHydrationRecoveryFilesystem(scope, replicaId);
+  assertHydrationRecoveryRegistryViewCanonical(view);
+  const repairEntry = hydrationRecoveryRepairRegistryEntry(
+    view,
+    repair.repairId,
+  );
+  /** @type {Readonly<Record<string, any>>[]} */
+  const retainedAuthorizations = repairEntry?.authorizations ?? [];
+  if (
+    !repairEntry ||
+    !sameJson(repairEntry.repair, repair) ||
+    !retainedAuthorizations.some((value) => sameJson(value, authorization))
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the exact current successor repair authorization is not durably retained',
+    );
+  }
+  return Object.freeze({ view, repairEntry });
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair @param {ReturnType<typeof validateHydrationRecoveryRepairAuthorization>} authorization */
+async function retireHydrationRecoveryRepairTarget(
+  scope,
+  repair,
+  authorization,
+) {
+  const storePath = scope.configuration.storePath;
+  const recovery = repair.staleRecovery;
+  await assertHydrationRecoveryRepairMutationAuthority(
+    scope,
+    repair,
+    authorization,
+  );
+  if (repair.startingState === 'TARGET_REMOVED') {
+    const retained = await inspectEmptyHydrationDirectory(
+      join(
+        storePath,
+        hydrationRecoveryRetiredTargetName(
+          recovery.transport.snapshot.snapshotId,
+          recovery.recoveryId,
+        ),
+      ),
+      'stale-recovery retired',
+    );
+    const active = await inspectEmptyHydrationTarget(storePath);
+    if (
+      active ||
+      !retained ||
+      !sameJson(retained, recovery.filesystem.targetDirectory)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the stale recovery target-retirement evidence changed before successor repair',
+      );
+    }
+    await assertHydrationRecoveryControlState(scope);
+    return;
+  }
+  const sourcePath = join(storePath, 'lmdb');
+  const retiredPath = join(
+    storePath,
+    hydrationRecoveryRepairRetiredTargetName(repair.repairId),
+  );
+  const source = await inspectEmptyHydrationDirectory(
+    sourcePath,
+    'successor-repair active',
+  );
+  const retired = await inspectEmptyHydrationDirectory(
+    retiredPath,
+    'successor-repair retired',
+  );
+  if (source && retired) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'both active and successor-repair retired hydration target paths are occupied',
+    );
+  }
+  if (retired) {
+    if (!sameJson(retired, recovery.filesystem.targetDirectory)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the successor-repair retired hydration target identity changed',
+      );
+    }
+  } else {
+    if (!source || !sameJson(source, recovery.filesystem.targetDirectory)) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the active hydration target changed before successor repair retirement',
+      );
+    }
+    await assertHydrationRecoveryControlState(scope);
+    try {
+      await fsp.rename(sourcePath, retiredPath);
+    } catch (cause) {
+      const replaySource = await inspectEmptyHydrationDirectory(
+        sourcePath,
+        'successor-repair active',
+      );
+      const replayRetired = await inspectEmptyHydrationDirectory(
+        retiredPath,
+        'successor-repair retired',
+      );
+      if (
+        replaySource ||
+        !replayRetired ||
+        !sameJson(replayRetired, recovery.filesystem.targetDirectory)
+      ) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the exact hydration target could not be successor-repair retired',
+          { cause },
+        );
+      }
+    }
+  }
+  await syncDirectory(storePath);
+  const finalSource = await inspectEmptyHydrationDirectory(
+    sourcePath,
+    'successor-repair active',
+  );
+  const finalRetired = await inspectEmptyHydrationDirectory(
+    retiredPath,
+    'successor-repair retired',
+  );
+  const finalRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (
+    finalSource ||
+    !finalRetired ||
+    !sameJson(finalRetired, recovery.filesystem.targetDirectory) ||
+    !sameJson(finalRoot, recovery.filesystem.storeRoot)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the successor-repair retired hydration target failed exact post-rename verification',
+    );
+  }
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, controlContext: ReturnType<typeof snapshotControlContext>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair @param {ReturnType<typeof validateHydrationRecoveryRepairAuthorization>} authorization */
+async function retireHydrationRecoveryRepairClaim(
+  scope,
+  repair,
+  authorization,
+) {
+  const storePath = scope.configuration.storePath;
+  const recovery = repair.staleRecovery;
+  await assertHydrationRecoveryRepairMutationAuthority(
+    scope,
+    repair,
+    authorization,
+  );
+  const sourcePath = join(storePath, HYDRATION_CLAIM_FILE);
+  const retiredPath = join(
+    storePath,
+    hydrationRecoveryRepairRetiredClaimName(repair.repairId),
+  );
+  const source = await readHydrationRecoveryClaimEvidenceAtPath(
+    sourcePath,
+    'successor-repair active',
+  );
+  const retired = await readHydrationRecoveryClaimEvidenceAtPath(
+    retiredPath,
+    'successor-repair retired',
+  );
+  if (source && retired) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'both active and successor-repair retired hydration claim paths are occupied',
+    );
+  }
+  if (retired) {
+    if (
+      !sameJson(retired.claim, recovery.claim) ||
+      !sameJson(retired.identity, recovery.filesystem.claimFile)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the successor-repair retired hydration claim identity changed',
+      );
+    }
+  } else {
+    if (
+      !source ||
+      !sameJson(source.claim, recovery.claim) ||
+      !sameJson(source.identity, recovery.filesystem.claimFile)
+    ) {
+      throw new ApplicationStateSnapshotTargetCorruptionError(
+        'the active hydration claim changed before successor repair retirement',
+      );
+    }
+    await assertHydrationRecoveryControlState(scope);
+    try {
+      await fsp.rename(sourcePath, retiredPath);
+    } catch (cause) {
+      const replaySource = await readHydrationRecoveryClaimEvidenceAtPath(
+        sourcePath,
+        'successor-repair active',
+      );
+      const replayRetired = await readHydrationRecoveryClaimEvidenceAtPath(
+        retiredPath,
+        'successor-repair retired',
+      );
+      if (
+        replaySource ||
+        !replayRetired ||
+        !sameJson(replayRetired.claim, recovery.claim) ||
+        !sameJson(replayRetired.identity, recovery.filesystem.claimFile)
+      ) {
+        throw new ApplicationStateSnapshotTargetCorruptionError(
+          'the exact hydration claim could not be successor-repair retired',
+          { cause },
+        );
+      }
+    }
+  }
+  await syncDirectory(storePath);
+  const finalSource = await readHydrationRecoveryClaimEvidenceAtPath(
+    sourcePath,
+    'successor-repair active',
+  );
+  const finalRetired = await readHydrationRecoveryClaimEvidenceAtPath(
+    retiredPath,
+    'successor-repair retired',
+  );
+  const finalRoot = await inspectHydrationRecoveryStoreRoot(storePath);
+  if (
+    finalSource ||
+    !finalRetired ||
+    !sameJson(finalRetired.claim, recovery.claim) ||
+    !sameJson(finalRetired.identity, recovery.filesystem.claimFile) ||
+    !sameJson(finalRoot, recovery.filesystem.storeRoot)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the successor-repair retired hydration claim failed exact post-rename verification',
+    );
+  }
+}
+
+/** @param {{configuration: ReturnType<typeof validateApplicationStateStoreConfiguration>, transport: ReturnType<typeof normalizeApplicationStateSnapshotTransport>}} scope @param {ReturnType<typeof validateHydrationRecoveryRepairRecord>} repair */
+async function syncAndVerifyCompletedHydrationRecoveryRepair(scope, repair) {
+  const storePath = scope.configuration.storePath;
+  await syncDirectory(storePath);
+  const replicaId = await readPhysicalReplicaId(storePath);
+  const view = await readHydrationRecoveryFilesystem(scope, replicaId);
+  assertHydrationRecoveryRegistryViewCanonical(view);
+  const entry = hydrationRecoveryRepairRegistryEntry(view, repair.repairId);
+  if (
+    !entry ||
+    !sameJson(entry.repair, repair) ||
+    classifyRetainedHydrationRecoveryRepairAttempt(view, entry) !== 'REPAIRED'
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'the completed hydration recovery successor repair failed durable exact replay verification',
+    );
+  }
+  return entry.repair;
+}
+
 /** @param {{controlContext: ReturnType<typeof snapshotControlContext>, closedBarrier: ReturnType<typeof assertCoordinatorQuiescenceBarrierSnapshot>, authority: ReturnType<typeof assertCoordinatorAuthorityToken>}} scope */
 async function assertHydrationRecoveryCompletionAuthority(scope) {
   await assertCoordinatorAuthorityCurrent({
@@ -1986,6 +3740,148 @@ async function assertHydrationRecoveryCompletionAuthority(scope) {
     authority: scope.authority,
   });
   await assertDurableBarrierExact(scope.controlContext, scope.closedBarrier);
+}
+
+/**
+ * Inspect one exact incomplete recovery receipt whose retained authority or
+ * barrier has been causally superseded. This operation is read-only. The
+ * returned repair identity remains stable across later successor authorities;
+ * its authorization and inspection identities do not.
+ * @param {{configuration: unknown, controlContext: Record<string, any>, transport: unknown, closedBarrier: unknown, coordinatorAuthority: unknown}} options
+ */
+export async function inspectApplicationStateSnapshotHydrationRecoveryRepair(
+  options,
+) {
+  const scope = normalizeHydrationRecoveryScope(
+    options,
+    new Set([
+      'configuration',
+      'controlContext',
+      'transport',
+      'closedBarrier',
+      'coordinatorAuthority',
+    ]),
+    'Application-state snapshot hydration recovery successor repair inspection',
+  );
+  return await inspectHydrationRecoveryRepairScope(scope);
+}
+
+/**
+ * Explicitly repair one exact stale incomplete hydration recovery. The stable
+ * repair receipt is authority-neutral, while an append-only authorization
+ * receipt durably records every exact current successor scope that may perform
+ * the retained, repair-specific target and claim retirements.
+ * @param {{configuration: unknown, controlContext: Record<string, any>, transport: unknown, closedBarrier: unknown, coordinatorAuthority: unknown, inspection: unknown, confirmStaleHydrationRecoveryRepair: boolean, observePhase?: (phase: string) => Promise<void> | void}} options
+ */
+export async function repairApplicationStateSnapshotHydrationRecovery(options) {
+  const scope = normalizeHydrationRecoveryScope(
+    options,
+    new Set([
+      'configuration',
+      'controlContext',
+      'transport',
+      'closedBarrier',
+      'coordinatorAuthority',
+      'inspection',
+      'confirmStaleHydrationRecoveryRepair',
+      'observePhase',
+    ]),
+    'Application-state snapshot hydration recovery successor repair',
+  );
+  if (options.confirmStaleHydrationRecoveryRepair !== true) {
+    throw new TypeError(
+      'Application-state snapshot hydration recovery successor repair requires explicit stale-recovery confirmation.',
+    );
+  }
+  const inspection = validateHydrationRecoveryRepairInspection(
+    options.inspection,
+  );
+  const requestedRepair = inspection.repair;
+  const requestedAuthorization = inspection.authorization;
+  const observePhase = normalizeObserver(options.observePhase);
+  let current = await inspectHydrationRecoveryRepairScope(
+    scope,
+    requestedRepair,
+  );
+  if (!sameJson(current, inspection)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair state changed after the retained inspection',
+    );
+  }
+  if (current.state === 'REPAIRED') {
+    await syncAndVerifyCompletedHydrationRecoveryRepair(scope, requestedRepair);
+    await assertHydrationRecoveryControlState(scope);
+    return requestedRepair;
+  }
+
+  const repair = await persistHydrationRecoveryRepairRecord(
+    scope,
+    requestedRepair,
+  );
+  await observePhase('hydration-recovery-successor-repair-recorded');
+
+  current = await inspectHydrationRecoveryRepairScope(scope, repair);
+  if (
+    !sameJson(current.repair, repair) ||
+    !sameJson(current.authorization, requestedAuthorization)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair scope changed before durable authorization',
+    );
+  }
+  if (current.state === 'REPAIRED') {
+    await syncAndVerifyCompletedHydrationRecoveryRepair(scope, repair);
+    await assertHydrationRecoveryControlState(scope);
+    return repair;
+  }
+  const authorization = await persistHydrationRecoveryRepairAuthorization(
+    scope,
+    repair,
+    requestedAuthorization,
+  );
+  await observePhase('hydration-recovery-successor-repair-authorized');
+
+  current = await inspectHydrationRecoveryRepairScope(scope, repair);
+  if (
+    !sameJson(current.repair, repair) ||
+    !sameJson(current.authorization, authorization)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair scope changed before target retirement',
+    );
+  }
+  if (current.state === 'REPAIRED') {
+    await syncAndVerifyCompletedHydrationRecoveryRepair(scope, repair);
+    await assertHydrationRecoveryControlState(scope);
+    return repair;
+  }
+  if (!['REPAIR_RECORDED', 'TARGET_RETIRED'].includes(current.state)) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair did not retain an exact target-retirement state',
+    );
+  }
+  await retireHydrationRecoveryRepairTarget(scope, repair, authorization);
+  await observePhase('hydration-recovery-successor-repair-target-retired');
+
+  current = await inspectHydrationRecoveryRepairScope(scope, repair);
+  if (
+    !sameJson(current.repair, repair) ||
+    !sameJson(current.authorization, authorization) ||
+    !['TARGET_RETIRED', 'REPAIRED'].includes(current.state)
+  ) {
+    throw new ApplicationStateSnapshotTargetCorruptionError(
+      'hydration recovery successor repair scope changed before claim retirement',
+    );
+  }
+  if (current.state === 'TARGET_RETIRED') {
+    await retireHydrationRecoveryRepairClaim(scope, repair, authorization);
+  } else {
+    await syncAndVerifyCompletedHydrationRecoveryRepair(scope, repair);
+  }
+  await observePhase('hydration-recovery-successor-repair-claim-retired');
+  await syncAndVerifyCompletedHydrationRecoveryRepair(scope, repair);
+  await assertHydrationRecoveryControlState(scope);
+  return repair;
 }
 
 /**
@@ -3397,8 +5293,10 @@ if (process.argv[2] === TARGET_PROBE_ARGUMENT) {
 
 export default {
   inspectApplicationStateSnapshotHydrationRecovery,
+  inspectApplicationStateSnapshotHydrationRecoveryRepair,
   publishApplicationStateSnapshot,
   recoverApplicationStateSnapshotHydration,
   recoverRetiredApplicationStateSnapshot,
+  repairApplicationStateSnapshotHydrationRecovery,
   transportApplicationStateSnapshot,
 };

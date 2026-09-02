@@ -23,6 +23,7 @@ import {
   createApplicationStateTable,
 } from '../../src/core/lib/db/tables/application-state.js';
 import {
+  CoordinatorAuthorityStaleError,
   createCoordinatorAuthority,
   createCoordinatorAuthorityToken,
 } from '../../src/core/lib/db/tables/coordinator-authority.js';
@@ -34,16 +35,19 @@ import {
 } from '../../src/core/runtime/application-state-snapshot-distribution.js';
 import {
   APPLICATION_STATE_SNAPSHOT_ACTIVATION_SORT_KEY,
+  APPLICATION_STATE_SNAPSHOT_PUBLICATION_SORT_KEY,
   ApplicationStateSnapshotActivationConflictError,
   createApplicationStateSnapshotControlStore,
   getApplicationStateSnapshotControlPartitionKey,
 } from '../../src/core/runtime/application-state-snapshot-control.js';
-import {
+import applicationStateSnapshotLmdb, {
   ApplicationStateSnapshotTargetCorruptionError,
   inspectApplicationStateSnapshotHydrationRecovery,
+  inspectApplicationStateSnapshotHydrationRecoveryRepair,
   publishApplicationStateSnapshot,
   recoverApplicationStateSnapshotHydration,
   recoverRetiredApplicationStateSnapshot,
+  repairApplicationStateSnapshotHydrationRecovery,
   transportApplicationStateSnapshot,
 } from '../../src/core/runtime/application-state-snapshot-lmdb.js';
 import { openApplicationStateDB } from '../../src/core/runtime/application-state-store.js';
@@ -68,7 +72,29 @@ const HYDRATION_RECOVERY_FILE_PREFIX =
 const HYDRATION_RECOVERY_RECEIPT_FILE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-receipt`;
 const HYDRATION_RECOVERY_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-target`;
 const HYDRATION_RECOVERY_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-retired-claim`;
+const HYDRATION_RECOVERY_REPAIR_RECEIPT_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-receipt`;
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-authorization`;
+const HYDRATION_RECOVERY_REPAIR_CANDIDATE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-candidate`;
+const HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_CANDIDATE_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-authorization-candidate`;
+const HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-retired-target`;
+const HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX = `${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-retired-claim`;
 const REPLICA_ID_FILE = '.wharfie-application-state-replica-id';
+const STALE_HYDRATION_RECOVERY_STATES = /** @type {const} */ ([
+  'RECOVERY_RECORDED',
+  'TARGET_REMOVED',
+]);
+const HYDRATION_RECOVERY_REPAIR_PHASES = /** @type {const} */ ([
+  'hydration-recovery-successor-repair-recorded',
+  'hydration-recovery-successor-repair-authorized',
+  'hydration-recovery-successor-repair-target-retired',
+  'hydration-recovery-successor-repair-claim-retired',
+]);
+const HYDRATION_RECOVERY_REPAIR_TAKEOVER_CASES =
+  STALE_HYDRATION_RECOVERY_STATES.flatMap((staleState) =>
+    HYDRATION_RECOVERY_REPAIR_PHASES.map((phase) =>
+      Object.freeze({ staleState, phase }),
+    ),
+  );
 
 /** @type {Array<() => Promise<void>>} */
 let cleanups = [];
@@ -167,6 +193,79 @@ function hydrationRecoveryArtifacts(storePath, recovery) {
   });
 }
 
+/** @param {string} storePath @param {Readonly<Record<string, any>>} inspection @param {number} [authorizationSlot] */
+function hydrationRecoveryRepairArtifacts(
+  storePath,
+  inspection,
+  authorizationSlot = 0,
+) {
+  const repairId = inspection.repair.repairId;
+  const slot = String(authorizationSlot).padStart(3, '0');
+  return Object.freeze({
+    receiptPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_REPAIR_RECEIPT_PREFIX}-${repairId}`,
+    ),
+    authorizationPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${repairId}-${slot}`,
+    ),
+    retiredTargetPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_REPAIR_RETIRED_TARGET_PREFIX}-${repairId}`,
+    ),
+    retiredClaimPath: join(
+      storePath,
+      `${HYDRATION_RECOVERY_REPAIR_RETIRED_CLAIM_PREFIX}-${repairId}`,
+    ),
+  });
+}
+
+/** @param {Readonly<Record<string, any>>} repair @param {string} label */
+function alternateHydrationRecoveryRepair(repair, label) {
+  const payload = {
+    schemaVersion: 1,
+    kind: repair.kind,
+    staleRecovery: repair.staleRecovery,
+    publicationId: id('wasp1', label),
+    startingState: repair.startingState,
+    filesystem: repair.filesystem,
+  };
+  return {
+    ...payload,
+    repairId: createCanonicalJsonSha256Id({
+      domain:
+        'wharfie:application-state-snapshot-hydration-recovery-successor-repair:v1',
+      prefix: 'washrr1',
+      value: payload,
+    }),
+  };
+}
+
+/** @param {Readonly<Record<string, any>>} repair @param {Readonly<Record<string, any>>} replacementBarrier @param {Readonly<Record<string, any>>} replacementAuthority */
+function hydrationRecoveryRepairAuthorization(
+  repair,
+  replacementBarrier,
+  replacementAuthority,
+) {
+  const payload = {
+    schemaVersion: 1,
+    kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair-authorization.v1',
+    repairId: repair.repairId,
+    replacementBarrier,
+    replacementAuthority,
+  };
+  return {
+    ...payload,
+    authorizationId: createCanonicalJsonSha256Id({
+      domain:
+        'wharfie:application-state-snapshot-hydration-recovery-successor-repair-authorization:v1',
+      prefix: 'washrra1',
+      value: payload,
+    }),
+  };
+}
+
 /** @param {Awaited<ReturnType<typeof createHarness>>} harness @param {Readonly<Record<string, any>>} transport @param {string} label */
 async function createRecoverablePartialHydration(harness, transport, label) {
   const claim = hydrationClaim(transport.snapshot.snapshotId, label);
@@ -207,6 +306,102 @@ function hydrationRecoveryInput(harness, transport, coordinatorAuthority) {
   });
 }
 
+/** @param {Awaited<ReturnType<typeof createHarness>>} harness @param {Readonly<Record<string, any>>} transport @param {string} label @param {'RECOVERY_RECORDED'|'TARGET_REMOVED'} staleState */
+async function createStaleHydrationRecovery(
+  harness,
+  transport,
+  label,
+  staleState,
+) {
+  const recoveryAuthority = await harness.takeover();
+  const partial = await createRecoverablePartialHydration(
+    harness,
+    transport,
+    label,
+  );
+  const recoveryInput = hydrationRecoveryInput(
+    harness,
+    transport,
+    recoveryAuthority,
+  );
+  const recoveryInspection =
+    await inspectApplicationStateSnapshotHydrationRecovery(recoveryInput);
+  const interruptedPhase =
+    staleState === 'RECOVERY_RECORDED'
+      ? 'hydration-recovery-recorded'
+      : 'hydration-recovery-target-removed';
+  const interruption = new Error(`stop with stale ${staleState}`);
+  await expect(
+    recoverApplicationStateSnapshotHydration({
+      ...recoveryInput,
+      inspection: recoveryInspection,
+      confirmPartialHydrationRecovery: true,
+      observePhase: (phase) => {
+        if (phase === interruptedPhase) throw interruption;
+      },
+    }),
+  ).rejects.toBe(interruption);
+  const recoveryArtifacts = hydrationRecoveryArtifacts(
+    harness.replacementPath,
+    recoveryInspection.recovery,
+  );
+  const successorAuthority = await harness.supersede(
+    `repair-successor-${label}`,
+  );
+  const repairInput = hydrationRecoveryInput(
+    harness,
+    transport,
+    successorAuthority,
+  );
+  return Object.freeze({
+    partial,
+    staleState,
+    recoveryAuthority,
+    recoveryInput,
+    recoveryInspection,
+    recoveryArtifacts,
+    successorAuthority,
+    repairInput,
+  });
+}
+
+/** @param {Awaited<ReturnType<typeof createHarness>>} harness @param {Readonly<Record<string, any>>} transport @param {string} label @param {'RECOVERY_RECORDED'|'TARGET_REMOVED'} [staleState] */
+async function createRecordedHydrationRecoveryRepair(
+  harness,
+  transport,
+  label,
+  staleState = 'RECOVERY_RECORDED',
+) {
+  const stale = await createStaleHydrationRecovery(
+    harness,
+    transport,
+    label,
+    staleState,
+  );
+  const inspection =
+    await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+      stale.repairInput,
+    );
+  const artifacts = hydrationRecoveryRepairArtifacts(
+    harness.replacementPath,
+    inspection,
+  );
+  const interruption = new Error('stop after stable repair receipt');
+  await expect(
+    repairApplicationStateSnapshotHydrationRecovery({
+      ...stale.repairInput,
+      inspection,
+      confirmStaleHydrationRecoveryRepair: true,
+      observePhase: (phase) => {
+        if (phase === 'hydration-recovery-successor-repair-recorded') {
+          throw interruption;
+        }
+      },
+    }),
+  ).rejects.toBe(interruption);
+  return Object.freeze({ stale, inspection, artifacts });
+}
+
 /** @param {string} path */
 async function readOptionalFile(path) {
   try {
@@ -229,6 +424,41 @@ async function readOptionalDirectory(path) {
     }
     throw error;
   }
+}
+
+/** @param {string} storePath */
+async function readHydrationRecoveryStoreSnapshot(storePath) {
+  const entries = [];
+  for (const name of (await fsp.readdir(storePath)).sort()) {
+    const path = join(storePath, name);
+    const stats = await fsp.lstat(path, { bigint: true });
+    const base = {
+      name,
+      device: stats.dev.toString(10),
+      inode: stats.ino.toString(10),
+      mode: stats.mode.toString(10),
+      size: stats.size.toString(10),
+    };
+    if (stats.isFile() && !stats.isSymbolicLink()) {
+      entries.push({
+        ...base,
+        type: 'file',
+        bytes: (await fsp.readFile(path)).toString('base64'),
+      });
+    } else if (stats.isDirectory() && !stats.isSymbolicLink()) {
+      entries.push({
+        ...base,
+        type: 'directory',
+        children: (await fsp.readdir(path)).sort(),
+      });
+    } else {
+      entries.push({
+        ...base,
+        type: stats.isSymbolicLink() ? 'symbolic-link' : 'other',
+      });
+    }
+  }
+  return entries;
 }
 
 function emptyLedger() {
@@ -404,12 +634,12 @@ async function createHarness() {
     return replacementAuthority;
   }
 
-  async function supersede() {
+  async function supersede(label = 'later') {
     const observedAuthority = await authorities.get({ appId: APP_ID });
     const result = await authorities.takeover({
       appId: APP_ID,
-      coordinatorId: 'later-coordinator',
-      requestId: 'later-takeover',
+      coordinatorId: `${label}-coordinator`,
+      requestId: `${label}-takeover`,
       observedAuthority,
       confirmAuthorityReplacement: true,
       observedAt: currentBarrier.version + 1,
@@ -418,7 +648,7 @@ async function createHarness() {
     currentBarrier = (
       await admission.adopt({
         authority: laterAuthority,
-        requestId: 'later-snapshot-adopt',
+        requestId: `${label}-snapshot-adopt`,
         predecessor: currentBarrier,
         observedAt: currentBarrier.version + 1,
       })
@@ -511,6 +741,13 @@ async function expectSeed(configuration, authority) {
 }
 
 describe('LMDB application-state snapshot transport', () => {
+  test('keeps the named repair APIs available through the default runtime export', () => {
+    expect(applicationStateSnapshotLmdb).toMatchObject({
+      inspectApplicationStateSnapshotHydrationRecoveryRepair,
+      repairApplicationStateSnapshotHydrationRecovery,
+    });
+  });
+
   test('seals source mutations before immutable publication can succeed', async () => {
     const harness = await createHarness();
     let racingWriteError;
@@ -2813,6 +3050,1416 @@ describe('LMDB application-state snapshot transport', () => {
       inspectApplicationStateSnapshotHydrationRecovery(input),
     ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
   });
+
+  test.each(['RECOVERY_RECORDED', 'TARGET_REMOVED'])(
+    'explicitly repairs one exact stale %s recovery and overlays logical completion without erasing evidence',
+    async (staleState) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const stale = await createStaleHydrationRecovery(
+        harness,
+        transport,
+        `complete-${staleState.toLowerCase()}`,
+        /** @type {'RECOVERY_RECORDED'|'TARGET_REMOVED'} */ (staleState),
+      );
+      const staleReceiptBytes = await fsp.readFile(
+        stale.recoveryArtifacts.receiptPath,
+      );
+      const staleClaimBytes = await fsp.readFile(stale.partial.claimPath);
+      const staleReceiptStats = await fsp.lstat(
+        stale.recoveryArtifacts.receiptPath,
+        { bigint: true },
+      );
+      const publication = await createApplicationStateSnapshotControlStore({
+        db: harness.controlDb,
+        tableName: CONTROL_TABLE,
+      }).getPublication({ transferId: transport.snapshot.transferId });
+      if (!publication) throw new Error('Expected retained publication.');
+
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      const artifacts = hydrationRecoveryRepairArtifacts(
+        harness.replacementPath,
+        inspection,
+      );
+      expect(Object.keys(inspection).sort()).toEqual(
+        [
+          'schemaVersion',
+          'kind',
+          'inspectionId',
+          'state',
+          'repair',
+          'authorization',
+        ].sort(),
+      );
+      expect(Object.keys(inspection.repair).sort()).toEqual(
+        [
+          'schemaVersion',
+          'kind',
+          'repairId',
+          'staleRecovery',
+          'publicationId',
+          'startingState',
+          'filesystem',
+        ].sort(),
+      );
+      expect(Object.keys(inspection.authorization).sort()).toEqual(
+        [
+          'schemaVersion',
+          'kind',
+          'authorizationId',
+          'repairId',
+          'replacementBarrier',
+          'replacementAuthority',
+        ].sort(),
+      );
+      expect(inspection).toMatchObject({
+        schemaVersion: 1,
+        kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair-inspection.v1',
+        inspectionId: expect.stringMatching(/^washrri1_/u),
+        state: `STALE_${staleState}`,
+        repair: {
+          schemaVersion: 1,
+          kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair.v1',
+          repairId: expect.stringMatching(/^washrr1_/u),
+          staleRecovery: stale.recoveryInspection.recovery,
+          publicationId: publication.publicationId,
+          startingState: staleState,
+          filesystem: {
+            staleReceiptFile: {
+              device: staleReceiptStats.dev.toString(10),
+              inode: staleReceiptStats.ino.toString(10),
+              size: staleReceiptStats.size.toString(10),
+            },
+          },
+        },
+        authorization: {
+          schemaVersion: 1,
+          kind: 'wharfie.application-state-snapshot-hydration-recovery-successor-repair-authorization.v1',
+          authorizationId: expect.stringMatching(/^washrra1_/u),
+          repairId: expect.stringMatching(/^washrr1_/u),
+          replacementBarrier: harness.currentBarrier,
+          replacementAuthority: stale.successorAuthority,
+        },
+      });
+      expect(inspection.authorization.repairId).toBe(
+        inspection.repair.repairId,
+      );
+      expect(Object.isFrozen(inspection)).toBe(true);
+      expect(Object.isFrozen(inspection.repair)).toBe(true);
+      expect(Object.isFrozen(inspection.repair.staleRecovery)).toBe(true);
+      expect(Object.isFrozen(inspection.repair.filesystem)).toBe(true);
+      expect(
+        Object.isFrozen(inspection.repair.filesystem.staleReceiptFile),
+      ).toBe(true);
+      expect(Object.isFrozen(inspection.authorization)).toBe(true);
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+      await expect(
+        readOptionalFile(artifacts.authorizationPath),
+      ).resolves.toBeNull();
+
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection,
+          confirmStaleHydrationRecoveryRepair: false,
+        }),
+      ).rejects.toThrow(/explicit stale-recovery confirmation/iu);
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+      await expect(
+        readOptionalFile(artifacts.authorizationPath),
+      ).resolves.toBeNull();
+      await expect(
+        fsp.readFile(stale.recoveryArtifacts.receiptPath),
+      ).resolves.toEqual(staleReceiptBytes);
+      await expect(fsp.readFile(stale.partial.claimPath)).resolves.toEqual(
+        staleClaimBytes,
+      );
+
+      /** @type {string[]} */
+      const phases = [];
+      const repair = await repairApplicationStateSnapshotHydrationRecovery({
+        ...stale.repairInput,
+        inspection,
+        confirmStaleHydrationRecoveryRepair: true,
+        observePhase: (phase) => {
+          phases.push(phase);
+        },
+      });
+      expect(repair).toEqual(inspection.repair);
+      expect(phases).toEqual([
+        'hydration-recovery-successor-repair-recorded',
+        'hydration-recovery-successor-repair-authorized',
+        'hydration-recovery-successor-repair-target-retired',
+        'hydration-recovery-successor-repair-claim-retired',
+      ]);
+      const repairReceiptBytes = await fsp.readFile(artifacts.receiptPath);
+      const authorizationBytes = await fsp.readFile(
+        artifacts.authorizationPath,
+      );
+      expect(repairReceiptBytes.toString('utf8')).toBe(
+        `${JSON.stringify(inspection.repair)}\n`,
+      );
+      expect(authorizationBytes.toString('utf8')).toBe(
+        `${JSON.stringify(inspection.authorization)}\n`,
+      );
+      await expect(
+        readOptionalFile(stale.partial.claimPath),
+      ).resolves.toBeNull();
+      await expect(
+        readOptionalDirectory(stale.partial.targetPath),
+      ).resolves.toBeNull();
+      await expect(
+        readOptionalFile(artifacts.retiredClaimPath),
+      ).resolves.toEqual(staleClaimBytes);
+      await expect(
+        readOptionalDirectory(artifacts.retiredTargetPath),
+      ).resolves.toEqual(staleState === 'RECOVERY_RECORDED' ? [] : null);
+      await expect(
+        readOptionalDirectory(stale.recoveryArtifacts.retiredTargetPath),
+      ).resolves.toEqual(staleState === 'TARGET_REMOVED' ? [] : null);
+      await expect(
+        readOptionalFile(stale.recoveryArtifacts.retiredClaimPath),
+      ).resolves.toBeNull();
+      await expect(
+        fsp.readFile(stale.recoveryArtifacts.receiptPath),
+      ).resolves.toEqual(staleReceiptBytes);
+
+      const completed =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      expect(completed).toMatchObject({
+        state: 'REPAIRED',
+        repair,
+        authorization: inspection.authorization,
+      });
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).rejects.toThrow(/state changed after the retained inspection/iu);
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection: completed,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).resolves.toEqual(repair);
+
+      await expect(
+        transportApplicationStateSnapshot({
+          ...stale.repairInput,
+          history: transport.snapshot.checkpoint.history,
+          distribution: harness.distribution,
+        }),
+      ).resolves.toMatchObject({ status: 'HYDRATED' });
+      await expect(
+        fsp.readFile(stale.recoveryArtifacts.receiptPath),
+      ).resolves.toEqual(staleReceiptBytes);
+      await expect(fsp.readFile(artifacts.receiptPath)).resolves.toEqual(
+        repairReceiptBytes,
+      );
+      await expect(fsp.readFile(artifacts.authorizationPath)).resolves.toEqual(
+        authorizationBytes,
+      );
+      await expect(
+        readOptionalFile(artifacts.retiredClaimPath),
+      ).resolves.toEqual(staleClaimBytes);
+      await expectSeed(
+        harness.replacementConfiguration,
+        stale.successorAuthority,
+      );
+    },
+    20_000,
+  );
+
+  test.each(HYDRATION_RECOVERY_REPAIR_TAKEOVER_CASES)(
+    'rejects one same-scope stale inspection after $phase from $staleState, then completes from a fresh inspection',
+    async ({ staleState, phase }) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const label = `same-scope-${staleState.toLowerCase()}-${phase.replace(
+        'hydration-recovery-successor-repair-',
+        '',
+      )}`;
+      const stale = await createStaleHydrationRecovery(
+        harness,
+        transport,
+        label,
+        staleState,
+      );
+      const staleInspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      const interruption = new Error(`stop after ${phase}`);
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection: staleInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+          observePhase: (observedPhase) => {
+            if (observedPhase === phase) throw interruption;
+          },
+        }),
+      ).rejects.toBe(interruption);
+      const beforeStaleReplay = await readHydrationRecoveryStoreSnapshot(
+        harness.replacementPath,
+      );
+
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection: staleInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).rejects.toThrow(/state changed after the retained inspection/iu);
+      await expect(
+        readHydrationRecoveryStoreSnapshot(harness.replacementPath),
+      ).resolves.toEqual(beforeStaleReplay);
+
+      const freshInspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      expect(freshInspection.inspectionId).not.toBe(
+        staleInspection.inspectionId,
+      );
+      expect(freshInspection.repair).toEqual(staleInspection.repair);
+      expect(freshInspection.authorization).toEqual(
+        staleInspection.authorization,
+      );
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection: freshInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).resolves.toEqual(staleInspection.repair);
+      await expect(
+        inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        ),
+      ).resolves.toMatchObject({
+        state: 'REPAIRED',
+        repair: staleInspection.repair,
+      });
+    },
+    20_000,
+  );
+
+  test('authorizes repair under the same exact authority only after a strictly newer CLOSED barrier', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const recoveryAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'same-authority-newer-barrier',
+    );
+    const recoveryInput = hydrationRecoveryInput(
+      harness,
+      transport,
+      recoveryAuthority,
+    );
+    const recoveryInspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(recoveryInput);
+    const interruption = new Error('retain same-authority stale recovery');
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...recoveryInput,
+        inspection: recoveryInspection,
+        confirmPartialHydrationRecovery: true,
+        observePhase: (phase) => {
+          if (phase === 'hydration-recovery-recorded') throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+
+    const openBarrier = (
+      await harness.admission.reopen({
+        authority: recoveryAuthority,
+        requestId: 'same-authority-repair-reopen',
+        predecessor: harness.currentBarrier,
+        observedAt: harness.currentBarrier.version + 1,
+      })
+    ).barrier;
+    const newerClosedBarrier = (
+      await harness.admission.close({
+        authority: recoveryAuthority,
+        requestId: 'same-authority-repair-close',
+        predecessor: openBarrier,
+        observedAt: openBarrier.version + 1,
+      })
+    ).barrier;
+    const repairInput = Object.freeze({
+      ...recoveryInput,
+      closedBarrier: newerClosedBarrier,
+    });
+    const repairInspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(repairInput);
+    expect(repairInspection).toMatchObject({
+      state: 'STALE_RECOVERY_RECORDED',
+      authorization: {
+        replacementAuthority: recoveryAuthority,
+        replacementBarrier: newerClosedBarrier,
+      },
+    });
+    await expect(
+      repairApplicationStateSnapshotHydrationRecovery({
+        ...repairInput,
+        inspection: repairInspection,
+        confirmStaleHydrationRecoveryRepair: true,
+      }),
+    ).resolves.toEqual(repairInspection.repair);
+    await expect(readOptionalFile(partial.claimPath)).resolves.toBeNull();
+    await expect(readOptionalDirectory(partial.targetPath)).resolves.toBeNull();
+  });
+
+  test('writes no repair evidence when the exact CLOSED barrier changes after inspection', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const stale = await createStaleHydrationRecovery(
+      harness,
+      transport,
+      'barrier-change-after-repair-inspection',
+      'RECOVERY_RECORDED',
+    );
+    const staleInspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        stale.repairInput,
+      );
+    const beforeBarrierChange = await readHydrationRecoveryStoreSnapshot(
+      harness.replacementPath,
+    );
+    const openBarrier = (
+      await harness.admission.reopen({
+        authority: stale.successorAuthority,
+        requestId: 'repair-inspection-barrier-reopen',
+        predecessor: harness.currentBarrier,
+        observedAt: harness.currentBarrier.version + 1,
+      })
+    ).barrier;
+    const newerClosedBarrier = (
+      await harness.admission.close({
+        authority: stale.successorAuthority,
+        requestId: 'repair-inspection-barrier-close',
+        predecessor: openBarrier,
+        observedAt: openBarrier.version + 1,
+      })
+    ).barrier;
+
+    await expect(
+      repairApplicationStateSnapshotHydrationRecovery({
+        ...stale.repairInput,
+        inspection: staleInspection,
+        confirmStaleHydrationRecoveryRepair: true,
+      }),
+    ).rejects.toThrow(/durable coordinator admission barrier/iu);
+    await expect(
+      readHydrationRecoveryStoreSnapshot(harness.replacementPath),
+    ).resolves.toEqual(beforeBarrierChange);
+
+    const currentInput = Object.freeze({
+      ...stale.repairInput,
+      closedBarrier: newerClosedBarrier,
+    });
+    const currentInspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        currentInput,
+      );
+    await expect(
+      repairApplicationStateSnapshotHydrationRecovery({
+        ...currentInput,
+        inspection: currentInspection,
+        confirmStaleHydrationRecoveryRepair: true,
+      }),
+    ).resolves.toEqual(currentInspection.repair);
+  });
+
+  test('refuses a current-scope recovery and an OPEN successor barrier without writing repair evidence', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const recoveryAuthority = await harness.takeover();
+    const partial = await createRecoverablePartialHydration(
+      harness,
+      transport,
+      'repair-current-scope',
+    );
+    const input = hydrationRecoveryInput(harness, transport, recoveryAuthority);
+    const recoveryInspection =
+      await inspectApplicationStateSnapshotHydrationRecovery(input);
+    const interruption = new Error('retain current-scope recovery');
+    await expect(
+      recoverApplicationStateSnapshotHydration({
+        ...input,
+        inspection: recoveryInspection,
+        confirmPartialHydrationRecovery: true,
+        observePhase: (phase) => {
+          if (phase === 'hydration-recovery-recorded') throw interruption;
+        },
+      }),
+    ).rejects.toBe(interruption);
+    const recoveryArtifacts = hydrationRecoveryArtifacts(
+      harness.replacementPath,
+      recoveryInspection.recovery,
+    );
+    const receiptBytes = await fsp.readFile(recoveryArtifacts.receiptPath);
+    const claimBytes = await fsp.readFile(partial.claimPath);
+    const repairNamesBefore = (
+      await fsp.readdir(harness.replacementPath)
+    ).filter((name) =>
+      name.startsWith(`${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-`),
+    );
+
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecoveryRepair(input),
+    ).rejects.toThrow(/causally newer|stale incomplete|repairable/iu);
+    await expect(fsp.readFile(recoveryArtifacts.receiptPath)).resolves.toEqual(
+      receiptBytes,
+    );
+    await expect(fsp.readFile(partial.claimPath)).resolves.toEqual(claimBytes);
+
+    const openBarrier = (
+      await harness.admission.reopen({
+        authority: recoveryAuthority,
+        requestId: 'open-before-successor-repair',
+        predecessor: harness.currentBarrier,
+        observedAt: harness.currentBarrier.version + 1,
+      })
+    ).barrier;
+    expect(openBarrier.state).toBe('OPEN');
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecoveryRepair({
+        ...input,
+        closedBarrier: openBarrier,
+      }),
+    ).rejects.toThrow(/CLOSED|durable coordinator admission barrier/iu);
+    await expect(fsp.readFile(recoveryArtifacts.receiptPath)).resolves.toEqual(
+      receiptBytes,
+    );
+    await expect(fsp.readFile(partial.claimPath)).resolves.toEqual(claimBytes);
+    expect(
+      (await fsp.readdir(harness.replacementPath)).filter((name) =>
+        name.startsWith(`${HYDRATION_RECOVERY_FILE_PREFIX}-successor-repair-`),
+      ),
+    ).toEqual(repairNamesBefore);
+  });
+
+  test('rejects tampered repair, authorization, and inspection envelopes before any mutation', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const stale = await createStaleHydrationRecovery(
+      harness,
+      transport,
+      'tampered-repair-inspection',
+      'RECOVERY_RECORDED',
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        stale.repairInput,
+      );
+    const artifacts = hydrationRecoveryRepairArtifacts(
+      harness.replacementPath,
+      inspection,
+    );
+    const staleReceiptBytes = await fsp.readFile(
+      stale.recoveryArtifacts.receiptPath,
+    );
+    const claimBytes = await fsp.readFile(stale.partial.claimPath);
+    const cases = [
+      {
+        ...JSON.parse(JSON.stringify(inspection)),
+        unsupported: true,
+      },
+      {
+        ...JSON.parse(JSON.stringify(inspection)),
+        repair: {
+          ...inspection.repair,
+          publicationId: id('wasp1', 'tampered-repair-publication'),
+        },
+      },
+      {
+        ...JSON.parse(JSON.stringify(inspection)),
+        authorization: {
+          ...inspection.authorization,
+          replacementAuthority: stale.recoveryAuthority,
+        },
+      },
+    ];
+
+    for (const tampered of cases) {
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection: tampered,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).rejects.toThrow();
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+      await expect(
+        readOptionalFile(artifacts.authorizationPath),
+      ).resolves.toBeNull();
+      await expect(
+        fsp.readFile(stale.recoveryArtifacts.receiptPath),
+      ).resolves.toEqual(staleReceiptBytes);
+      await expect(fsp.readFile(stale.partial.claimPath)).resolves.toEqual(
+        claimBytes,
+      );
+      await expect(
+        readOptionalDirectory(stale.partial.targetPath),
+      ).resolves.toEqual([]);
+    }
+  });
+
+  test.each([
+    'malformed slot',
+    'out-of-range slot',
+    'slot gap',
+    'orphan authorization',
+    'duplicate authorization identity',
+    'second repair for one stale recovery',
+  ])('fails closed on a noncanonical fixed-slot %s artifact', async (fault) => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const recorded = await createRecordedHydrationRecoveryRepair(
+      harness,
+      transport,
+      `fixed-slot-${fault.replaceAll(' ', '-')}`,
+    );
+    const repair = recorded.inspection.repair;
+    const authorizationBytes = Buffer.from(
+      `${JSON.stringify(recorded.inspection.authorization)}\n`,
+    );
+    const retainedRepairBytes = await fsp.readFile(
+      recorded.artifacts.receiptPath,
+    );
+    /** @type {Array<{path: string, bytes: Buffer}>} */
+    const written = [];
+    if (fault === 'malformed slot') {
+      written.push({
+        path: join(
+          harness.replacementPath,
+          `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${repair.repairId}-00`,
+        ),
+        bytes: authorizationBytes,
+      });
+    } else if (fault === 'out-of-range slot') {
+      written.push({
+        path: join(
+          harness.replacementPath,
+          `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${repair.repairId}-128`,
+        ),
+        bytes: authorizationBytes,
+      });
+    } else if (fault === 'slot gap') {
+      written.push({
+        path: hydrationRecoveryRepairArtifacts(
+          harness.replacementPath,
+          recorded.inspection,
+          1,
+        ).authorizationPath,
+        bytes: authorizationBytes,
+      });
+    } else if (fault === 'orphan authorization') {
+      written.push({
+        path: join(
+          harness.replacementPath,
+          `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${id('washrr1', 'orphan-fixed-slot-repair')}-000`,
+        ),
+        bytes: authorizationBytes,
+      });
+    } else if (fault === 'duplicate authorization identity') {
+      written.push(
+        {
+          path: recorded.artifacts.authorizationPath,
+          bytes: authorizationBytes,
+        },
+        {
+          path: hydrationRecoveryRepairArtifacts(
+            harness.replacementPath,
+            recorded.inspection,
+            1,
+          ).authorizationPath,
+          bytes: authorizationBytes,
+        },
+      );
+    } else {
+      const secondRepair = alternateHydrationRecoveryRepair(
+        repair,
+        'duplicate-fixed-slot-repair-scope',
+      );
+      written.push({
+        path: join(
+          harness.replacementPath,
+          `${HYDRATION_RECOVERY_REPAIR_RECEIPT_PREFIX}-${secondRepair.repairId}`,
+        ),
+        bytes: Buffer.from(`${JSON.stringify(secondRepair)}\n`),
+      });
+    }
+    for (const artifact of written) {
+      await fsp.writeFile(artifact.path, artifact.bytes, { mode: 0o600 });
+    }
+
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        recorded.stale.repairInput,
+      ),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    await expect(fsp.readFile(recorded.artifacts.receiptPath)).resolves.toEqual(
+      retainedRepairBytes,
+    );
+    for (const artifact of written) {
+      await expect(fsp.readFile(artifact.path)).resolves.toEqual(
+        artifact.bytes,
+      );
+    }
+    await expect(
+      readOptionalDirectory(recorded.stale.partial.targetPath),
+    ).resolves.toEqual([]);
+    await expect(
+      readOptionalFile(recorded.stale.partial.claimPath),
+    ).resolves.not.toBeNull();
+  });
+
+  test('ignores exact private repair candidates but rejects and retains a malformed candidate name', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const recorded = await createRecordedHydrationRecoveryRepair(
+      harness,
+      transport,
+      'fixed-slot-private-candidates',
+    );
+    const repairId = recorded.inspection.repair.repairId;
+    const exactCandidates = [
+      join(
+        harness.replacementPath,
+        `${HYDRATION_RECOVERY_REPAIR_CANDIDATE_PREFIX}-${repairId}-00000000-0000-4000-8000-000000000000.tmp`,
+      ),
+      join(
+        harness.replacementPath,
+        `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_CANDIDATE_PREFIX}-${repairId}-11111111-1111-4111-8111-111111111111.tmp`,
+      ),
+    ];
+    const candidateBytes = Buffer.from('private-incomplete-candidate');
+    for (const path of exactCandidates) {
+      await fsp.writeFile(path, candidateBytes, { mode: 0o600 });
+    }
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        recorded.stale.repairInput,
+      ),
+    ).resolves.toMatchObject({
+      state: 'REPAIR_RECORDED',
+      repair: recorded.inspection.repair,
+    });
+
+    const malformedPath = join(
+      harness.replacementPath,
+      `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_CANDIDATE_PREFIX}-${repairId}-not-a-canonical-candidate.tmp`,
+    );
+    await fsp.writeFile(malformedPath, candidateBytes, { mode: 0o600 });
+    await expect(
+      inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        recorded.stale.repairInput,
+      ),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    for (const path of [...exactCandidates, malformedPath]) {
+      await expect(fsp.readFile(path)).resolves.toEqual(candidateBytes);
+    }
+  });
+
+  test('fails closed when central publication is substituted after repair inspection', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const stale = await createStaleHydrationRecovery(
+      harness,
+      transport,
+      'repair-publication-substitution',
+      'RECOVERY_RECORDED',
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        stale.repairInput,
+      );
+    const artifacts = hydrationRecoveryRepairArtifacts(
+      harness.replacementPath,
+      inspection,
+    );
+    const staleReceiptBytes = await fsp.readFile(
+      stale.recoveryArtifacts.receiptPath,
+    );
+    const keyValue = getApplicationStateSnapshotControlPartitionKey(
+      transport.snapshot.transferId,
+    );
+    const raw = await harness.controlDb.get({
+      tableName: CONTROL_TABLE,
+      keyName: 'run_id',
+      keyValue,
+      sortKeyName: 'sort_key',
+      sortKeyValue: APPLICATION_STATE_SNAPSHOT_PUBLICATION_SORT_KEY,
+      consistentRead: true,
+    });
+    if (!raw) throw new Error('Expected raw publication evidence.');
+    await harness.controlDb.put({
+      tableName: CONTROL_TABLE,
+      keyName: 'run_id',
+      sortKeyName: 'sort_key',
+      record: {
+        ...raw,
+        snapshot_id: id('wass1', 'substituted-repair-publication'),
+      },
+    });
+
+    await expect(
+      repairApplicationStateSnapshotHydrationRecovery({
+        ...stale.repairInput,
+        inspection,
+        confirmStaleHydrationRecoveryRepair: true,
+      }),
+    ).rejects.toThrow();
+    await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+    await expect(
+      readOptionalFile(artifacts.authorizationPath),
+    ).resolves.toBeNull();
+    await expect(
+      fsp.readFile(stale.recoveryArtifacts.receiptPath),
+    ).resolves.toEqual(staleReceiptBytes);
+    await expect(
+      readOptionalFile(stale.partial.claimPath),
+    ).resolves.not.toBeNull();
+    await expect(
+      readOptionalDirectory(stale.partial.targetPath),
+    ).resolves.toEqual([]);
+  });
+
+  test('fails closed when physical replica activation appears after repair inspection', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const stale = await createStaleHydrationRecovery(
+      harness,
+      transport,
+      'repair-activation-race',
+      'RECOVERY_RECORDED',
+    );
+    const inspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        stale.repairInput,
+      );
+    const artifacts = hydrationRecoveryRepairArtifacts(
+      harness.replacementPath,
+      inspection,
+    );
+    const controlStore = createApplicationStateSnapshotControlStore({
+      db: harness.controlDb,
+      tableName: CONTROL_TABLE,
+    });
+    const activation = await controlStore.claimActivation({
+      transport,
+      replacementAuthority: stale.successorAuthority,
+      replacementBarrier: harness.currentBarrier,
+      replicaId: stale.partial.replicaId,
+      transportStatus: 'RETAINED',
+    });
+
+    await expect(
+      repairApplicationStateSnapshotHydrationRecovery({
+        ...stale.repairInput,
+        inspection,
+        confirmStaleHydrationRecoveryRepair: true,
+      }),
+    ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+    await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+    await expect(
+      readOptionalFile(artifacts.authorizationPath),
+    ).resolves.toBeNull();
+    await expect(
+      controlStore.getActivationClaim({
+        transferId: transport.snapshot.transferId,
+      }),
+    ).resolves.toEqual(activation.claim);
+    await expect(
+      readOptionalFile(stale.partial.claimPath),
+    ).resolves.not.toBeNull();
+    await expect(
+      readOptionalDirectory(stale.partial.targetPath),
+    ).resolves.toEqual([]);
+  });
+
+  test.each([
+    'stale receipt file',
+    'target directory',
+    'claim file',
+    'replica identity',
+    'store root',
+  ])(
+    'fails closed on a substituted %s after repair inspection',
+    async (substitution) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const stale = await createStaleHydrationRecovery(
+        harness,
+        transport,
+        `repair-substitution-${substitution.replaceAll(' ', '-')}`,
+        'RECOVERY_RECORDED',
+      );
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      const artifacts = hydrationRecoveryRepairArtifacts(
+        harness.replacementPath,
+        inspection,
+      );
+      const staleReceiptBytes = await fsp.readFile(
+        stale.recoveryArtifacts.receiptPath,
+      );
+      const claimBytes = await fsp.readFile(stale.partial.claimPath);
+      const replicaPath = join(harness.replacementPath, REPLICA_ID_FILE);
+      const replicaBytes = await fsp.readFile(replicaPath);
+      let retainedPath;
+
+      if (substitution === 'stale receipt file') {
+        retainedPath = join(harness.replacementPath, '.retained-stale-receipt');
+        await fsp.rename(stale.recoveryArtifacts.receiptPath, retainedPath);
+        await fsp.writeFile(
+          stale.recoveryArtifacts.receiptPath,
+          staleReceiptBytes,
+          { mode: 0o600 },
+        );
+      } else if (substitution === 'target directory') {
+        retainedPath = join(harness.replacementPath, '.retained-stale-target');
+        await fsp.rename(stale.partial.targetPath, retainedPath);
+        await fsp.mkdir(stale.partial.targetPath, { mode: 0o700 });
+      } else if (substitution === 'claim file') {
+        retainedPath = join(harness.replacementPath, '.retained-stale-claim');
+        await fsp.rename(stale.partial.claimPath, retainedPath);
+        await fsp.writeFile(stale.partial.claimPath, claimBytes, {
+          mode: 0o600,
+        });
+      } else if (substitution === 'replica identity') {
+        retainedPath = join(harness.replacementPath, '.retained-replica-id');
+        await fsp.rename(replicaPath, retainedPath);
+        await fsp.writeFile(
+          replicaPath,
+          `${id('wasr1', 'substituted-repair-replica')}\n`,
+          { mode: 0o600 },
+        );
+      } else {
+        retainedPath = join(harness.root, '.retained-repair-store-root');
+        await fsp.rename(harness.replacementPath, retainedPath);
+        await fsp.cp(retainedPath, harness.replacementPath, {
+          recursive: true,
+          force: false,
+        });
+      }
+
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+      await expect(readOptionalFile(artifacts.receiptPath)).resolves.toBeNull();
+      await expect(
+        readOptionalFile(artifacts.authorizationPath),
+      ).resolves.toBeNull();
+      await expect(
+        readOptionalDirectory(stale.partial.targetPath),
+      ).resolves.toEqual([]);
+      await expect(
+        readOptionalFile(stale.partial.claimPath),
+      ).resolves.not.toBeNull();
+      if (substitution === 'stale receipt file') {
+        await expect(
+          fsp.readFile(stale.recoveryArtifacts.receiptPath),
+        ).resolves.toEqual(staleReceiptBytes);
+        await expect(fsp.readFile(retainedPath)).resolves.toEqual(
+          staleReceiptBytes,
+        );
+      } else if (substitution === 'target directory') {
+        await expect(readOptionalDirectory(retainedPath)).resolves.toEqual([]);
+      } else if (substitution === 'claim file') {
+        await expect(fsp.readFile(stale.partial.claimPath)).resolves.toEqual(
+          claimBytes,
+        );
+        await expect(fsp.readFile(retainedPath)).resolves.toEqual(claimBytes);
+      } else if (substitution === 'replica identity') {
+        await expect(fsp.readFile(retainedPath)).resolves.toEqual(replicaBytes);
+      } else {
+        await expect(
+          fsp.readFile(
+            join(
+              retainedPath,
+              stale.recoveryArtifacts.receiptPath.slice(
+                harness.replacementPath.length + 1,
+              ),
+            ),
+          ),
+        ).resolves.toEqual(staleReceiptBytes);
+      }
+    },
+  );
+
+  test.each([
+    {
+      artifact: 'repair receipt',
+      phase: 'hydration-recovery-successor-repair-recorded',
+    },
+    {
+      artifact: 'repair authorization',
+      phase: 'hydration-recovery-successor-repair-authorized',
+    },
+    {
+      artifact: 'repair-retired target',
+      phase: 'hydration-recovery-successor-repair-target-retired',
+    },
+    {
+      artifact: 'repair-retired claim',
+      phase: 'hydration-recovery-successor-repair-claim-retired',
+    },
+  ])(
+    'retains and fails closed on a tampered $artifact',
+    async ({ artifact, phase }) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const stale = await createStaleHydrationRecovery(
+        harness,
+        transport,
+        `tampered-${artifact.replaceAll(' ', '-')}`,
+        'RECOVERY_RECORDED',
+      );
+      const inspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      const artifacts = hydrationRecoveryRepairArtifacts(
+        harness.replacementPath,
+        inspection,
+      );
+      const interruption = new Error(`stop before tampering with ${artifact}`);
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection,
+          confirmStaleHydrationRecoveryRepair: true,
+          observePhase: (observedPhase) => {
+            if (observedPhase === phase) throw interruption;
+          },
+        }),
+      ).rejects.toBe(interruption);
+      const staleReceiptBytes = await fsp.readFile(
+        stale.recoveryArtifacts.receiptPath,
+      );
+      let tamperedPath;
+      let retainedPath = null;
+      let expectedBytes = null;
+      if (artifact === 'repair receipt') {
+        tamperedPath = artifacts.receiptPath;
+        expectedBytes = Buffer.from('{}\n');
+        await fsp.writeFile(tamperedPath, expectedBytes);
+      } else if (artifact === 'repair authorization') {
+        tamperedPath = artifacts.authorizationPath;
+        expectedBytes = Buffer.from('{}\n');
+        await fsp.writeFile(tamperedPath, expectedBytes);
+      } else if (artifact === 'repair-retired target') {
+        tamperedPath = artifacts.retiredTargetPath;
+        retainedPath = join(
+          harness.replacementPath,
+          '.retained-repair-retired-target',
+        );
+        await fsp.rename(tamperedPath, retainedPath);
+        await fsp.mkdir(tamperedPath, { mode: 0o700 });
+      } else {
+        tamperedPath = artifacts.retiredClaimPath;
+        retainedPath = join(
+          harness.replacementPath,
+          '.retained-repair-retired-claim',
+        );
+        expectedBytes = await fsp.readFile(tamperedPath);
+        await fsp.rename(tamperedPath, retainedPath);
+        await fsp.writeFile(tamperedPath, expectedBytes, { mode: 0o600 });
+      }
+
+      await expect(
+        inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        ),
+      ).rejects.toBeInstanceOf(ApplicationStateSnapshotTargetCorruptionError);
+      await expect(
+        fsp.readFile(stale.recoveryArtifacts.receiptPath),
+      ).resolves.toEqual(staleReceiptBytes);
+      if (artifact === 'repair-retired target') {
+        if (!retainedPath) throw new Error('Expected retained target path.');
+        await expect(readOptionalDirectory(tamperedPath)).resolves.toEqual([]);
+        await expect(readOptionalDirectory(retainedPath)).resolves.toEqual([]);
+      } else {
+        await expect(fsp.readFile(tamperedPath)).resolves.toEqual(
+          expectedBytes,
+        );
+        if (retainedPath) {
+          await expect(fsp.readFile(retainedPath)).resolves.toEqual(
+            expectedBytes,
+          );
+        }
+      }
+    },
+  );
+
+  test('atomically caps a stale/current authorization race at canonical slot 127', async () => {
+    const harness = await createHarness();
+    const transport = await harness.publish();
+    const recorded = await createRecordedHydrationRecoveryRepair(
+      harness,
+      transport,
+      'fixed-slot-capacity-race',
+    );
+    const firstAuthorization = recorded.inspection.authorization;
+    for (
+      let authorizationSlot = 0;
+      authorizationSlot < 127;
+      authorizationSlot += 1
+    ) {
+      const fillerAuthorization =
+        authorizationSlot === 0
+          ? firstAuthorization
+          : hydrationRecoveryRepairAuthorization(
+              recorded.inspection.repair,
+              {
+                ...firstAuthorization.replacementBarrier,
+                version:
+                  firstAuthorization.replacementBarrier.version +
+                  authorizationSlot,
+                lastRequestId: `fixed-slot-fill-${authorizationSlot}`,
+                updatedAt:
+                  firstAuthorization.replacementBarrier.updatedAt +
+                  authorizationSlot,
+              },
+              firstAuthorization.replacementAuthority,
+            );
+      const artifacts = hydrationRecoveryRepairArtifacts(
+        harness.replacementPath,
+        recorded.inspection,
+        authorizationSlot,
+      );
+      await fsp.writeFile(
+        artifacts.authorizationPath,
+        `${JSON.stringify(fillerAuthorization)}\n`,
+        { mode: 0o600 },
+      );
+    }
+
+    const staleRaceAuthority = await harness.supersede('fixed-slot-race-stale');
+    const staleRaceInput = hydrationRecoveryInput(
+      harness,
+      transport,
+      staleRaceAuthority,
+    );
+    const staleRaceInspection =
+      await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+        staleRaceInput,
+      );
+    const finalSlotPath = hydrationRecoveryRepairArtifacts(
+      harness.replacementPath,
+      staleRaceInspection,
+      127,
+    ).authorizationPath;
+    const staleAtFinalSlot = deferred();
+    const releaseStale = deferred();
+    const realLink = fsp.link.bind(fsp);
+    let blockedStaleLink = false;
+    const linkSpy = jest
+      .spyOn(fsp, 'link')
+      .mockImplementation(async (source, destination) => {
+        if (destination === finalSlotPath && !blockedStaleLink) {
+          blockedStaleLink = true;
+          staleAtFinalSlot.resolve();
+          await releaseStale.promise;
+        }
+        return await realLink(source, destination);
+      });
+    const staleRepair = repairApplicationStateSnapshotHydrationRecovery({
+      ...staleRaceInput,
+      inspection: staleRaceInspection,
+      confirmStaleHydrationRecoveryRepair: true,
+    });
+    const staleOutcome = staleRepair.then(
+      (value) => ({ status: /** @type {const} */ ('fulfilled'), value }),
+      (reason) => ({ status: /** @type {const} */ ('rejected'), reason }),
+    );
+    try {
+      await Promise.race([
+        staleAtFinalSlot.promise,
+        staleOutcome.then((outcome) => {
+          if (outcome.status === 'fulfilled') {
+            throw new Error('Stale repair settled before final-slot race.');
+          }
+          throw outcome.reason;
+        }),
+      ]);
+      const currentAuthority = await harness.supersede(
+        'fixed-slot-race-current',
+      );
+      const currentInput = hydrationRecoveryInput(
+        harness,
+        transport,
+        currentAuthority,
+      );
+      const currentInspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          currentInput,
+        );
+      const currentInterruption = new Error(
+        'stop current winner after final authorization',
+      );
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...currentInput,
+          inspection: currentInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+          observePhase: (phase) => {
+            if (phase === 'hydration-recovery-successor-repair-authorized') {
+              throw currentInterruption;
+            }
+          },
+        }),
+      ).rejects.toBe(currentInterruption);
+      await expect(fsp.readFile(finalSlotPath, 'utf8')).resolves.toBe(
+        `${JSON.stringify(currentInspection.authorization)}\n`,
+      );
+
+      releaseStale.resolve();
+      const staleResult = await staleOutcome;
+      expect(staleResult.status).toBe('rejected');
+      if (staleResult.status !== 'rejected') {
+        throw new Error('Stale repair unexpectedly won the final slot.');
+      }
+      expect(staleResult.reason).toBeInstanceOf(CoordinatorAuthorityStaleError);
+      const authorizationNames = (await fsp.readdir(harness.replacementPath))
+        .filter((name) =>
+          name.startsWith(
+            `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${recorded.inspection.repair.repairId}-`,
+          ),
+        )
+        .sort();
+      expect(authorizationNames).toEqual(
+        Array.from(
+          { length: 128 },
+          (_value, authorizationSlot) =>
+            `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${recorded.inspection.repair.repairId}-${String(authorizationSlot).padStart(3, '0')}`,
+        ),
+      );
+      await expect(
+        readOptionalFile(
+          join(
+            harness.replacementPath,
+            `${HYDRATION_RECOVERY_REPAIR_AUTHORIZATION_PREFIX}-${recorded.inspection.repair.repairId}-128`,
+          ),
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        readOptionalDirectory(recorded.stale.partial.targetPath),
+      ).resolves.toEqual([]);
+      await expect(
+        readOptionalFile(recorded.stale.partial.claimPath),
+      ).resolves.not.toBeNull();
+
+      const beforeExactReplay = await readHydrationRecoveryStoreSnapshot(
+        harness.replacementPath,
+      );
+      const exactReplayInterruption = new Error(
+        'stop exact replay at full authorization capacity',
+      );
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...currentInput,
+          inspection: currentInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+          observePhase: (phase) => {
+            if (phase === 'hydration-recovery-successor-repair-authorized') {
+              throw exactReplayInterruption;
+            }
+          },
+        }),
+      ).rejects.toBe(exactReplayInterruption);
+      await expect(
+        readHydrationRecoveryStoreSnapshot(harness.replacementPath),
+      ).resolves.toEqual(beforeExactReplay);
+
+      const exhaustedAuthority = await harness.supersede(
+        'fixed-slot-race-exhausted',
+      );
+      const beforeExhaustedInspection =
+        await readHydrationRecoveryStoreSnapshot(harness.replacementPath);
+      await expect(
+        inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          hydrationRecoveryInput(harness, transport, exhaustedAuthority),
+        ),
+      ).rejects.toThrow(/authorization registry is exhausted/iu);
+      await expect(
+        readHydrationRecoveryStoreSnapshot(harness.replacementPath),
+      ).resolves.toEqual(beforeExhaustedInspection);
+    } finally {
+      releaseStale.resolve();
+      await staleOutcome;
+      linkSpy.mockRestore();
+    }
+  }, 60_000);
+
+  test.each(HYDRATION_RECOVERY_REPAIR_TAKEOVER_CASES)(
+    'reuses one stable repair with fresh authorization after takeover during $phase from $staleState',
+    async ({ staleState, phase }) => {
+      const harness = await createHarness();
+      const transport = await harness.publish();
+      const label = `${staleState.toLowerCase()}-${phase.replace(
+        'hydration-recovery-successor-repair-',
+        '',
+      )}`;
+      const stale = await createStaleHydrationRecovery(
+        harness,
+        transport,
+        label,
+        staleState,
+      );
+      const firstInspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(
+          stale.repairInput,
+        );
+      const firstArtifacts = hydrationRecoveryRepairArtifacts(
+        harness.replacementPath,
+        firstInspection,
+      );
+      const staleReceiptBytes = await fsp.readFile(
+        stale.recoveryArtifacts.receiptPath,
+      );
+      const staleClaimBytes = await fsp.readFile(stale.partial.claimPath);
+      /** @type {ReturnType<typeof createCoordinatorAuthorityToken> | undefined} */
+      let nextAuthority;
+
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...stale.repairInput,
+          inspection: firstInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+          observePhase: async (observedPhase) => {
+            if (observedPhase !== phase) return;
+            nextAuthority = await harness.supersede(`takeover-${label}`);
+          },
+        }),
+      ).rejects.toBeInstanceOf(CoordinatorAuthorityStaleError);
+      if (!nextAuthority) {
+        throw new Error(`Repair never reached takeover phase ${phase}.`);
+      }
+      const stableReceiptBytes = await fsp.readFile(firstArtifacts.receiptPath);
+      expect(stableReceiptBytes.toString('utf8')).toBe(
+        `${JSON.stringify(firstInspection.repair)}\n`,
+      );
+      const firstAuthorizationBytes = await readOptionalFile(
+        firstArtifacts.authorizationPath,
+      );
+      expect(firstAuthorizationBytes).toEqual(
+        phase === 'hydration-recovery-successor-repair-recorded'
+          ? null
+          : Buffer.from(`${JSON.stringify(firstInspection.authorization)}\n`),
+      );
+
+      const nextInput = hydrationRecoveryInput(
+        harness,
+        transport,
+        nextAuthority,
+      );
+      const nextInspection =
+        await inspectApplicationStateSnapshotHydrationRecoveryRepair(nextInput);
+      expect(nextInspection.repair).toEqual(firstInspection.repair);
+      expect(nextInspection.repair.repairId).toBe(
+        firstInspection.repair.repairId,
+      );
+      expect(nextInspection.authorization.authorizationId).not.toBe(
+        firstInspection.authorization.authorizationId,
+      );
+      expect(nextInspection.authorization).toMatchObject({
+        repairId: firstInspection.repair.repairId,
+        replacementAuthority: nextAuthority,
+        replacementBarrier: harness.currentBarrier,
+      });
+      expect(nextInspection.state).toBe(
+        phase === 'hydration-recovery-successor-repair-claim-retired'
+          ? 'REPAIRED'
+          : phase === 'hydration-recovery-successor-repair-target-retired' ||
+              (staleState === 'TARGET_REMOVED' &&
+                phase === 'hydration-recovery-successor-repair-authorized')
+            ? 'TARGET_RETIRED'
+            : 'REPAIR_RECORDED',
+      );
+
+      const beforeReplayNames = (
+        await fsp.readdir(harness.replacementPath)
+      ).sort();
+      await expect(
+        repairApplicationStateSnapshotHydrationRecovery({
+          ...nextInput,
+          inspection: nextInspection,
+          confirmStaleHydrationRecoveryRepair: true,
+        }),
+      ).resolves.toEqual(firstInspection.repair);
+      const nextArtifacts = hydrationRecoveryRepairArtifacts(
+        harness.replacementPath,
+        nextInspection,
+        firstAuthorizationBytes ? 1 : 0,
+      );
+      expect(nextArtifacts.receiptPath).toBe(firstArtifacts.receiptPath);
+      await expect(fsp.readFile(nextArtifacts.receiptPath)).resolves.toEqual(
+        stableReceiptBytes,
+      );
+      const nextAuthorizationBytes = await readOptionalFile(
+        nextArtifacts.authorizationPath,
+      );
+      expect(nextAuthorizationBytes).toEqual(
+        phase === 'hydration-recovery-successor-repair-claim-retired'
+          ? null
+          : Buffer.from(`${JSON.stringify(nextInspection.authorization)}\n`),
+      );
+      if (phase === 'hydration-recovery-successor-repair-claim-retired') {
+        expect((await fsp.readdir(harness.replacementPath)).sort()).toEqual(
+          beforeReplayNames,
+        );
+      }
+      if (firstAuthorizationBytes) {
+        await expect(
+          fsp.readFile(firstArtifacts.authorizationPath),
+        ).resolves.toEqual(firstAuthorizationBytes);
+      }
+      await expect(
+        fsp.readFile(stale.recoveryArtifacts.receiptPath),
+      ).resolves.toEqual(staleReceiptBytes);
+      await expect(
+        readOptionalFile(stale.partial.claimPath),
+      ).resolves.toBeNull();
+      await expect(
+        readOptionalDirectory(stale.partial.targetPath),
+      ).resolves.toBeNull();
+      await expect(
+        readOptionalFile(nextArtifacts.retiredClaimPath),
+      ).resolves.toEqual(staleClaimBytes);
+      await expect(
+        readOptionalDirectory(nextArtifacts.retiredTargetPath),
+      ).resolves.toEqual(staleState === 'RECOVERY_RECORDED' ? [] : null);
+      await expect(
+        inspectApplicationStateSnapshotHydrationRecoveryRepair(nextInput),
+      ).resolves.toMatchObject({
+        state: 'REPAIRED',
+        repair: firstInspection.repair,
+        authorization: nextInspection.authorization,
+      });
+    },
+    20_000,
+  );
 
   test('retries idempotently after destination activation response loss', async () => {
     const harness = await createHarness();

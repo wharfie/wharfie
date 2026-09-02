@@ -40,6 +40,27 @@ jobs:
         if: ${{ always() }}
         run: npm run verify:package:sea
 
+  replacement-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: run replacement recovery regression lane
+        run: npm run test:replacement-input
+      - name: check process-death suites for open handles
+        run: npm run test:replacement-process-death
+
   magnetic-first-run:
     runs-on: ubuntu-latest
     timeout-minutes: 60

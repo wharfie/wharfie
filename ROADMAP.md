@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-09-01
+**Last updated:** 2026-09-02
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -92,6 +92,17 @@ The repository has substantial foundations:
   explicitly unsupported. Independent process
   kills after each recovery durability boundary prove exact replay in the
   [recovery and work-crossing checkpoint](llm/checkpoints/2026-09-01-partial-hydration-recovery-and-work-crossing.md);
+- an explicit successor-authority repair for the one stale incomplete hydration-
+  recovery receipt. A stable repair receipt preserves the exact old `washr1`
+  and its filesystem identity, append-only authorizations retain each exact
+  current successor and `CLOSED` barrier, and repair-specific retirement paths
+  leave the old evidence untouched. A later takeover appends authorization for
+  the same incomplete repair identity and resumes, while a physically completed
+  repair replays read-only, so neither path creates a recursive stale-receipt
+  trap. Raw physical incompleteness remains visible while a
+  completed repair overlays it as logically resolved for the next claim gate,
+  as proved in the
+  [successor-repair checkpoint](llm/checkpoints/2026-09-02-successor-authority-partial-hydration-repair.md);
 - per-application high-water barriers in the separate application-state store,
   adopted by writable runtime catalogs and checked in each effect transaction;
   a resumable control-side primary-store pin now gates resident scheduling,
@@ -189,22 +200,33 @@ credentialed lifecycle through healthy guest service and independently
 verified owned-resource cleanup on AWS and Hetzner. The broader ADR 0035
 acceptance artifact remains partial.
 
-Historical validation on this host included two complete two-worker coverage
-runs that exceeded different unchanged five-second fixture deadlines; both
-failed suites passed alone. A later complete serial coverage run passed all
-7,508 active tests under unchanged deadlines and normal thresholds. Current-tree
-`npm run test:ci` validation passed 360 active suites and 8,132 active tests,
-with 1 suite and 5 tests skipped under the existing policy. All configured
-global coverage thresholds passed; source, app, test, and SEA-verifier
-typechecks passed; the package verifier accepted 382 package files; the
-provider boundary stayed within its package and byte budgets with zero provider
-SDK graph inputs; and the production audit reported 0 vulnerabilities. The
-current replacement-input lane passed 19 suites and 347 tests in 47.836 seconds.
-The three new process-death suites also passed 6 tests together under
-`--detectOpenHandles` in 12.342 seconds.
-Focused validation passed the deterministic LMDB and real-SIGKILL recovery
-suites at 2 suites and 74 tests in 18.857 seconds, plus targeted format, lint,
-and diff hygiene. The isolated same-token race regression passed all 15 tests.
+The validation baseline recorded for `origin/master` at `60dbbba` passed 360
+active suites and 8,132 active tests, with 1 suite and 5 tests skipped under the
+existing policy. All configured global coverage thresholds passed; source,
+app, test, and SEA-verifier typechecks passed; the package verifier accepted
+382 package files; the provider boundary stayed within its package and byte
+budgets with zero provider SDK graph inputs; and the production audit reported
+0 vulnerabilities. That baseline's replacement-input lane passed 19 suites and
+347 tests in 47.836 seconds, and its three then-current process-death suites
+passed 6 tests under `--detectOpenHandles` in 12.342 seconds.
+
+The successor-repair branch passes its expanded replacement-input lane at 19
+suites and 397 tests in 167.007 seconds and its dedicated process-death lane at
+4 suites and 23 tests in 67.106 seconds. The adapted LMDB unit suite passes all
+107 tests; the partial-hydration real-process suite passes all 17 tests. Lint,
+format checking, all four typecheck targets, the 382-file package verifier, and
+the provider boundary pass. The provider boundary contains 158 production
+packages against a 170-package cap, 59,869,240 logical bytes against an
+89,128,960-byte cap, and zero provider SDK graph inputs. The configured
+moderate production-audit gate passes with one low-severity
+`postcss-selector-parser` advisory reported by the registry.
+
+Repository-wide instrumented runs on this Darwin host still expose unrelated,
+unchanged five-second integration-test deadlines under aggregate load. The two
+unchanged suites from the two-worker attempt pass together at 46 tests, and the
+unchanged ready-work suite from the serial attempt passes all 40 tests alone
+under coverage instrumentation. Normal pull-request CI remains the aggregate
+merge authority.
 Prior locally packed magnetic evidence passed explicit inspected takeover, and
 the prior Darwin SEA verification passed at 155,538,992 bytes with SHA-256
 `1e085d1f20b43e6bdfef481beef54d26fff4f236b97fc7d9e7ba2ac385265cf2`.
@@ -519,11 +541,16 @@ before and after exclusive claim creation. Foreign, stale, corrupt,
 evidence-bearing, activated, and same-content substitution cases fail closed
 without authorizing deletion or activation.
 
-An incomplete receipt whose authority or barrier becomes stale is a deliberate
-liveness boundary: neither the old nor the new scope may mutate it, and its
-global registry entry blocks new claims. Automatic compaction or takeover is
-unsupported. A future explicit repair workflow must resolve that state before
-this seam can move toward product activation.
+The stale incomplete-receipt liveness boundary is now resolved internally by
+ADR 0042. Ordinary recovery still refuses authority substitution. The separate
+read-only repair inspection requires one exact raw-incomplete receipt, the exact
+current authority and durable `CLOSED` barrier, unchanged publication, no
+activation, and the same store, replica, receipt file, target, and claim
+identities. Explicit repair persists one stable receipt plus append-only current-
+scope authorizations, retains repair-specific target and claim evidence, and
+overlays exact completion without rewriting or deleting the old receipt. A
+later successor authorizes and resumes the same repair identity rather than
+creating a repair-of-repair.
 
 Its real-process follow-up now covers every exposed LMDB snapshot phase under
 `SIGKILL`: source adoption, marker persistence, sealing, byte capture,
@@ -537,6 +564,14 @@ proof retains the exact closed barrier throughout and rejects stale scope,
 foreign target substitution, and a second physical replica. It is not machine loss, a
 production provider adapter, or product activation.
 
+The successor-repair follow-up adds a 2×4 Unix real-process matrix from both
+stale raw states. It kills after repair receipt persistence, current
+authorization, target retirement, and claim retirement, then takes authority
+again. Incomplete states resume the same stable repair with a fresh durable
+authorization; the claim-retired state is reverified read-only. The exact
+retained evidence and resulting hydration are recorded in the
+[successor-repair checkpoint](llm/checkpoints/2026-09-02-successor-authority-partial-hydration-repair.md).
+
 The complete reconstructed-wrapper work crossing and its future-production-seam
 process-death matrix are no longer open test gaps. Automatic renewal, stable RVN
 observation, exact `N+1` takeover, inherited closed-barrier handling, stale
@@ -545,22 +580,19 @@ one-host independent-process evidence. That evidence uses a provider-shaped
 durable adapter and does not make a live-provider, machine-loss, or product
 activation claim.
 
-The activation-readiness decision remains **NO-GO**. The public DynamoDB
-resident gate stays closed.
+The explicit stale-receipt repair is complete internally. The activation-
+readiness decision remains **NO-GO**, and the public DynamoDB resident gate stays
+closed.
 
-1. Design and implement an explicit successor-authority repair workflow for an
-   incomplete partial-hydration recovery receipt whose original authority or
-   barrier is stale. The current global registry correctly blocks new claims,
-   but no current authority may finish or supersede that retained attempt.
-2. Add trusted-node enrollment and per-revision authorization. A successor may
+1. Add trusted-node enrollment and per-revision authorization. A successor may
    run authored code only when the node is explicitly trusted and carries the
    exact authorized executable revision.
-3. Add finite capability advertisement, compatible placement, and a fenced node
+2. Add finite capability advertisement, compatible placement, and a fenced node
    lease so work is admitted only to an authorized matching node.
-4. After those prerequisites, run one bounded two-node machine-loss recovery
+3. After those prerequisites, run one bounded two-node machine-loss recovery
    proof. Multi-active scheduling is not required.
-5. Revisit the explicit public activation gate only after the repair,
-   authorization, placement, lease, and two-node evidence exists.
+4. Revisit the explicit public activation gate only after authorization,
+   placement, lease, and two-node evidence exists.
 
 These remain internal proof and product-gating tasks. Public activation,
 two-node and machine-loss claims, releases, deployments, publication, and
