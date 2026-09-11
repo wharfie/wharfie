@@ -1122,7 +1122,9 @@ export function writeHostCleanup(options) {
   const kind =
     options.scenario === 'lifecycle'
       ? 'wharfie.systemd-proof.host-cleanup'
-      : 'wharfie.steady-file-systemd-proof.host-cleanup';
+      : options.scenario === 'remote-recovery'
+        ? 'wharfie.remote-recovery-proof.host-cleanup'
+        : 'wharfie.steady-file-systemd-proof.host-cleanup';
   writeJson(path.join(options.directory, 'cleanup.json'), {
     schemaVersion: 1,
     kind,

@@ -251,6 +251,15 @@ cleanup() {
   set +e
   if [[ "${status}" -ne 0 && "${CREATED}" -eq 1 && -n "${RECEIPT_STAGING}" && ! -f "${RECEIPT_STAGING}/SHA256SUMS" ]]; then
     if instance_is_listed; then
+      if [[ "${SCENARIO}" == "remote-recovery" ]]; then
+        for evidence in remote-recovery-prepare.json remote-recovery-final.json remote-recovery-failure.json; do
+          if lima shell --tty=false "${INSTANCE}" /usr/bin/test -f "${GUEST_PROOF_ROOT}/${evidence}"; then
+            lima copy --backend=scp \
+              "${INSTANCE}:${GUEST_PROOF_ROOT}/${evidence}" \
+              "${RECEIPT_STAGING}/${evidence}" || true
+          fi
+        done
+      fi
       if lima shell --tty=false "${INSTANCE}" \
         /usr/bin/test -f "${GUEST_PROOF_ROOT}/failure.json"; then
         lima copy --backend=scp \

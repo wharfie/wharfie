@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { createBoundedProcessRunner } from '../src/core/runtime/bounded-process.js';
 import { sha256Base64Url } from '../src/core/runtime/content-id.js';
@@ -43,6 +43,9 @@ import {
 } from '../src/core/runtime/single-node-deployment-journal.js';
 import { createProductionSingleNodeRemoteActivator } from '../src/core/runtime/single-node-remote-activation.js';
 import { createPackageTarball } from './package-verification.js';
+// Keep the independent builder in the proof's checked import graph. Importing
+// it performs no work; only the separate process invokes its entrypoint.
+import { assertMatchingRemoteRecoveryPayloadRecords } from './remote-recovery-package-child.js';
 
 const ROOT = '/var/tmp/wharfie-systemd-proof';
 const APP_ID = 'remote-recovery-proof';
@@ -88,7 +91,7 @@ function run(file, args, options = /** @type {Record<string, any>} */ ({})) {
     assert.equal(
       result.status,
       0,
-      `${path.basename(file)} failed: ${result.stderr || result.stdout}`,
+      `${path.basename(file)} failed (exit ${result.status}, signal ${result.signal}): ${result.stderr || result.stdout}`,
     );
   }
   return result;
@@ -118,6 +121,29 @@ function announce(phase) {
   process.stdout.write(
     `${JSON.stringify({ phase, at: new Date().toISOString() })}\n`,
   );
+}
+
+/** Read only the finite package phase protocol after a builder process fails. */
+function readPackageProgress() {
+  try {
+    const selected = path.join(ROOT, 'package-progress.json');
+    assert.ok(statSync(selected).size <= 4096);
+    const progress = JSON.parse(readFileSync(selected, 'utf8'));
+    assert.ok(['guest', 'controller'].includes(progress.pass));
+    assert.ok(
+      ['resolve', 'prepare', 'build', 'download', 'publish'].includes(
+        progress.phase,
+      ),
+    );
+    assert.ok(Number.isSafeInteger(progress.rssBytes) && progress.rssBytes > 0);
+    return {
+      pass: progress.pass,
+      phase: progress.phase,
+      rssBytes: progress.rssBytes,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Poll one finite observation under an overall monotonic deadline. */
@@ -227,31 +253,51 @@ async function buildArtifacts(repoRoot) {
       'remote-recovery',
     ),
   );
-  const { packageLocalApp } = await import(
-    pathToFileURL(path.join(installed, 'src/cli/app/local-app.js')).href
-  );
-  const { packageSingleNodeSelfDeployableApp } = await import(
-    pathToFileURL(
-      path.join(
+  const packagePass = (pass) => {
+    const resultPath = path.join(ROOT, `${pass}-package-result.json`);
+    announce(`${pass}-package-started`);
+    const child = run(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL('./remote-recovery-package-child.js', import.meta.url),
+        ),
+        pass,
         installed,
-        'src/cli/app/single-node-self-deployable-package.js',
-      ),
-    ).href
-  );
-  const guest = await packageLocalApp({
-    dir: fixture,
-    outputDir: path.join(ROOT, 'guest-build'),
-    targetFilters: ['linux/x64/glibc'],
-  });
+        fixture,
+        path.join(ROOT, `${pass}-build`),
+        resultPath,
+      ],
+      { timeout: 600_000 },
+    );
+    // Child output is limited to progress emitted by the bounded package port;
+    // do not forward arbitrary builder stdout into retained proof receipts.
+    for (const line of child.stdout.split('\n')) {
+      try {
+        const progress = JSON.parse(line);
+        if (
+          progress.pass === pass &&
+          ['resolve', 'prepare', 'build', 'download', 'publish'].includes(
+            progress.phase,
+          )
+        ) {
+          process.stdout.write(
+            `${JSON.stringify({ pass, phase: progress.phase, rssBytes: progress.rssBytes })}\n`,
+          );
+        }
+      } catch {
+        // Only our finite progress protocol is relayed.
+      }
+    }
+    assert.ok(statSync(resultPath).size <= 1024 * 1024);
+    return JSON.parse(readFileSync(resultPath, 'utf8'));
+  };
+  const guest = packagePass('guest');
   announce('guest-x64-sea-packaged');
-  const outer = await packageSingleNodeSelfDeployableApp({
-    dir: fixture,
-    outputDir: path.join(ROOT, 'controller-build'),
-    targetFilters: [`linux/${process.arch}/glibc`],
-  });
+  const outer = packagePass('controller');
   assert.equal(guest.artifacts.length, 1);
   assert.equal(outer.artifacts.length, 1);
-  assert.deepEqual(
+  assertMatchingRemoteRecoveryPayloadRecords(
     outer.deploymentPayload.artifactRecord,
     guest.artifacts[0].record,
   );
@@ -736,6 +782,7 @@ if (
         kind: 'wharfie.remote-recovery.failure',
         sourceCommit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
         phase: currentPhase,
+        packageProgress: readPackageProgress(),
         process: failedProcess || lastProcess,
         errorName: error instanceof Error ? error.name : 'UnknownFailure',
       });

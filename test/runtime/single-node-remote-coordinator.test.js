@@ -322,6 +322,95 @@ describe('remote coordinator recovery from committed release authority', () => {
     expect(harness.coordinatorCalls).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { disposition: 'conflict', session: 'absent' },
+    { disposition: 'unknown', session: 'unknown' },
+  ])(
+    'inspects and explicitly replaces retained crash authority with $disposition lifecycle convergence',
+    async ({ disposition, session }) => {
+      const harness = await createHarness();
+      // A hard-killed resident retains matching lifecycle/ownership session
+      // IDs until systemd restarts it. Its absent socket does not clear that
+      // durable currentOwner flag, so service convergence is not authorized.
+      harness.state.serviceStatus = createHealthySingleNodeServiceStatus(
+        harness.fixture,
+        {
+          health: 'degraded',
+          systemd: {
+            ...harness.healthyStatus.systemd,
+            activeState: 'activating',
+            subState: 'auto-restart',
+            result: 'signal',
+            mainPid: 0,
+          },
+          runtime: {
+            ...harness.healthyStatus.runtime,
+            ownerKind: 'resident',
+            currentOwner: true,
+            session,
+          },
+          desiredConvergence: {
+            ...harness.healthyStatus.desiredConvergence,
+            disposition,
+            basis: null,
+          },
+        },
+      );
+
+      await expect(
+        harness.executor.inspectCoordinator(harness.input),
+      ).resolves.toEqual(harness.inspection);
+      expect(
+        await harness.withStore((store) => store.get({ appId: harness.appId })),
+      ).toEqual(harness.predecessor);
+      await expect(
+        harness.executor.execute({
+          ...harness.input,
+          argv: ['run', 'business-work'],
+        }),
+      ).rejects.toThrow(/healthy active release/);
+      const receipt = await harness.executor.takeoverCoordinator(
+        harness.takeoverInput,
+      );
+      expect(receipt).toMatchObject({
+        applied: true,
+        observedAuthority: harness.predecessor,
+        resultAuthority: {
+          epoch: harness.predecessor.epoch + 1,
+          status: CoordinatorAuthorityStatus.RELEASED,
+        },
+      });
+      expect(
+        await harness.withStore((store) => store.get({ appId: harness.appId })),
+      ).toEqual(receipt.resultAuthority);
+      expect(harness.coordinatorCalls).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(['conflict', 'unknown'])(
+    'keeps ordinary execution blocked by %s convergence despite otherwise healthy status',
+    async (disposition) => {
+      const harness = await createHarness();
+      harness.state.serviceStatus = createHealthySingleNodeServiceStatus(
+        harness.fixture,
+        {
+          desiredConvergence: {
+            ...harness.healthyStatus.desiredConvergence,
+            disposition,
+            basis: null,
+          },
+        },
+      );
+      await expect(
+        harness.executor.execute({
+          ...harness.input,
+          argv: ['run', 'business-work'],
+        }),
+      ).rejects.toThrow(/healthy active release/);
+      expect(harness.coordinatorCalls).not.toHaveBeenCalled();
+    },
+  );
+
   it('fences and releases the exact predecessor, then replays a lost reply without replacing a healthy new resident', async () => {
     const harness = await createHarness();
     harness.state.loseTakeoverReply = true;
@@ -452,7 +541,14 @@ describe('remote coordinator recovery from committed release authority', () => {
     },
   );
 
-  it.each(['installation', 'activation', 'integrity', 'convergence', 'wiring'])(
+  it.each([
+    'installation',
+    'activation',
+    'integrity',
+    'convergence',
+    'runtime',
+    'wiring',
+  ])(
     'rejects conflicting %s evidence even when failed liveness is eligible for recovery',
     async (field) => {
       const harness = await createHarness();
@@ -467,7 +563,8 @@ describe('remote coordinator recovery from committed release authority', () => {
         status.activation.selected.artifactId = other.artifactId;
       if (field === 'integrity') status.integrity.status = 'invalid';
       if (field === 'convergence')
-        status.desiredConvergence.disposition = 'conflict';
+        status.desiredConvergence.desired.artifactId = other.artifactId;
+      if (field === 'runtime') status.runtime.artifactId = other.artifactId;
       if (field === 'wiring') status.wiring.effectiveUnit = 'conflicting';
       harness.state.serviceStatus = status;
       await expect(

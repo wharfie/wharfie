@@ -658,6 +658,10 @@ function isDesiredRelease(value, desired) {
  * Verify installed release authority independently of resident liveness.
  * Recovery may inspect and fence a crashed coordinator only while the same
  * immutable release, activation selection, and managed service remain proven.
+ * Convergence also considers live service ownership: a killed resident can
+ * retain matching ownership IDs after its socket disappears. Its conflict or
+ * unknown decision cannot block explicit coordinator recovery. The decision's
+ * desired release still binds the invoking SEA to the journal's artifact.
  * @param {Record<string, any>} status - Decoded service status.
  * @param {Readonly<Record<string, any>>} desired - Exact desired state.
  * @returns {{appId: string, unit: string, activeArtifactId: string, activeRevisionId: string}} - Exact installed release projection.
@@ -712,8 +716,10 @@ export function validateSingleNodeRemoteServiceIdentity(status, desired) {
     convergence.kind !== 'wharfie.service.desired-convergence' ||
     convergence.appId !== desired.intent.appId ||
     convergence.unit !== unit ||
-    convergence.disposition !== 'authorized' ||
-    convergence.basis !== 'durable-active' ||
+    !['authorized', 'conflict', 'unknown'].includes(convergence.disposition) ||
+    (convergence.disposition === 'authorized'
+      ? convergence.basis !== 'durable-active'
+      : convergence.basis !== null) ||
     !isDesiredRelease(convergence.desired, desired)
   ) {
     throw new Error(
@@ -736,6 +742,8 @@ export function validateSingleNodeRemoteServiceIdentity(status, desired) {
 export function validateSingleNodeRemoteServiceStatus(status, desired) {
   const identity = validateSingleNodeRemoteServiceIdentity(status, desired);
   if (
+    status.desiredConvergence.disposition !== 'authorized' ||
+    status.desiredConvergence.basis !== 'durable-active' ||
     status.health !== 'healthy' ||
     status.systemd.activeState !== 'active' ||
     status.systemd.subState !== 'running' ||

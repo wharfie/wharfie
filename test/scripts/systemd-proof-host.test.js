@@ -30,6 +30,7 @@ import {
   sealProofReceipt,
   verifyLimaImage,
   verifyProofHostHelper,
+  writeHostCleanup,
 } from '../../scripts/systemd-proof-host.js';
 
 const PINNED_CONFIG = readFileSync(
@@ -779,6 +780,40 @@ describe('frozen proof host helper', () => {
       'Proof source must capture exactly one host helper.',
     );
   });
+});
+
+describe('scenario-bound host cleanup evidence', () => {
+  test.each([
+    ['lifecycle', 'wharfie.systemd-proof.host-cleanup'],
+    ['steady-file', 'wharfie.steady-file-systemd-proof.host-cleanup'],
+    ['remote-recovery', 'wharfie.remote-recovery-proof.host-cleanup'],
+  ])(
+    'labels %s cleanup without changing its absence evidence',
+    (scenario, kind) => {
+      const directory = ownedRoot();
+      writeHostCleanup({
+        directory,
+        scenario,
+        commit: COMMIT,
+        instance: 'proof-owned',
+        limaHome: join(directory, 'deleted', 'lima'),
+        tempRoot: join(directory, 'deleted'),
+        instanceAbsent: true,
+        instanceRetained: false,
+        exitStatus: 1,
+      });
+      expect(
+        JSON.parse(readFileSync(join(directory, 'cleanup.json'), 'utf8')),
+      ).toMatchObject({
+        kind,
+        instanceAbsent: true,
+        instanceRetained: false,
+        taskRootAbsent: true,
+        privateImageCacheAbsent: true,
+        exitStatus: 1,
+      });
+    },
+  );
 });
 
 describe('pinned one-image Lima configuration', () => {
