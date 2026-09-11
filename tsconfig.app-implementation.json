@@ -1,10 +1,5 @@
 {
   "extends": "./tsconfig.json",
-  "files": [
-    "src/app.js",
-    "src/deployment-profile.js",
-    "types/postject.d.ts",
-    "types/semver.d.ts"
-  ],
+  "files": ["src/app.js", "types/postject.d.ts", "types/semver.d.ts"],
   "include": []
 }

@@ -1,7 +1,10 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["jest", "node"]
+    "types": ["jest", "node"],
+    "paths": {
+      "lmdb": ["./test/types/lmdb-esm.d.ts"]
+    }
   },
   "include": ["test/**/*.js", "test/types/**/*.ts", "types/**/*.d.ts"]
 }

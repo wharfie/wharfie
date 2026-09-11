@@ -1,4 +1,3 @@
-// @ts-nocheck -- intentionally loose injected AWS SDK test doubles.
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
@@ -11,6 +10,11 @@ import createDynamoDB, {
 } from '../../src/core/lib/db/adapters/dynamodb.js';
 import { validateAwsDynamoDBCoordinatorAuthorityTableTopology } from '../../src/core/runtime/dynamodb-coordinator-authority-topology-provider.js';
 import { createAwsProviderModule } from '../helpers/aws-provider.js';
+
+/** @typedef {import('../../src/core/lib/db/base.js').KeyCondition} KeyCondition */
+/** @typedef {{ TableName: string }} TableRequest */
+/** @typedef {{ RequestItems: NonNullable<import('@aws-sdk/lib-dynamodb').BatchWriteCommandInput['RequestItems']> }} BatchRequest */
+/** @typedef {{ TransactItems: NonNullable<import('@aws-sdk/lib-dynamodb').TransactWriteCommandInput['TransactItems']> }} TransactionRequest */
 
 const TABLE_NAME = 'execution-ledger';
 const REGION = 'us-east-2';
@@ -33,6 +37,7 @@ function tableDescription(tableArn = TABLE_ARN, tableId = TABLE_ID) {
 
 function harness() {
   const response = tableDescription();
+  /** @type {import('@jest/globals').jest.Mock<(input: TableRequest) => Promise<typeof response>>} */
   const describeTable = jest.fn(async () => response);
   const rawDestroy = jest.fn();
   const DynamoDB = jest.fn(function DynamoDB(options) {
@@ -41,14 +46,22 @@ function harness() {
     this.destroy = rawDestroy;
   });
   const docClient = {
+    /** @type {import('@jest/globals').jest.Mock<(input: TableRequest) => Promise<{}>>} */
     query: jest.fn(async () => ({ Items: [] })),
+    /** @type {import('@jest/globals').jest.Mock<(input: TableRequest) => Promise<{}>>} */
     put: jest.fn(async () => ({})),
+    /** @type {import('@jest/globals').jest.Mock<(input: TableRequest) => Promise<{}>>} */
     update: jest.fn(async () => ({})),
+    /** @type {import('@jest/globals').jest.Mock<(input: TableRequest) => Promise<{}>>} */
     get: jest.fn(async () => ({})),
+    /** @type {import('@jest/globals').jest.Mock<(input: TableRequest) => Promise<{}>>} */
     delete: jest.fn(async () => ({})),
+    /** @type {import('@jest/globals').jest.Mock<(input: BatchRequest) => Promise<Pick<import('@aws-sdk/lib-dynamodb').BatchWriteCommandOutput, 'UnprocessedItems'>>>} */
     batchWrite: jest.fn(async () => ({ UnprocessedItems: {} })),
+    /** @type {import('@jest/globals').jest.Mock<(input: TransactionRequest) => Promise<{}>>} */
     transactWrite: jest.fn(async () => ({})),
   };
+  /** @type {import('@jest/globals').jest.Mock<(client: unknown, options: { marshallOptions: { removeUndefinedValues: boolean } }) => typeof docClient>} */
   const from = jest.fn(() => docClient);
   const DynamoDBDocument = Object.assign(jest.fn(), { from });
   const credentials = jest.fn();
@@ -72,6 +85,7 @@ function harness() {
   };
 }
 
+/** @param {ReturnType<typeof harness>} fixture */
 async function describeAndPin(fixture, response = fixture.response) {
   fixture.describeTable.mockResolvedValueOnce(response);
   const input = Object.freeze({ TableName: TABLE_NAME });
@@ -134,12 +148,14 @@ describe('DynamoDB topology capability', () => {
         sortKeyName: 'sort_key',
         sortKeyValue: 'item-1',
       };
+      /** @type {KeyCondition} */
       const primary = {
         conditionType: 'EQUALS',
         keyType: 'PRIMARY',
         propertyName: 'run_id',
         propertyValue: 'run-1',
       };
+      /** @type {KeyCondition} */
       const sort = {
         conditionType: 'BEGINS_WITH',
         keyType: 'SORT',
@@ -150,6 +166,7 @@ describe('DynamoDB topology capability', () => {
       await fixture.db.query({
         tableName: TABLE_NAME,
         keyConditions: [primary],
+        consistentRead: false,
       });
       await fixture.db.queryPage({
         tableName: TABLE_NAME,
@@ -349,7 +366,7 @@ describe('DynamoDB topology capability', () => {
       ).toBe(fixture.docClient.transactWrite.mock.calls[0][0].TransactItems);
       expect(
         fixture.docClient.transactWrite.mock.calls[0][0].TransactItems[0].Put
-          .TableName,
+          ?.TableName,
       ).toBe(TABLE_ARN);
     } finally {
       random.mockRestore();
@@ -379,7 +396,10 @@ describe('DynamoDB topology capability', () => {
 
   test('blocks logical-name traffic while first topology validation is pending', async () => {
     const fixture = harness();
-    let resolveDescription;
+    /** @type {(response: ReturnType<typeof tableDescription>) => void} */
+    let resolveDescription = () => {
+      throw new Error('DescribeTable has not started');
+    };
     fixture.describeTable.mockImplementationOnce(
       async () =>
         await new Promise((resolve) => {
@@ -422,7 +442,7 @@ describe('DynamoDB topology capability', () => {
       await expect(async () =>
         pinDescribedDynamoDBTableForClient(fixture.db, input, exact),
       ).rejects.toThrow(/different table resource/u);
-      expect(fixture.describeTable.mock.calls.at(-1)[0].TableName).toBe(
+      expect(fixture.describeTable.mock.calls.at(-1)?.[0].TableName).toBe(
         TABLE_ARN,
       );
       await expect(
@@ -551,18 +571,18 @@ describe('DynamoDB topology capability', () => {
     const copied = { ...fixture.db };
     const input = Object.freeze({ TableName: TABLE_NAME });
 
+    await expect(describeDynamoDBTableForClient(copied, input)).rejects.toThrow(
+      /exact open DynamoDB DB client/u,
+    );
     await expect(
-      describeDynamoDBTableForClient(/** @type {any} */ (copied), input),
-    ).rejects.toThrow(/exact open DynamoDB DB client/u);
-    await expect(
-      describeDynamoDBTableForClient(/** @type {any} */ ({}), input),
+      describeDynamoDBTableForClient(
+        // @ts-expect-error -- intentionally invalid client tests runtime branding.
+        {},
+        input,
+      ),
     ).rejects.toThrow(/exact open DynamoDB DB client/u);
     expect(() =>
-      pinDescribedDynamoDBTableForClient(
-        /** @type {any} */ (copied),
-        input,
-        fixture.response,
-      ),
+      pinDescribedDynamoDBTableForClient(copied, input, fixture.response),
     ).toThrow(/exact open DynamoDB DB client/u);
 
     await describeAndPin(fixture);
@@ -593,19 +613,14 @@ describe('DynamoDB topology capability', () => {
     });
     try {
       await expect(
-        describeDynamoDBTableForClient(
-          fixture.db,
-          /** @type {any} */ ({
-            TableName: TABLE_NAME,
-            ConsistentRead: true,
-          }),
-        ),
+        describeDynamoDBTableForClient(fixture.db, {
+          TableName: TABLE_NAME,
+          // @ts-expect-error -- extra SDK options must be rejected at runtime.
+          ConsistentRead: true,
+        }),
       ).rejects.toThrow(/one exact TableName/u);
       await expect(
-        describeDynamoDBTableForClient(
-          fixture.db,
-          /** @type {any} */ ({ TableName: '' }),
-        ),
+        describeDynamoDBTableForClient(fixture.db, { TableName: '' }),
       ).rejects.toThrow(/one exact TableName/u);
       await expect(
         describeDynamoDBTableForClient(fixture.db, accessorInput),

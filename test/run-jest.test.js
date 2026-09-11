@@ -58,6 +58,7 @@ function createHarness(result = { status: 0, signal: null }) {
     events.push(`kill:${pid}:${signal}`);
   });
   const env = { WHARFIE_TEST_RUNNER: '1' };
+  const retainFailure = jest.fn();
 
   return {
     dependencies: {
@@ -69,6 +70,7 @@ function createHarness(result = { status: 0, signal: null }) {
       execPath: '/node',
       env,
       pid: 321,
+      retainFailure,
     },
     events,
     spawn,
@@ -76,6 +78,7 @@ function createHarness(result = { status: 0, signal: null }) {
     removeTempRoot,
     kill,
     env,
+    retainFailure,
   };
 }
 
@@ -161,6 +164,7 @@ describe('disposable Jest runner', () => {
       'spawn',
       `remove:${ownedRoot}`,
     ]);
+    expect(harness.retainFailure).not.toHaveBeenCalled();
   });
 
   it('clones the caller environment and confines every temp variable', () => {
@@ -452,6 +456,51 @@ describe('disposable Jest runner', () => {
 
     expect(runJest([], harness.dependencies)).toBe(23);
     expect(harness.removeTempRoot).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { status: 23, signal: null },
+    { status: null, signal: /** @type {NodeJS.Signals} */ ('SIGABRT') },
+  ])(
+    'retains failure metadata before cleanup and signal forwarding: %j',
+    (result) => {
+      const harness = createHarness(result);
+      harness.retainFailure.mockImplementation(() => {
+        expect(harness.removeTempRoot).not.toHaveBeenCalled();
+        expect(harness.kill).not.toHaveBeenCalled();
+      });
+
+      expect(
+        runJest(['--testNamePattern=private-user-value'], harness.dependencies),
+      ).toBe(result.status ?? 1);
+      expect(harness.retainFailure).toHaveBeenCalledWith({
+        runner: 'jest',
+        phase: 'jest',
+        command: 'jest',
+        durationMs: expect.any(Number),
+        ...result,
+      });
+      expect(harness.removeTempRoot).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('preserves primary status and cleanup when an injected diagnostic writer fails', () => {
+    const harness = createHarness({ status: 23, signal: null });
+    harness.retainFailure.mockImplementation(() => {
+      throw new Error('report disk full');
+    });
+    expect(runJest([], harness.dependencies)).toBe(23);
+    expect(harness.removeTempRoot).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a cleanup-only failure without changing that error', () => {
+    const harness = createHarness();
+    const failure = new Error('cleanup failed');
+    failCleanup(harness, failure);
+    expect(() => runJest([], harness.dependencies)).toThrow(failure);
+    expect(harness.retainFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: 'cleanup', status: 0 }),
+    );
   });
 
   it('cleans up before propagating a reported spawn error', () => {

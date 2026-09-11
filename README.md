@@ -665,48 +665,9 @@ pre-staged converge, or resume operation, and unconditionally closes the
 invocation. It snapshots the complete request before opening credentials and
 preserves deterministic primary-operation and cleanup failures.
 
-Source packaging can now mint one opaque, process-local selected-SEA authority
-only from a fresh successful `packageLocalApp()` generation and one retained
-descriptor. The authority binds the generation-backed artifact record to the
-descriptor's exact bytes, creates one deployment revision from that same
-evidence, and permits exactly one source claim or deterministic discard.
-Paths, sidecars, copies, JSON, and reconstructed objects carry no authority.
-
-Source preparation now claims that authority directly into the invocation's
-artifact stager. The stager revalidates the exact generation record, revision,
-runtime, held-byte observation, deployment revision, profile, and provider
-scope, durably stages the bytes, and unconditionally closes the claimed
-descriptor. `prepareAwsSelectedSeaPlan()` returns the frozen, JSON-safe
-`{plan, profile, artifactStage}` only after the immutable intent, exact object
-version, and receipt are durably present and revalidated. Direct
-`applyAwsSelectedSea()` stages once and passes that same evidence to
-`convergePreStaged()`. A later process can select the one-shot
-`converge-pre-staged` runner operation, which validates the supplied evidence
-against durable state and never opens or substitutes its running executable.
-Ordinary `converge` deliberately remains the packaged running-SEA path.
-
-The legacy experimental source deployment tree uses `wharfie deployment ...`
-and has five AWS-oriented leaves: `plan`, `apply`, `inspect`, `reconcile`, and
-`destroy`. The exact source grammar is:
-
-```text
-wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
-wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
-wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
-wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
-wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-```
-
-The canonical DeploymentProfileV2 supplied through `--profile` is operator
-input outside the app manifest and contains no credentials. The source surface
-resolves the ordinary AWS credential chain. Source plan/direct apply package
-and durably pre-stage a selected SEA; source `apply --plan` and reconcile
-consume exact durable staged evidence.
-
 `wharfie app package --self-deployable` creates an operator SEA carrying an
-authenticated Linux deployment SEA. That packaged executable replaces the
-legacy source lifecycle with narrow AWS and Hetzner deployment commands:
+authenticated Linux deployment SEA. Run cloud deployment through that
+executable using the AWS and Hetzner commands:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
@@ -798,22 +759,6 @@ volume, and security-group cleanup. The Hetzner path completed the equivalent
 slice in `fsn1`, including second-process adoption without replacement and
 independently verified firewall, Primary IPv4, and server cleanup. See the
 [two-provider checkpoint](llm/checkpoints/2026-07-29-two-provider-self-deployment-scope.md).
-Create the canonical profile with
-`@wharfie/wharfie/deployment-profile`, whose narrow Node authoring API exports
-`DEPLOYMENT_MODE`, `createAwsSingleNodeProvider()`, and
-`createDeploymentProfile()`; the quickstart contains a complete recipe.
-Source `plan --json` output includes staged-artifact evidence and is reusable
-only by source `apply --plan`.
-Plan always requires an explicit `--control-policy`, because source planning
-may package, stage, and create bootstrap control state. Direct apply defaults to
-`bootstrap`; prepared apply, inspect, reconcile, and destroy default to
-`require-active`. Source `apply --plan` rejects `--dir` and `--output-dir`
-rather than silently ignoring artifact-selection options. Scalar selectors
-such as profile, plan, region, policy, and source paths may be supplied only
-once. A correlated controller head that still carries an active operation is a
-nonzero incomplete result; inspect it and use confirmed reconcile after the
-former coordinator is known stopped.
-
 Command mounting is not a production claim. The strict privileged-host
 request/receipt contract binds an all-settled active deployment operation to
 its exact node, role, versioned artifact, desired release, and retained-volume

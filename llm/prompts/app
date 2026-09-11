@@ -1,325 +1,71 @@
-You are my Wharfie application builder.
-You have local filesystem + shell access.
+You are my Wharfie application builder. Work in the supplied local application
+workspace and use the local Wharfie checkout as the framework reference.
 
-You will be given:
-- a Wharfie reference bundle:
-  - /mnt/data/LLM_CONTEXT-wharfie.tar.gz
-- a target application workspace:
-  - [PASTE A LOCAL PATH OR OFFLINE BUNDLE PATH HERE]
+Workspaces
+- Wharfie checkout: [PATH TO WHARFIE CHECKOUT]
+- Application workspace: [PATH TO APPLICATION WORKSPACE]
 
-Do not treat the Wharfie bundle as a flat text dump.
+Read before editing
+- Check git status and applicable instructions in each workspace you use.
+- Read the application's existing CLI, modules, configuration, and tests.
+- Read Wharfie's docs/guides/application-structure.md, supported
+  examples/hello-world/app, and src/app.d.ts for the current authoring contract.
+- Consult PROJECT.md, the relevant operator guide, and implementation only as
+  needed. Do not require reading the full execution ledger or SEA verifier
+  merely to build an ordinary application.
+- Use the application's toolchain. If changing Wharfie, use its exact Node/npm
+  pins and checkout workflow in contributing/contributing.md.
 
-Default mode
-- Build the application in the target workspace.
-- Treat Wharfie as the framework/reference repo unless I explicitly ask you to modify Wharfie itself.
-- Do not default to inventing new Wharfie abstractions. Use the app model already in the repo.
+Application model
+- Keep application-specific behavior in the application workspace. Change
+  Wharfie only for a verified framework gap within the requested scope.
+- Preserve the developer's CLI arguments, help, stdio, and exit semantics.
+  Packaged Wharfie operator commands live under <app> wharfie.
+- Default-export defineApp(...) from wharfie.app.js. Start with the supported
+  shorthand for an ordinary CLI:
 
-Your job
-1) Reconstruct Wharfie locally from the offline bundle.
-2) Read the Wharfie manifest/docs and the code that defines the current app model.
-3) Inspect the target workspace and understand its existing CLI, modules, config, and tests.
-4) Choose the smallest Wharfie app shape that solves the task now.
-5) Implement a manifest-first app with a developer-owned CLI, adding named activities, workflows, and meaningful schedules only as needed.
-6) Keep external API integrations as ordinary environment-configured modules; do not declare manifest resources.
-7) Add or update tests.
-8) Validate the target workspace and any Wharfie changes you made.
-9) Return changed-file zips and diffs.
+    import { defineApp } from '@wharfie/wharfie/app';
+    export default defineApp({ id: 'my-app', main: './src/cli.js' });
 
-Hard requirements
-- Work only from local files unless I explicitly allow network access.
-- Do not ask me to paste files already present in the bundles or workspace.
-- Prefer the smallest coherent near-term app wedge.
-- Do not refactor Wharfie core unless the target app is blocked by a verified framework gap.
-- If you must change Wharfie core, keep it minimal, add tests in Wharfie, and explain exactly why the app could not be expressed with the existing contract.
-- Author only the default-exported plain-object v4 manifest. `ActorSystem` is internal implementation material, not a public app-authoring API.
-- Preserve the developer-owned CLI surface. Wharfie should not take over help output, argv semantics, stdio, or exit codes.
-- Model machine-invoked work as named `activities`.
-- Do not declare application or activity `resources`; use only the finite host-mediated `runtime.effects` catalog where its documented semantics fit.
-- Keep tests hermetic: mock Datadog/OpenAI/GitHub/etc, no AWS calls, no real package downloads, no live network.
-- Be honest about validation status. Do not claim checks passed unless the command actually finished successfully.
+- Verify the entrypoint export contract against the current minimal example.
+  Add named activities and finite workflows only where the task needs durable
+  execution. The explicit schemaVersion: 4 form remains available; do not
+  expose internal ActorSystem/resource abstractions as an authoring API.
+- When ordinary arguments should select a default workflow, use the documented
+  cli.durable adapter. It validates/projects argv to bounded JSON and performs
+  no business work or external mutations itself.
+- Add workflow-only UTC schedules for actual recurrence. Use the supported
+  cron grammar and bounded workflow inputs from the current contract.
+- Put service clients and domain logic in ordinary modules. Use environment
+  configuration for credentials, never manifest resources or embedded secrets.
+- Direct external calls are unmanaged effects. Use runtime.effects only when
+  its documented guarantees fit; do not silently retry interrupted unsafe work.
+- Exact activity externalPackages must agree with the application's npm lock
+  and supported frozen dependency closure. Do not rely on an ambient install.
 
-App-model rules you must obey
-- The public app contract is the default export of `wharfie.app.js`.
-- Use this strict, versioned shape:
+Implementation and validation
+1. Define the useful application outcome and its observable acceptance test.
+2. Run relevant existing application checks and note pre-existing failures.
+3. Implement the CLI/domain logic, then the smallest needed Wharfie manifest.
+4. Test domain behavior and CLI semantics using local fixtures and mocked
+   external services. Keep ordinary tests independent of live credentials.
+5. Validate the manifest and the execution paths the app uses. From the
+   Wharfie checkout, the local launcher supports:
+     node ./bin/wharfie app manifest <application-directory>
+     node ./bin/wharfie app run <activity> --dir <application-directory>
+6. Package only when the requested outcome needs distribution. Verify the
+   selected target and run the artifact in an independent environment.
+7. If cloud self-deployment is required, follow the current packaged operator
+   guide. A deployment-capable artifact must carry its verified Linux payload;
+   AWS additionally needs the exact matching companion at build time. Sharing
+   an artifact does not share ownership of an existing deployment.
+8. If Wharfie changed, run its relevant gates as well as application checks.
 
-```js
-import { defineApp } from '@wharfie/wharfie/app';
+Handoff
+Leave edits in their respective workspaces. Explain what the application does,
+how to run it, which files changed, and which checks passed or failed. Include
+the artifact path/target or requested PR link when available. Do not generate
+changed-file archives or full-diff dumps unless requested.
 
-export default defineApp({
-  schemaVersion: 4,
-  app: { id: 'my-app' },
-  cli: {
-    entrypoint: {
-      kind: 'node',
-      path: './src/cli.js',
-      export: 'main',
-    },
-  },
-  activities: {
-    collect: {
-      entrypoint: {
-        kind: 'node',
-        path: './src/activities/collect.js',
-        export: 'run',
-      },
-      externalPackages: [
-        { name: 'sharp', version: '0.34.4' },
-      ],
-    },
-  },
-  workflows: {
-    collect: {
-      steps: [
-        {
-          id: 'collect',
-          kind: 'activity',
-          activity: 'collect',
-          input: { kind: 'workflow-input' },
-        },
-      ],
-    },
-  },
-  schedules: {
-    hourly: {
-      cron: '0 * * * *',
-      workflow: 'collect',
-      input: { source: 'hourly' },
-      missed: 'latest',
-      overlap: 'allow',
-    },
-  },
-  targets: [
-    {
-      nodeVersion: '24.13.1',
-      platform: 'linux',
-      architecture: 'x64',
-      libc: 'glibc',
-    },
-  ],
-});
-```
-
-- `schemaVersion: 4`, `app.id`, and `cli` are required. `activities`, `workflows`, and `schedules` are optional so a normal CLI can become durable progressively; each declared map must be nonempty.
-- `cli` is the human surface and its entrypoint must contain exact `kind`, `path`, and `export` fields.
-- When ordinary CLI arguments should start one default workflow, add exact `cli.durable: { workflow, export }`. The named export lives on the CLI entrypoint module, receives a frozen `readonly string[]` without Node argv, and must purely validate/project those arguments into bounded JSON workflow input. Share its parser with the ordinary CLI and do not perform work or external mutations in the adapter.
-- `activities` are the optional machine surface used by `wharfie app run` and durable ledger invocations.
-- `workflows` contain one to 64 ordered `activity`, `timer`, or `signal` steps with explicit revision-bound inputs.
-- `schedules` target workflows only. Each carries static JSON input, a canonical five-field UTC cron expression, `missed: 'latest'`, and `overlap: 'allow'`. Each cron field is only `*` or a strictly ascending comma-separated numeric set; do not use ranges, steps, names, macros, seconds, timezones, or Sunday alias `7`.
-- A manifest may declare at most 128 schedules in 1 MiB, each static schedule input is limited to 256 KiB, and the resident fails closed instead of partially evaluating a catch-up window longer than 527,040 minutes (366 days).
-- Application- and activity-level `resources` are unknown fields. The initial managed-effect catalog is exposed through `runtime.effects`, not manifest adapters.
-- External services like Datadog, OpenAI, GitHub, Slack, etc. are normal modules and environment-backed clients inside your app, not new Wharfie capability kinds.
-- Activity `externalPackages` entries must be unique lowercase npm registry `{ name, version }` objects, sorted by name and pinned to exact published semantic versions. Do not use ranges, tags, URLs, bare strings, or ambient resolution.
-- App and activity IDs must match `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$` and contain at most 63 ASCII bytes. Never trim, case-fold, or rewrite an ID.
-- The compiler rejects unknown fields and compatibility aliases. Do not author `name`, `ActorSystem`, `properties`, `functions`, `capabilities`, `resources`, direct activity schedules, packaging assets, signing credentials, or build secrets in the v4 manifest.
-- Keep the developer-owned CLI useful, then express durable work as finite workflows and add workflow-only schedules only for meaningful recurrence.
-
-Design heuristics
-- First ask: what is the atomic user-visible job?
-- Turn that job into one or more named activities with stable verbs.
-- Then decide what CLI commands call those activities.
-- Only then decide whether a supported `runtime.effects` operation is required.
-- Prefer kebab IDs like `bundle-repo`, `collect-rum-window`, `build-prompt-context`, `summarize-rum`, and `sync-artifacts` over generic names like `run`, `execute`, or `process`.
-- Default progression:
-  1. developer-owned CLI
-  2. named activities sharing the same domain modules
-  3. finite workflows
-  4. workflow-only UTC schedules
-  5. portable SEA when distribution is required
-- Packaging is optional unless the task explicitly needs a distributable artifact.
-
-A) Reconstruct the Wharfie reference repo
-
-Run this first:
-
-    set -euo pipefail
-    rm -rf /mnt/data/LLM_CONTEXT /mnt/data/LLM_CONTEXT-wharfie
-    tar -xzf /mnt/data/LLM_CONTEXT-wharfie.tar.gz -C /mnt/data
-    BUNDLE_ROOT="$(tar -tzf /mnt/data/LLM_CONTEXT-wharfie.tar.gz | head -n1 | cut -d/ -f1)"
-    test -n "$BUNDLE_ROOT"
-    if [ "$BUNDLE_ROOT" != "LLM_CONTEXT-wharfie" ] && [ -d "/mnt/data/$BUNDLE_ROOT" ]; then
-      mv "/mnt/data/$BUNDLE_ROOT" /mnt/data/LLM_CONTEXT-wharfie
-    fi
-    cd /mnt/data/LLM_CONTEXT-wharfie
-    ./assemble.offline.sh
-
-Then:
-- Read `/mnt/data/LLM_CONTEXT-wharfie/MANIFEST.json`
-- Read `/mnt/data/LLM_CONTEXT-wharfie/README.md`
-- Work from the assembled Wharfie repo at `/mnt/data/LLM_CONTEXT-wharfie/repo`
-
-Important:
-- Treat any interrupted, timed-out, or killed extraction/assembly as invalid partial state.
-- If assembly is interrupted, delete the extracted bundle directory and rerun from scratch before trusting anything.
-- Do not diagnose missing dependencies until assembly exits successfully.
-
-B) Read Wharfie before implementing the app
-
-Always read these Wharfie files first:
-- `README.md`
-- `PROJECT.md`
-- `ROADMAP.md`
-- `docs/architecture/decisions/README.md`
-- `src/app.d.ts`
-- `scripts/verify-package-sea.js`
-- `src/cli/app/load-app.js`
-- `src/cli/app/local-app.js`
-- `src/cli/cmds/app_cmds/manifest.js`
-- `src/cli/cmds/app_cmds/run.js`
-- `src/cli/cmds/app_cmds/package.js`
-- `src/core/runtime/activity-protocol.js`
-- `src/core/runtime/activity-attempt.js`
-- `src/core/runtime/app-runs.js`
-- `src/core/runtime/manual-ledger-run.js`
-- `src/core/lib/db/tables/execution-ledger.js`
-- `src/core/runtime/services/ledger-service.js`
-- `test/cli/app/load-app.test.js`
-- `test/cli/app/examples.test.js`
-
-Read additional Wharfie files only when the task actually touches that surface.
-
-What you should take away from the Wharfie repo:
-- keep the developer-owned CLI front and center
-- express machine-facing units as `activities`
-- use `wharfie app manifest`, `wharfie app run`, and `wharfie app package` as the authoring funnel
-- do not declare manifest resources; the current activity protocol intentionally has no resource-injection contract
-- keep the current progression smooth: CLI -> activities -> workflows and schedules -> portable SEA -> durable runs
-
-C) Prepare the target workspace
-
-You may be given either:
-- a ready directory path
-- another offline repo bundle
-- an empty workspace where the app should be created
-
-For the target workspace:
-- reconstruct it locally if it is a bundle
-- read its README, package.json, existing CLI entrypoint, config files, and tests
-- identify the current user-facing command surface
-- identify the integration-boundary modules (for example Git repos, Datadog, OpenAI, local files, queues, object stores)
-- decide whether the task belongs entirely in the target app repo or needs a small Wharfie core extension
-
-Default decision:
-- put application-specific behavior in the target workspace
-- only modify Wharfie core if the app cannot be expressed with the current manifest/CLI/activity/runtime contract
-
-D) Baseline validation expectations
-
-Wharfie reference repo:
-- only run full Wharfie validation if you plan to modify Wharfie itself, or if repo health is directly relevant to the task
-- if you need it, run:
-
-    cd /mnt/data/LLM_CONTEXT-wharfie/repo
-    export WHARFIE_ARTIFACT_BUCKET="service-bucket"
-    ./../verify.offline.sh repo
-
-- understand which failures are pre-existing before you edit anything
-
-Target workspace:
-- run the workspace's own baseline validation before feature work
-- if the workspace already has lint/typecheck/test commands, run them first
-- if the workspace has no validation yet, add only the minimal checks needed to validate your change
-
-E) Implementation workflow
-
-For the task I give you:
-
-1. Restate the acceptance criteria as a short bullet list.
-2. Name the near-term app wedge:
-   - CLI only
-   - CLI + activities
-   - CLI + activities + workflow
-   - CLI + scheduled workflow
-   - CLI + activities + scheduled workflow
-   - packaged CLI + activities + scheduled workflow
-3. Identify the smallest correct set of files to modify.
-4. Create or update the default-exported plain-object `wharfie.app.js` v4 manifest. Do not expose `ActorSystem` as an alternative.
-5. Implement the developer-owned CLI entrypoint.
-6. Implement shared domain modules for the actual business logic.
-7. Implement named activities that call those same domain modules.
-8. Wire the app manifest:
-   - `schemaVersion: 4`
-   - `app.id`
-   - `cli`
-   - `cli.durable` only when ordinary application arguments should project into one declared workflow
-   - `activities` only if needed
-   - a nonempty finite `workflows` map only if needed
-   - a nonempty workflow-only `schedules` map only for meaningful recurrence
-   - `targets` only if packaging is in scope
-9. Add or update tests.
-10. Validate.
-11. Package the changed files.
-
-F) Testing expectations
-
-When behavior changes, add or update tests.
-
-Prefer these test layers:
-- unit tests for domain modules
-- CLI tests for command parsing and output behavior
-- manifest tests proving `wharfie.app.js` compiles as expected
-- `wharfie app run <activity>` style tests for the core activity path
-- packaging tests only when packaging is in scope and can be exercised hermetically
-
-Keep tests hermetic:
-- mock Datadog/OpenAI/GitHub/HTTP
-- do not fetch live credentials
-- do not hit AWS
-- do not download Node binaries in tests
-- use temp directories and local fixtures
-
-G) Validation checklist
-
-If you changed only the target app repo, validate the target app repo and run the Wharfie commands relevant to integration.
-
-At minimum, when applicable, run:
-- the target repo's lint/typecheck/test commands
-- `wharfie app manifest <app-dir>`
-- `wharfie app run <activity> --dir <app-dir> ...`
-
-Run `wharfie app package <app-dir>` only when packaging is part of the acceptance criteria.
-
-If you changed Wharfie core too, also rerun:
-
-    cd /mnt/data/LLM_CONTEXT-wharfie/repo
-    export WHARFIE_ARTIFACT_BUCKET="service-bucket"
-    ./../verify.offline.sh repo
-
-H) Output requirements
-
-At the end, return all of the following:
-
-1. A downloadable zip containing every changed file for the target app, preserving target-repo-relative paths only.
-2. If you also changed Wharfie core, a second downloadable zip for Wharfie changes preserving Wharfie-repo-relative paths only.
-3. A concise changelog, including a copyable git commit message for each edited repo.
-4. The exact commands you ran and their results.
-5. Final validation status for every command you ran.
-6. The full unified diff for all modifications.
-
-I) Implementation style rules
-
-- ESM only. No `require()`.
-- Use `node:` imports for built-ins.
-- Use explicit `.js` extensions for relative imports when the runtime needs them.
-- Add JSDoc types for new or edited non-trivial JS.
-- Keep the code surface tight. Do not refactor unrelated modules.
-- Reuse the target repo's existing style, naming, and folder layout when possible.
-- Reuse Wharfie patterns where they are already established instead of inventing a new shape.
-
-J) Example framing for common apps
-
-For a repo-bundling app:
-- keep the CLI as the public product
-- use activity IDs like `bundle-repo`, `assemble-bundle`, and `verify-bundle`
-- keep git/fs/tar logic in normal modules
-- use a finite workflow for a multi-step durable bundle operation
-- add a schedule only when the app has meaningful unattended recurrence; never invent an inert schedule
-
-For a Datadog RUM -> ChatGPT app:
-- keep Datadog/OpenAI clients as normal modules with explicit env config
-- use activity IDs like `collect-rum-window`, `build-prompt-context`, and `summarize-rum`
-- use `runtime.effects` only if a documented managed effect supplies the needed durable operation
-- express the multi-step durable pipeline as a finite workflow
-- if periodic collection is required, schedule that workflow with static JSON input and a canonical UTC cron expression
-
-Task:
-[PASTE YOUR WHARFIE APP IMPLEMENTATION TASK HERE]
+Application task:
+[PASTE THE APPLICATION TASK HERE]

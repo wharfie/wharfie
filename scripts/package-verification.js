@@ -9,6 +9,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { recordCommandFailure } from './validation-failure.js';
 import { fileURLToPath } from 'node:url';
 
 import { WHARFIE_VERSION } from '../src/core/lib/version.js';
@@ -100,7 +101,7 @@ export function runCommand(command, args, options = {}) {
     killSignal,
   });
 
-  if (result.error) throw result.error;
+  if (result.error) throw recordCommandFailure(result.error, command, result);
 
   if (result.status !== 0) {
     const rendered = [
@@ -110,7 +111,7 @@ export function runCommand(command, args, options = {}) {
     ]
       .filter(Boolean)
       .join('\n');
-    throw new Error(rendered);
+    throw recordCommandFailure(new Error(rendered), command, result);
   }
 
   return {
@@ -158,8 +159,6 @@ function requiredRuntimeFiles() {
     'bin/wharfie',
     'src/app.js',
     'src/app.d.ts',
-    'src/deployment-profile.js',
-    'src/deployment-profile.d.ts',
     'src/single-node-deployment.js',
     'src/single-node-deployment.d.ts',
     ...coreFiles,
@@ -222,11 +221,6 @@ export function assertPackageContents(manifest) {
       types: './src/app.d.ts',
       import: './src/app.js',
       default: './src/app.js',
-    },
-    './deployment-profile': {
-      types: './src/deployment-profile.d.ts',
-      import: './src/deployment-profile.js',
-      default: './src/deployment-profile.js',
     },
     './single-node-deployment': {
       types: './src/single-node-deployment.d.ts',

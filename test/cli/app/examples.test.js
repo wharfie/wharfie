@@ -15,8 +15,8 @@ import {
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
-const examplesDir = path.join(repoRoot, 'scratch', 'examples');
-const authoredHelloWorldDir = path.join(examplesDir, 'apps', 'hello-world');
+const fixtureAppsDir = path.join(repoRoot, 'test', 'fixtures', 'apps');
+const authoredHelloWorldDir = path.join(fixtureAppsDir, 'authored-hello-world');
 /** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
 const authoredAppFixtures = [];
 
@@ -251,7 +251,7 @@ describe('schemaVersion 4 app demos', () => {
   });
 
   it('rejects the obsolete event/context public invocation fields', async () => {
-    const dir = path.join(examplesDir, 'apps', 'hello-world');
+    const dir = path.join(fixtureAppsDir, 'authored-hello-world');
 
     await expect(
       invokeActivity(

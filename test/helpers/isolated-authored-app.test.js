@@ -46,8 +46,8 @@ function createSourceFixture(label) {
 
 describe('isolated authored app fixtures', () => {
   it.each([
-    ['scratch/examples/apps/hello-world', 'hello-world-demo'],
-    ['scratch/examples/apps/kitchen-sink', 'kitchen-sink-demo'],
+    ['test/fixtures/apps/authored-hello-world', 'hello-world-demo'],
+    ['test/fixtures/apps/native-kitchen-sink', 'kitchen-sink-demo'],
     ['test/fixtures/apps/workflow-crash', 'workflow-crash-source'],
   ])(
     'preserves module scope for relocated app %s',

@@ -53,10 +53,10 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const authoredHelloWorldDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'hello-world',
+  'authored-hello-world',
 );
 const currentTarget = {
   nodeVersion: process.versions.node,

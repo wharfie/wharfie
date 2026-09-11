@@ -9,6 +9,7 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { retainFailureDiagnostic } from '../scripts/validation-failure.js';
 
 /**
  * @typedef {object} JestChildResult
@@ -123,6 +124,7 @@ function throwAggregateFailure(primary, cleanup, message) {
  * @property {string} [execPath] - Node executable.
  * @property {NodeJS.ProcessEnv} [env] - Child environment.
  * @property {number} [pid] - Current process identifier.
+ * @property {(report: import('../scripts/validation-failure.js').FailureDiagnostic) => unknown} [retainFailure] - Failure report writer.
  */
 
 /**
@@ -179,11 +181,32 @@ export function runJest(argv, dependencies = {}) {
     execPath = process.execPath,
     env = process.env,
     pid = process.pid,
+    retainFailure = retainFailureDiagnostic,
   } = dependencies;
 
-  const ownedRoot = createTempRoot(
-    path.join(getTempDirectory(), 'wharfie-jest-'),
-  );
+  const startedAt = performance.now();
+  /** @param {string} phase @param {JestChildResult} [result] */
+  const retain = (phase, result) => {
+    try {
+      retainFailure({
+        runner: 'jest',
+        phase,
+        command: 'jest',
+        durationMs: performance.now() - startedAt,
+        status: result?.status ?? null,
+        signal: result?.signal ?? null,
+      });
+    } catch {
+      // Reporting is best effort, including injected writers.
+    }
+  };
+  let ownedRoot;
+  try {
+    ownedRoot = createTempRoot(path.join(getTempDirectory(), 'wharfie-jest-'));
+  } catch (error) {
+    retain('workspace-create');
+    throw error;
+  }
   const childEnvironment = { ...env };
   const ownedEnvironment = {
     HOME: ownedRoot,
@@ -269,6 +292,14 @@ export function runJest(argv, dependencies = {}) {
     spawnFailure = error;
   }
 
+  const childFailed =
+    spawnFailed ||
+    !result ||
+    result.error ||
+    result.signal ||
+    result.status !== 0;
+  if (childFailed) retain('jest', result);
+
   let cleanupFailed = false;
   let cleanupFailure;
   try {
@@ -276,6 +307,7 @@ export function runJest(argv, dependencies = {}) {
   } catch (error) {
     cleanupFailed = true;
     cleanupFailure = error;
+    if (!childFailed) retain('cleanup', result);
   }
 
   if (spawnFailed) {

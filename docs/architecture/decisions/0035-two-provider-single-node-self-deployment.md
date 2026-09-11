@@ -252,3 +252,16 @@ The same hello-world application must pass independently on AWS and Hetzner:
   enrollment, or automatic coordinator lease is part of this preview.
 - Root-disk persistence proves process and host-reboot durability only. It does
   not survive node destruction or replacement.
+
+## 2026-09-10 public surface cleanup
+
+The source CLI now exposes only `app` and `ops`. The older AWS-only source
+`deployment` command group and public deployment-profile authoring subpath have
+been removed, together with their isolated source packaging and command
+adapters. There are no current users or backward compatibility requirements.
+
+The release deployment path is `wharfie app package --self-deployable`, followed
+by the application's packaged AWS/Hetzner deployment commands. Its service and
+workflow operator commands remain available. Existing AWS controller, graph,
+and host internals retain their component evidence; removal of that larger
+implementation still waits for replacement live proofs.
