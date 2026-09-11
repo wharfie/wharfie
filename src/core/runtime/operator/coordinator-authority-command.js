@@ -14,6 +14,7 @@ import { cloneBoundedJsonObject } from '../json-value.js';
 import { assertLogicalId } from '../logical-id.js';
 import { resolveExecutionLedgerStoreConfiguration } from './execution-ledger-store.js';
 import { readOperatorJsonObjectFile } from './json-document-file.js';
+import { readOperatorJsonObjectStdin } from './json-document-stdin.js';
 import { renderTerminalSafeJson } from './terminal-safe-json.js';
 
 export const COORDINATOR_AUTHORITY_INSPECTION_SCHEMA_VERSION = 1;
@@ -778,7 +779,7 @@ function takeoverRows(receipt) {
  * Create the shared source or packaged coordinator-authority command tree.
  * The source wrapper enables an explicit app ID; packaged callers resolve app
  * identity from immutable embedded metadata.
- * @param {{resolveIdentity: (selection: {appId?: string}) => unknown|Promise<unknown>, includeAppIdOption?: boolean, inspectAuthority?: typeof inspectCoordinatorAuthority, takeoverAuthority?: typeof takeoverCoordinatorAuthority, readJsonObjectFile?: typeof readOperatorJsonObjectFile, output?: Partial<CoordinatorAuthorityCommandOutput>, processRef?: CoordinatorAuthorityCommandProcess}} options - Host behavior and test seams.
+ * @param {{resolveIdentity: (selection: {appId?: string}) => unknown|Promise<unknown>, includeAppIdOption?: boolean, allowInspectionStdin?: boolean, inspectAuthority?: typeof inspectCoordinatorAuthority, takeoverAuthority?: typeof takeoverCoordinatorAuthority, readJsonObjectFile?: typeof readOperatorJsonObjectFile, readJsonObjectStdin?: typeof readOperatorJsonObjectStdin, output?: Partial<CoordinatorAuthorityCommandOutput>, processRef?: CoordinatorAuthorityCommandProcess}} options - Host behavior and test seams.
  * @returns {Command} - Fresh `coordinator` parent command.
  */
 export function createCoordinatorAuthorityCommand(options) {
@@ -788,6 +789,7 @@ export function createCoordinatorAuthorityCommand(options) {
     );
   }
   const includeAppIdOption = options.includeAppIdOption === true;
+  const allowInspectionStdin = options.allowInspectionStdin === true;
   const inspectAuthority =
     options.inspectAuthority === undefined
       ? inspectCoordinatorAuthority
@@ -800,10 +802,15 @@ export function createCoordinatorAuthorityCommand(options) {
     options.readJsonObjectFile === undefined
       ? readOperatorJsonObjectFile
       : options.readJsonObjectFile;
+  const readJsonObjectStdin =
+    options.readJsonObjectStdin === undefined
+      ? readOperatorJsonObjectStdin
+      : options.readJsonObjectStdin;
   if (
     typeof inspectAuthority !== 'function' ||
     typeof takeoverAuthority !== 'function' ||
-    typeof readJsonObjectFile !== 'function'
+    typeof readJsonObjectFile !== 'function' ||
+    typeof readJsonObjectStdin !== 'function'
   ) {
     throw new TypeError(
       'Coordinator authority command operations and JSON reader must be functions.',
@@ -873,12 +880,25 @@ export function createCoordinatorAuthorityCommand(options) {
       parseSingleOption('--app-id'),
     );
   }
-  takeover
-    .requiredOption(
+  if (allowInspectionStdin) {
+    takeover
+      .option(
+        '--inspection-file <path>',
+        'Complete JSON emitted by coordinator inspect --json',
+        parseSingleOption('--inspection-file'),
+      )
+      .option(
+        '--inspection-stdin',
+        'Read complete inspection JSON from bounded noninteractive stdin instead of a file',
+      );
+  } else {
+    takeover.requiredOption(
       '--inspection-file <path>',
       'Complete JSON emitted by coordinator inspect --json',
       parseSingleOption('--inspection-file'),
-    )
+    );
+  }
+  takeover
     .requiredOption(
       '--coordinator-id <coordinatorId>',
       'Temporary successor identity used only for fencing',
@@ -905,6 +925,14 @@ export function createCoordinatorAuthorityCommand(options) {
       return;
     }
     try {
+      const fromStdin =
+        allowInspectionStdin && commandOptions.inspectionStdin === true;
+      const fromFile = commandOptions.inspectionFile !== undefined;
+      if (fromStdin === fromFile) {
+        throw new Error(
+          'coordinator takeover requires exactly one of --inspection-file or --inspection-stdin.',
+        );
+      }
       const coordinatorId = assertLedgerOpaqueId(
         commandOptions.coordinatorId,
         'coordinator takeover --coordinator-id',
@@ -915,10 +943,15 @@ export function createCoordinatorAuthorityCommand(options) {
       );
       const identity = await resolveCommandIdentity(commandOptions);
       const inspection = validateCoordinatorAuthorityInspectionDocument(
-        await readJsonObjectFile(
-          commandOptions.inspectionFile,
-          'coordinator authority inspection',
-        ),
+        fromStdin
+          ? await readJsonObjectStdin(
+              COORDINATOR_AUTHORITY_INSPECTION_MAX_BYTES,
+              'coordinator authority inspection',
+            )
+          : await readJsonObjectFile(
+              commandOptions.inspectionFile,
+              'coordinator authority inspection',
+            ),
         identity.appId,
         { requireActive: true },
       );

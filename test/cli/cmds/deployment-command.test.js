@@ -105,6 +105,7 @@ const PACKAGED_LEAF_NAMES = Object.freeze([
   'update',
   'recover',
   'exec',
+  'coordinator',
   'destroy',
 ]);
 /** @param {string|Buffer} value @returns {{algorithm: 'sha256', value: string}} */

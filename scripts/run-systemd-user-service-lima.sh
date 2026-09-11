@@ -38,8 +38,15 @@ case "${SCENARIO}" in
     GUEST_PREPARE_NAME="steady-file-prepare.json"
     GUEST_FINAL_NAME="steady-file-final.json"
     ;;
+  remote-recovery)
+    DEFAULT_INSTANCE="wfsr-$$"
+    DEFAULT_OUTPUT_ROOT="${REPO_ROOT}/llm_artifacts/remote-recovery-proof"
+    PROOF_UNIT_NAME="wharfie-remote-recovery-proof.service"
+    GUEST_PREPARE_NAME="remote-recovery-prepare.json"
+    GUEST_FINAL_NAME="remote-recovery-final.json"
+    ;;
   *)
-    echo "WHARFIE_SYSTEMD_PROOF_SCENARIO must be lifecycle or steady-file." >&2
+    echo "WHARFIE_SYSTEMD_PROOF_SCENARIO must be lifecycle, steady-file, or remote-recovery." >&2
     exit 1
     ;;
 esac
@@ -307,7 +314,7 @@ mkdir "${PROOF_LIMA_HOME}" "${PROOF_CACHE_ROOT}" "${TEMP_ROOT}/tmp" "${TEMP_ROOT
 cp "${HOST_HELPER_SOURCE}" "${HOST_HELPER}"
 host paths "${PROOF_LIMA_HOME}" "${INSTANCE}"
 
-COMMIT="$(host source "${SOURCE_MODE}" "${REPO_ROOT}" "${SOURCE_ROOT}")"
+COMMIT="$(host source "${SOURCE_MODE}" "${REPO_ROOT}" "${SOURCE_ROOT}" "${SCENARIO}")"
 host verify-helper "${SOURCE_ROOT}/source-provenance.json"
 RECEIPT_STAGING="$(host reserve "${OUTPUT_ROOT}" "${COMMIT}" "${TEMP_ROOT}")"
 cp "${HOST_HELPER}" "${RECEIPT_STAGING}/host-helper.mjs"
@@ -372,7 +379,7 @@ if [[ "${SCENARIO}" == "lifecycle" ]]; then
     verify \
     "${GUEST_REPO}" > "${VERIFY_LOG}"
   echo "Verified pre-login fail-closed boot and explicit recovery, both partial-adoption process kills, activation recovery, and retained history/output."
-else
+elif [[ "${SCENARIO}" == "steady-file" ]]; then
   lima shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
     /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
     "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
@@ -393,6 +400,14 @@ else
     verify \
     "${GUEST_REPO}" > "${VERIFY_LOG}"
   echo "Returned in a new verifier, observed unfinished work, read its result, updated, rolled back, uninstalled, and purged app data."
+else
+  lima shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
+    /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+    "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+    /usr/local/bin/node \
+    scripts/verify-single-node-remote-recovery-linux.js \
+    "${GUEST_REPO}" > "${VERIFY_LOG}"
+  echo "Verified the packaged coordinator diagnosis, confirmed takeover, and deployment recovery over real loopback SSH."
 fi
 
 lima copy --backend=scp \
@@ -421,7 +436,9 @@ RECEIPT_STAGING=""
 
 if [[ "${SCENARIO}" == "lifecycle" ]]; then
   echo "Verified Wharfie systemd reboot and two-release activation proof for ${COMMIT}."
-else
+elif [[ "${SCENARIO}" == "steady-file" ]]; then
   echo "Verified the literal steady-file systemd lifecycle for ${COMMIT}."
+else
+  echo "Verified packaged remote crash recovery with synthetic provider authority for ${COMMIT}."
 fi
 echo "Receipts: ${RECEIPT_DIRECTORY}"

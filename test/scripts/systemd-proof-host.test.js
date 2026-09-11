@@ -782,6 +782,35 @@ describe('frozen proof host helper', () => {
 });
 
 describe('pinned one-image Lima configuration', () => {
+  test.each(['arm64', 'x86_64'])(
+    'remote recovery selects its image and limits Rosetta to arm64 on %s',
+    (hostArch) => {
+      const config = readFileSync(
+        new URL('../systemd/remote-recovery-lima.yaml', import.meta.url),
+        'utf8',
+      );
+      const result = deriveLimaConfig({
+        config,
+        hostArch,
+        imagePath: join(ownedRoot(), 'image.img'),
+      });
+      expect(result.config.includes('rosetta:')).toBe(hostArch === 'arm64');
+      expect(result.config.slice(result.config.indexOf('mounts:'))).toBe(
+        config.slice(config.indexOf('mounts:')),
+      );
+      expect(result.config.match(/^ {2}- location:/gm)).toHaveLength(1);
+      expect(result.originalConfigSha256).toBe(hash(config));
+      expect(result.derivedConfigSha256).toBe(hash(result.config));
+      expect(() =>
+        deriveLimaConfig({
+          config: config.replace('  binfmt: true', '  binfmt: false'),
+          hostArch,
+          imagePath: join(ownedRoot(), 'other.img'),
+        }),
+      ).toThrow('Unexpected values or nested keys before Lima images.');
+    },
+  );
+
   test.each([
     ['arm64', 'aarch64', ARM_DIGEST, '-arm64.img'],
     ['aarch64', 'aarch64', ARM_DIGEST, '-arm64.img'],

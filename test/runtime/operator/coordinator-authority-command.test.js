@@ -17,6 +17,7 @@ import {
 } from '../../../src/core/lib/db/tables/coordinator-authority.js';
 import {
   COORDINATOR_AUTHORITY_INSPECTION_KIND,
+  COORDINATOR_AUTHORITY_INSPECTION_MAX_BYTES,
   COORDINATOR_AUTHORITY_INSPECTION_SCHEMA_VERSION,
   COORDINATOR_AUTHORITY_TAKEOVER_KIND,
   COORDINATOR_AUTHORITY_TAKEOVER_SCHEMA_VERSION,
@@ -28,6 +29,7 @@ import {
   validateCoordinatorAuthorityInspectionDocument,
 } from '../../../src/core/runtime/operator/coordinator-authority-command.js';
 import { createCanonicalJsonSha256Id } from '../../../src/core/runtime/content-id.js';
+import { createPackagedCoordinatorAuthorityCommand } from '../../../src/core/resources/builds/actor-system-cli/control_cmds/coordinator.js';
 
 const APP_ID = 'coordinator-command-app';
 const OTHER_APP_ID = 'other-coordinator-command-app';
@@ -199,15 +201,19 @@ function createHarness(options = {}) {
     options.takeoverAuthority ?? jest.fn(async () => takeoverReceipt());
   const readJsonObjectFile =
     options.readJsonObjectFile ?? jest.fn(async () => INSPECTION);
+  const readJsonObjectStdin =
+    options.readJsonObjectStdin ?? jest.fn(async () => INSPECTION);
   const output = options.output ?? outputHarness();
   const processRef = options.processRef ?? { exitCode: undefined };
   return {
     parent: createCoordinatorAuthorityCommand({
       includeAppIdOption,
+      allowInspectionStdin: options.allowInspectionStdin === true,
       resolveIdentity,
       inspectAuthority,
       takeoverAuthority,
       readJsonObjectFile,
+      readJsonObjectStdin,
       output,
       processRef,
     }),
@@ -215,16 +221,22 @@ function createHarness(options = {}) {
     inspectAuthority,
     takeoverAuthority,
     readJsonObjectFile,
+    readJsonObjectStdin,
     output,
     processRef,
   };
 }
 
-function takeoverArgv({ source = false, confirmation = true } = {}) {
+function takeoverArgv({
+  source = false,
+  confirmation = true,
+  stdin = false,
+} = {}) {
   return [
     'takeover',
-    '--inspection-file',
-    'inspection.json',
+    ...(stdin
+      ? ['--inspection-stdin']
+      : ['--inspection-file', 'inspection.json']),
     '--coordinator-id',
     SUCCESSOR_COORDINATOR_ID,
     '--request-id',
@@ -481,6 +493,106 @@ describe('shared coordinator authority command', () => {
     );
     expect(harness.processRef.exitCode).toBe(1);
   });
+
+  it('opts the packaged factory into bounded stdin without requiring a file', async () => {
+    const harness = createHarness();
+    const parent = createPackagedCoordinatorAuthorityCommand({
+      resolveExpectedIdentity: harness.resolveIdentity,
+      takeoverAuthority: harness.takeoverAuthority,
+      readJsonObjectFile: harness.readJsonObjectFile,
+      readJsonObjectStdin: harness.readJsonObjectStdin,
+      output: harness.output,
+      processRef: harness.processRef,
+    });
+    expect(optionFlags(parent, 'takeover')).toContain('--inspection-stdin');
+    expect(mandatoryFlags(parent, 'takeover')).toEqual([
+      '--coordinator-id <coordinatorId>',
+      '--request-id <requestId>',
+    ]);
+
+    await parent.parseAsync(takeoverArgv({ stdin: true }), { from: 'user' });
+
+    expect(harness.readJsonObjectStdin).toHaveBeenCalledWith(
+      COORDINATOR_AUTHORITY_INSPECTION_MAX_BYTES,
+      'coordinator authority inspection',
+    );
+    expect(harness.readJsonObjectFile).not.toHaveBeenCalled();
+    expect(harness.takeoverAuthority).toHaveBeenCalledWith({
+      appId: APP_ID,
+      coordinatorId: SUCCESSOR_COORDINATOR_ID,
+      requestId: TAKEOVER_REQUEST_ID,
+      inspection: INSPECTION,
+      confirmAuthorityReplacement: true,
+    });
+    expect(harness.output.json).toHaveBeenCalledWith(takeoverReceipt());
+    expect(harness.processRef.exitCode).toBeUndefined();
+  });
+
+  it('requires confirmation before reading stdin or resolving identity', async () => {
+    const harness = createHarness({ allowInspectionStdin: true });
+    await harness.parent.parseAsync(
+      takeoverArgv({ stdin: true, confirmation: false }),
+      { from: 'user' },
+    );
+    expect(harness.resolveIdentity).not.toHaveBeenCalled();
+    expect(harness.readJsonObjectStdin).not.toHaveBeenCalled();
+    expect(harness.readJsonObjectFile).not.toHaveBeenCalled();
+    expect(harness.takeoverAuthority).not.toHaveBeenCalled();
+    expect(harness.processRef.exitCode).toBe(1);
+  });
+
+  it.each(['both', 'neither'])(
+    'rejects %s inspection sources before identity or input access',
+    async (selection) => {
+      const harness = createHarness({ allowInspectionStdin: true });
+      const argv = takeoverArgv({ stdin: true });
+      if (selection === 'both')
+        argv.push('--inspection-file', 'inspection.json');
+      else argv.splice(argv.indexOf('--inspection-stdin'), 1);
+      await harness.parent.parseAsync(argv, { from: 'user' });
+      expect(harness.output.failure).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining('exactly one'),
+        }),
+      );
+      expect(harness.resolveIdentity).not.toHaveBeenCalled();
+      expect(harness.readJsonObjectStdin).not.toHaveBeenCalled();
+      expect(harness.readJsonObjectFile).not.toHaveBeenCalled();
+      expect(harness.takeoverAuthority).not.toHaveBeenCalled();
+      expect(harness.processRef.exitCode).toBe(1);
+    },
+  );
+
+  it('preserves file input when the packaged command opts into stdin', async () => {
+    const harness = createHarness({ allowInspectionStdin: true });
+    await harness.parent.parseAsync(takeoverArgv(), { from: 'user' });
+    expect(harness.readJsonObjectFile).toHaveBeenCalledWith(
+      'inspection.json',
+      'coordinator authority inspection',
+    );
+    expect(harness.readJsonObjectStdin).not.toHaveBeenCalled();
+    expect(harness.output.json).toHaveBeenCalledWith(takeoverReceipt());
+  });
+
+  it.each(['read failure', 'cross-app inspection'])(
+    'does not mutate authority after stdin %s',
+    async (failure) => {
+      const harness = createHarness({
+        allowInspectionStdin: true,
+        readJsonObjectStdin: jest.fn(async () => {
+          if (failure === 'read failure') throw new Error('stdin deadline');
+          return { ...INSPECTION, scope: { appId: OTHER_APP_ID } };
+        }),
+      });
+      await harness.parent.parseAsync(takeoverArgv({ stdin: true }), {
+        from: 'user',
+      });
+      expect(harness.takeoverAuthority).not.toHaveBeenCalled();
+      expect(harness.output.json).not.toHaveBeenCalled();
+      expect(harness.output.failure).toHaveBeenCalledTimes(1);
+      expect(harness.processRef.exitCode).toBe(1);
+    },
+  );
 
   it('admits one exact inspection and emits a fence-and-release receipt', async () => {
     const receipt = takeoverReceipt();

@@ -13,6 +13,70 @@ env:
   NPM_CONFIG_REGISTRY: https://registry.npmjs.org
 
 jobs:
+  remote-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup exact native Linux proof Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: prepare disposable SSH and systemd accounts
+        id: provision
+        run: bash scripts/prepare-remote-recovery-github-linux.sh
+      - name: prove packaged remote recovery on native x64 Linux
+        id: proof
+        env:
+          WHARFIE_SYSTEMD_PROOF_DISPOSABLE: github-actions
+          WHARFIE_SYSTEMD_PROOF_COMMIT: ${{ github.sha }}
+        run: node scripts/verify-single-node-remote-recovery-linux.js "$GITHUB_WORKSPACE"
+      - name: collect only bounded proof receipts
+        if: ${{ always() }}
+        env:
+          PROVISION_OUTCOME: ${{ steps.provision.outcome }}
+          PROOF_OUTCOME: ${{ steps.proof.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const output = path.join(process.env.RUNNER_TEMP, 'wharfie-remote-recovery-receipts');
+          fs.mkdirSync(output, { mode: 0o700 });
+          fs.writeFileSync(path.join(output, 'ci-outcome.json'), JSON.stringify({
+            schemaVersion: 1,
+            sourceCommit: process.env.GITHUB_SHA,
+            architecture: process.arch,
+            provisioning: process.env.PROVISION_OUTCOME,
+            proof: process.env.PROOF_OUTCOME,
+            providerAuthority: 'synthetic-no-provider-calls',
+            machineCleanup: 'github-hosted-runner-disposal',
+          }) + '\n', { mode: 0o600, flag: 'wx' });
+          for (const name of ['remote-recovery-prepare.json', 'remote-recovery-final.json', 'remote-recovery-failure.json']) {
+            const input = path.join('/var/tmp/wharfie-systemd-proof', name);
+            const info = fs.lstatSync(input, { throwIfNoEntry: false });
+            if (!info) continue;
+            if (!info.isFile() || info.isSymbolicLink() || info.size > 256 * 1024 || info.uid !== process.getuid()) {
+              throw new Error('Refusing an invalid bounded proof receipt: ' + name);
+            }
+            fs.copyFileSync(input, path.join(output, name), fs.constants.COPYFILE_EXCL);
+          }
+          NODE
+      - name: retain native Linux proof receipts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-native-remote-recovery
+          path: ${{ runner.temp }}/wharfie-remote-recovery-receipts/*.json
+          if-no-files-found: warn
+          retention-days: 7
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 120
