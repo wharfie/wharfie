@@ -72,7 +72,7 @@ describe('CLI entrypoint', () => {
     expect(output).not.toMatch(/^\s+config\b/m);
     expect(output).not.toMatch(/^\s+init\b/m);
     expect(output).not.toMatch(/^\s+list\b/m);
-    expect(output).toMatch(/^\s+deployment\b/m);
+    expect(output).not.toMatch(/^\s+deployment\b/m);
     expect(output).not.toMatch(/^\s+project\b/m);
     expect(output).not.toMatch(/^\s+utils\b/m);
   });
@@ -91,7 +91,6 @@ describe('CLI entrypoint', () => {
     expect(program.commands.map((command) => command.name())).toEqual([
       'app',
       'ops',
-      'deployment',
     ]);
   });
 
@@ -107,12 +106,6 @@ describe('CLI entrypoint', () => {
     const secondApp = secondProgram.commands.find(
       (command) => command.name() === 'app',
     );
-    const deployment = firstProgram.commands.find(
-      (command) => command.name() === 'deployment',
-    );
-    const secondDeployment = secondProgram.commands.find(
-      (command) => command.name() === 'deployment',
-    );
 
     expect(secondTree.map((command) => command.name())).toEqual(
       firstTree.map((command) => command.name()),
@@ -126,18 +119,6 @@ describe('CLI entrypoint', () => {
       'Local application manifest, execution, and packaging commands',
     );
     expect(secondApp).not.toBe(firstApp);
-    expect(deployment).toBeDefined();
-    expect(deployment?.commands.map((command) => command.name())).toEqual([
-      'plan',
-      'apply',
-      'inspect',
-      'reconcile',
-      'destroy',
-    ]);
-    expect(secondDeployment).toBeDefined();
-    expect(secondDeployment).not.toBe(deployment);
-    expect(deployment?.parent).toBe(firstProgram);
-    expect(secondDeployment?.parent).toBe(secondProgram);
   });
 
   test('keeps source hooks, config, mutation, and parsing bound to their owning root', async () => {

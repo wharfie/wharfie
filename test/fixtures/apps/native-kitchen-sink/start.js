@@ -11,16 +11,27 @@ import dep from './dep.js';
  */
 async function smokeLmdb(lmdbPath, record) {
   await fsp.mkdir(lmdbPath, { recursive: true });
+  /** @type {import('lmdb').Database<{ someText: string } | typeof record>} */
   const db = lmdb.open({ path: lmdbPath });
 
   try {
     await db.put('greeting', { someText: 'Hello, World!' });
     await db.put('native-record', record);
+    const greeting = db.get('greeting');
+    const nativeRecord = db.get('native-record');
+    if (
+      !greeting ||
+      !('someText' in greeting) ||
+      !nativeRecord ||
+      !('who' in nativeRecord)
+    ) {
+      throw new Error('LMDB native smoke test did not read back its records.');
+    }
     return {
       ok: true,
-      value: db.get('greeting').someText,
+      value: greeting.someText,
       path: lmdbPath,
-      record: db.get('native-record'),
+      record: nativeRecord,
     };
   } finally {
     const closeResult = db.close?.();

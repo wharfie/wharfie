@@ -11,12 +11,34 @@ in `.nvmrc`/`package.json#devEngines` and npm pin in
 2. RWX independently clones the proposed commit, runs `npm ci`, and runs lint,
    the ordinary test suite, and all four TypeScript programs.
 3. `test:ci` means lint, all four TypeScript programs, coverage thresholds,
-   package-content verification, and a production-only dependency audit. It
-   is not shorthand for the host-native or generated-SEA proofs.
+   package-content and provider-boundary verification, and a production-only
+   dependency audit. It is not shorthand for the host-native or generated-SEA proofs.
 
 `npm run test:full` is the local aggregate, but a developer machine that cannot
 build and load the target-native dependencies is not authoritative for the
 Linux SEA result.
+
+## Failure reports
+
+The Jest runner and real SEA verifier automatically retain a small JSON report
+when their setup, execution, or cleanup fails. They print its path under the
+checkout's ignored `.wharfie/validation-failures/` directory and still clean
+their owned temporary workspaces. Success creates no report. A report contains
+the runner, execution phase, safe command identifier, elapsed milliseconds,
+and known child exit status or signal. Arguments, environment variables,
+stdout/stderr, error messages, and stacks are not retained; the normal console
+output remains the detailed diagnostic source.
+
+Reports are at most 2 KiB, with at most ten retained per runner. Publication
+prunes only recognized report files, leaves unrelated files and links alone,
+and uses a per-runner guard to serialize retention. An overlapping publication
+or unavailable report directory warns and skips reporting without replacing
+the original failure or preventing temporary cleanup. A killed child is
+reported before Jest forwards its signal. Killing the supervising runner
+itself can prevent reporting; if it is killed during publication, the empty
+`.jest-report.lock` or `.package-sea-report.lock` directory can remain. After
+confirming no corresponding validation process is running, remove only that
+empty guard to allow future reports. Do not use recursive cleanup for a guard.
 
 ## Disposable Linux service proof
 
@@ -101,9 +123,10 @@ seam that requires them.
 | Boundary | Exact scope and authority | Exit condition |
 | --- | --- | --- |
 | Generated lint/format roots | ESLint ignores `dist/`, `tmp/`, and `coverage/`; Prettier also ignores `build/` and `.llm_context_verify/`. They are generated output and may not contain tracked source. Prettier leaves the generated `package-lock.json` to npm. | Remove or narrow an ignore before tracked source is placed there. |
-| Scratch lint root | ESLint ignores `scratch/`. Its examples are unsupported, excluded from the npm package, and have no product authority. | Delete a scratch example or promote it into `examples/` with lint, typecheck, and tests before treating it as supported. |
+| Scratch lint root | ESLint ignores `scratch/` for unsupported experiments. Maintained application fixtures have moved to `test/fixtures/apps/`, where they are linted and included in the test TypeScript program. Tests must not depend on scratch files. | Move a maintained test input into `test/fixtures/`, or a supported user example into `examples/`, before relying on it. |
 | Test lint rules | Files under `test/**` are still linted. Their override disables Jest assertion-count/conditional-test rules, dynamic-require rules, process-exit rules, and documentation requirements that conflict with fixtures and subprocess tests. | Remove each override when enabling that rule over all of `test/**` is clean and preserves the test's intended failure/readability boundary. |
 | SEA verifier typing | The program rooted at the exact files in `tsconfig.sea-verifier.json` uses `noImplicitAny: false` and `strictNullChecks: false`. Those roots and their verifier-only imports are procedural host/proof harnesses, not shipped runtime modules; library declaration checking remains enabled. | Remove each override when that exact program passes with its inherited value. New runtime code must live in a strict source program rather than expanding this exception. |
+| Native fixture declaration | Only the test TypeScript program maps the `lmdb` module to `test/types/lmdb-esm.d.ts`. The declaration checks the fixture's `open`, `get`, `put`, and `close` usage with unknown read values and explicit missing-value guards. LMDB 3.4.4's upstream declaration uses a CommonJS export assignment in an ESM package, which fails NodeNext checking. Runtime imports and the fixture's exact dependency lock are unchanged; `skipLibCheck` stays false. | Remove the test-only mapping when the pinned dependency supplies a valid NodeNext declaration, then check the fixture against that declaration. |
 | Extensionless CLI launcher | TypeScript cannot admit the extensionless npm bin file `bin/wharfie`. ESLint, CLI tests, and packed-install verification cover its import-and-error-forwarding wrapper. | Move any additional launcher logic into checked `src/` code. If the wrapper becomes more than delegation, rename it to JavaScript and update the package `bin` mapping so it enters typecheck and coverage. |
 | Native external test | `test/cli/app/kitchen-sink-native-externals.test.js` is opt-in during the ordinary Jest run and is authoritative through `npm run test:native`. | Fold it into the ordinary suite when every supported hosted runner can rebuild, load, close, and reopen the target-native dependency without host-specific process failure. |
 | Platform-conditioned tests | The conditional cases in `test/run-jest.test.js`, `test/cli/cmds/ops-resident-worker-command.test.js`, `test/cli/cmds/ops-workflow-sigkill.test.js`, `test/runtime/application-state-readiness-crash-subprocess.test.js`, `test/runtime/core-runtime-dependencies.test.js`, `test/runtime/deployment-aws-host-activation-persistence.test.js`, `test/runtime/local-service-session.test.js`, `test/runtime/managed-effect-crash-subprocess.test.js`, `test/runtime/managed-effect-settlement-crash.test.js`, `test/runtime/managed-effect-successor-crash-subprocess.test.js`, and `test/runtime/services/systemd-user-service-manager.test.js` run only on the POSIX or Linux hosts whose kernel behavior they assert. GitHub's Linux gate is authoritative for Linux cases. | Remove a condition when the behavior becomes platform-independent; add that platform to hosted CI before claiming its conditioned behavior. |
@@ -122,11 +145,10 @@ The repository-wide lint exceptions are `jsdoc/check-types`, `camelcase`, and
 when running ESLint with that rule enabled over its exact scope is clean and
 does not weaken an intentional fixture or subprocess boundary.
 
-Fifteen TypeScript suppression directives remain in ten files:
+Fourteen line-level `@ts-ignore` directives remain in nine files:
 
-- `test/helpers/db-adapters.js` and
-  `test/db/contract/db-adapters-contract.test.js` contain test-double and
-  table-driven assertion seams;
+- `test/db/contract/db-adapters-contract.test.js` contains a table-driven
+  assertion seam;
 - `src/core/lib/code-execution/worker.js` contains the text-loader import and
   worker-option seams;
 - `src/core/lib/db/adapters/dynamodb.js`,
@@ -140,10 +162,27 @@ Fifteen TypeScript suppression directives remain in ten files:
   build globals or symbol-indexed private channels.
 
 Their exit condition is a narrow declaration, guard, or typed test double that
-makes the immediately following operation pass without suppression. New
-whole-file suppressions are not allowed; any new line suppression requires an
-adjacent rationale and should be removed in the same change that types its
+makes the immediately following operation pass without suppression.
+
+Six existing test files still use whole-file `@ts-nocheck`. They run in Jest
+and are linted, but TypeScript does not check their bodies. The topology
+capability suite no longer needs that exception: its request/response doubles
+are typed. These remaining exclusions are explicit test-harness debt:
+
+| File | Unchecked seam | Exit condition |
+| --- | --- | --- |
+| `test/helpers/db-adapters.js` | Recursive document maps, key schemas, and the in-memory transaction-expression emulator. | Type recursive stored values and expression evaluation, including empty/missing items. |
+| `test/runtime/reconstructed-resident-work-crossing.test.js` | Partial payload, supervisor, application-state, and resident-process doubles. | Give the scenario builders explicit state and narrow contracts for the ports each scenario exercises. |
+| `test/runtime/services/resident-coordinator-authority.test.js` | Deferred promises, timing controls, and a mutable authority protocol harness. | Type the deferred values, event states, and protocol transitions. |
+| `test/runtime/services/resident-execution-reconstruction.test.js` | Heterogeneous history builders and intentionally partial ledger/distribution doubles. | Type history variants and the exact reconstruction ports supplied by each double. |
+| `test/scripts/publish-preview-release.test.js` | Malformed package fixtures and a mutable npm/GitHub command emulator. | Separate invalid external input from validated records and type the emulator's state/results. |
+| `test/scripts/run-dynamodb-coordinator-authority-live-proof.test.js` | Provider/protocol state machines and injected SDK/filesystem doubles. | Type the modeled states and the explicit provider/filesystem ports. |
+
+New whole-file suppressions are not allowed. Any new line suppression requires
+an adjacent rationale and should be removed in the same change that types its
 seam. `@ts-expect-error` negative API tests are assertions, not exclusions.
+Update this inventory when an exception is added or removed; a passing
+TypeScript program does not prove that a suppressed test body was checked.
 
 ## TypeScript program coverage
 
@@ -151,9 +190,8 @@ The four checked programs have distinct jobs:
 
 - `tsconfig.json` checks shipped source, supported examples, and ordinary
   repository scripts.
-- `tsconfig.app-implementation.json` explicitly checks `src/app.js` and
-  `src/deployment-profile.js`; their same-basename declaration files would
-  otherwise shadow the JavaScript implementations.
+- `tsconfig.app-implementation.json` explicitly checks `src/app.js`; its
+  same-basename declaration file would otherwise shadow the implementation.
 - `tsconfig.test.json` checks the Jest and type-contract suites.
 - `tsconfig.sea-verifier.json` checks the bounded native/host proof harnesses
   under the temporary strictness boundary above.

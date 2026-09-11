@@ -15,11 +15,13 @@ import {
   OPERATOR_NAMESPACE,
 } from '../../src/core/resources/builds/packaged-app-entry.js';
 import { renderTerminalSafeJson as renderCanonicalTerminalSafeJson } from '../../src/core/runtime/operator/terminal-safe-json.js';
-import * as deploymentProfileApi from '../../src/deployment-profile.js';
+import * as singleNodeDeploymentApi from '../../src/single-node-deployment.js';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 const docsToCheck = [
+  'README.md',
+  'src/cli/README.md',
   'docs/README.md',
   'docs/guides/golden-path.md',
   'docs/guides/quickstart.md',
@@ -31,6 +33,13 @@ const docsToCheck = [
 
 const staleCommands = [
   'wharfie deployment create',
+  'wharfie deployment plan ',
+  'wharfie deployment apply --plan',
+  'wharfie deployment apply <deployment>',
+  'wharfie deployment inspect <deployment-instance>',
+  'wharfie deployment reconcile <deployment-instance>',
+  'wharfie deployment destroy <deployment-instance>',
+  '@wharfie/wharfie/deployment-profile',
   'wharfie project init',
   'wharfie project plan',
   'wharfie project apply',
@@ -256,38 +265,14 @@ describe('docs command surface', () => {
     expect(appApi).toEqual({ defineApp, invokeActivity });
   });
 
-  it('exposes only the narrow deployment-profile authoring API', () => {
-    expect(Object.keys(deploymentProfileApi).sort()).toEqual([
-      'DEPLOYMENT_MODE',
-      'createAwsSingleNodeProvider',
-      'createDeploymentProfile',
+  it('exposes the provider-neutral single-node authoring API', () => {
+    expect(Object.keys(singleNodeDeploymentApi).sort()).toEqual([
+      'SINGLE_NODE_DEPLOYMENT_MODE',
+      'SINGLE_NODE_MACHINE',
+      'createAwsSingleNodeDeploymentProvider',
+      'createHetznerSingleNodeDeploymentProvider',
+      'createSingleNodeDeploymentIntent',
     ]);
-
-    const profile = deploymentProfileApi.createDeploymentProfile({
-      profile: { id: 'production' },
-      appId: 'docs-app',
-      target: {
-        nodeVersion: '24.13.1',
-        platform: 'linux',
-        architecture: 'x64',
-        libc: 'glibc',
-      },
-      mode: deploymentProfileApi.DEPLOYMENT_MODE,
-      provider: deploymentProfileApi.createAwsSingleNodeProvider('us-east-1'),
-    });
-
-    expect(profile).toMatchObject({
-      schemaVersion: 2,
-      kind: 'deploymentProfile',
-      profileRevisionId: expect.stringMatching(/^wpr2_[A-Za-z0-9_-]{43}$/),
-      appId: 'docs-app',
-      provider: {
-        kind: 'aws',
-        contractVersion: 3,
-        scope: { region: 'us-east-1' },
-      },
-    });
-    expect(Object.isFrozen(profile)).toBe(true);
   });
 
   it('does not advertise unsupported command groups in public docs', async () => {
@@ -345,16 +330,11 @@ describe('docs command surface', () => {
     expect(Object.keys(packageJson.exports).sort()).toEqual([
       '.',
       './app',
-      './deployment-profile',
       './package.json',
       './single-node-deployment',
     ]);
-    expect(packageJson.files).toEqual(
-      expect.arrayContaining([
-        'src/deployment-profile.js',
-        'src/deployment-profile.d.ts',
-      ]),
-    );
+    expect(packageJson.files).not.toContain('src/deployment-profile.js');
+    expect(packageJson.files).not.toContain('src/deployment-profile.d.ts');
   });
 
   it('documents working onboarding commands in the quickstart', async () => {
@@ -416,26 +396,6 @@ describe('docs command surface', () => {
       '<app> wharfie service purge --confirm-data-loss <app-id>',
     );
     expect(quickstart).toContain(
-      "} from '@wharfie/wharfie/deployment-profile';",
-    );
-    expect(quickstart).toContain('createDeploymentProfile({');
-    expect(quickstart).toContain(
-      'node ./make-deployment-profile.mjs > deployment-profile.json',
-    );
-    expect(quickstart).toContain(
-      'wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy>',
-    );
-    expect(quickstart).toContain('wharfie deployment apply --plan <plan.json>');
-    expect(quickstart).toContain(
-      'wharfie deployment inspect <deployment-instance> --region <region>',
-    );
-    expect(quickstart).toContain(
-      'wharfie deployment reconcile <deployment-instance> --region <region>',
-    );
-    expect(quickstart).toContain(
-      'wharfie deployment destroy <deployment-instance> --region <region>',
-    );
-    expect(quickstart).toContain(
       '<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>...',
     );
     expect(quickstart).toContain(
@@ -485,14 +445,6 @@ describe('docs command surface', () => {
     expect(quickstart).toContain('`HCLOUD_TOKEN`');
     expect(quickstart).toContain(
       'Packaged `deployment inspect` and `deployment reconcile` are not exposed',
-    );
-    expect(quickstart).toContain('--confirm-coordinator-stopped');
-    expect(quickstart).toMatch(/Direct apply defaults to\s+`bootstrap`/);
-    expect(quickstart).toMatch(
-      /prepared apply, inspect, reconcile, and destroy default to\s+`require-active`/,
-    );
-    expect(quickstart).toMatch(
-      /Source\s+plan JSON contains exact durable staged-artifact evidence/,
     );
     expect(quickstart).not.toContain('Update and rollback remain unavailable');
     expect(quickstart).toContain('--idempotency-key <stable-key>');
@@ -597,7 +549,7 @@ describe('docs command surface', () => {
     for (const document of [readme, quickstart, cliReadme, storageDecision]) {
       expect(document).toContain('WHARFIE_DATA_ROOT');
       expect(document).toMatch(/canonical absolute/);
-      expect(document).toMatch(/legacy|retired/);
+      expect(document).toMatch(/legacy|retired/i);
       expect(document).toMatch(/no automatic|does not automatically/);
     }
   });

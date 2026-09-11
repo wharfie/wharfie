@@ -37,6 +37,11 @@ import {
   attachSeaInspector,
   spawnInspectorPausedProcess,
 } from './sea-inspector.js';
+import {
+  getCommandFailure,
+  recordCommandFailure,
+  retainFailureDiagnostic,
+} from './validation-failure.js';
 
 const RESIDENT_SERVICE_TIMEOUT_MS = 20_000;
 const RESIDENT_SERVICE_POLL_INTERVAL_MS = 50;
@@ -664,13 +669,13 @@ function spawnResidentService(command, options) {
 }
 
 /**
- * @param {{getOutput: () => {stdout: string, stderr: string}}} service - Resident process handle.
+ * @param {{getOutput: () => {stdout: string, stderr: string}, getExit?: () => ResidentServiceExit | null}} service - Resident process handle.
  * @param {string} message - Failure context.
  * @returns {Error} - Diagnostic-rich failure.
  */
 function residentServiceError(service, message) {
   const output = service.getOutput();
-  return new Error(
+  const error = new Error(
     [
       message,
       output.stdout ? `stdout:\n${output.stdout}` : '',
@@ -679,6 +684,11 @@ function residentServiceError(service, message) {
       .filter(Boolean)
       .join('\n'),
   );
+  const exit = service.getExit?.();
+  return recordCommandFailure(error, 'packaged-app', {
+    status: exit?.code ?? null,
+    signal: exit?.signal ?? null,
+  });
 }
 
 /**
@@ -3587,8 +3597,7 @@ async function runInspectorGuardedSeaJson(artifactPath, args, options) {
     assert.deepEqual(
       exited,
       { code: expectedExitCode, signal: null },
-      residentServiceError(service, `${options.label} exited unsuccessfully.`)
-        .message,
+      residentServiceError(service, `${options.label} exited unsuccessfully.`),
     );
     assert.equal(
       adapterEntries,
@@ -9458,30 +9467,55 @@ async function verifyRelocatedSeaWorkflowCrashMatrix(options) {
   }
 }
 
-if (!['darwin', 'linux'].includes(process.platform)) {
-  throw new Error('The real package SEA smoke test requires macOS or Linux');
+const verificationStartedAt = performance.now();
+let verificationPhase = 'preflight';
+/**
+ * @param {unknown} error - Original verifier failure.
+ * @returns {void} - The report never replaces the original failure.
+ */
+function retainSeaFailure(error) {
+  retainFailureDiagnostic({
+    runner: 'package-sea',
+    phase: verificationPhase,
+    durationMs: performance.now() - verificationStartedAt,
+    command: 'package-sea',
+    ...getCommandFailure(error),
+  });
 }
-if (!['arm64', 'x64'].includes(process.arch)) {
-  throw new Error(`Unsupported SEA smoke-test architecture: ${process.arch}`);
-}
 
-// Every spawned npm/bin command must use the same exact Node binary as the SEA
-// blob generator. Developer shells can otherwise resolve a newer global Node
-// for an installed `#!/usr/bin/env node` bin and silently test another target.
-process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
-  .filter(Boolean)
-  .join(path.delimiter);
+const { sourceMetadata, verificationRoot } = (() => {
+  try {
+    if (!['darwin', 'linux'].includes(process.platform)) {
+      throw new Error(
+        'The real package SEA smoke test requires macOS or Linux',
+      );
+    }
+    if (!['arm64', 'x64'].includes(process.arch)) {
+      throw new Error(
+        `Unsupported SEA smoke-test architecture: ${process.arch}`,
+      );
+    }
 
-const sourceMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
-assert.equal(
-  process.versions.node,
-  sourceMetadata.devEngines.runtime.version,
-  'the SEA smoke test must run under the exact repository Node version',
-);
-
-const verificationRoot = mkdtempSync(
-  path.join(os.tmpdir(), 'wharfie-package-sea-'),
-);
+    // Keep npm/bin commands on the exact Node binary used by the SEA generator.
+    process.env.PATH = [path.dirname(process.execPath), process.env.PATH]
+      .filter(Boolean)
+      .join(path.delimiter);
+    const sourceMetadata = readJson(path.join(REPO_ROOT, 'package.json'));
+    assert.equal(
+      process.versions.node,
+      sourceMetadata.devEngines.runtime.version,
+      'the SEA smoke test must run under the exact repository Node version',
+    );
+    verificationPhase = 'workspace-create';
+    const verificationRoot = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-package-sea-'),
+    );
+    return { sourceMetadata, verificationRoot };
+  } catch (error) {
+    retainSeaFailure(error);
+    throw error;
+  }
+})();
 const verificationHome = path.join(verificationRoot, 'home');
 const verificationTemporaryDirectory = path.join(verificationRoot, 'tmp');
 const installDirectory = path.join(verificationRoot, 'install');
@@ -9493,6 +9527,7 @@ let verificationError;
 /** @type {unknown[]} */
 const verificationCleanupErrors = [];
 try {
+  verificationPhase = 'workspace-setup';
   for (const directory of [
     verificationHome,
     verificationTemporaryDirectory,
@@ -9510,6 +9545,7 @@ try {
     npm_config_cache: path.join(verificationRoot, 'npm-cache'),
   });
   delete process.env.WHARFIE_SEA_VERIFIER_SCHEDULE_CRON;
+  verificationPhase = 'package-tarball';
   packaged = createPackageTarball();
   assert.ok(
     path
@@ -9530,6 +9566,7 @@ try {
     )}\n`,
   );
 
+  verificationPhase = 'install-package';
   runCommand(
     NPM_COMMAND,
     ['install', '--no-audit', '--no-fund', packaged.tarballPath],
@@ -9572,6 +9609,7 @@ try {
   }).stdout.trim();
   assert.equal(installedVersion, installedMetadata.version);
 
+  verificationPhase = 'source-fixture';
   const appDirectory = path.join(installDirectory, 'portable-app');
   const sourceDirectory = path.join(appDirectory, 'src');
   const outputDirectory = path.join(appDirectory, 'dist');
@@ -9935,6 +9973,7 @@ export default defineApp({
 `,
   );
 
+  verificationPhase = 'source-cli';
   const sourceResult = JSON.parse(
     runCommand(
       process.execPath,
@@ -9986,6 +10025,7 @@ export default defineApp({
     force: true,
   });
 
+  verificationPhase = 'package-sea';
   const packageOutput = runCommand(
     wharfieBin,
     [
@@ -10017,6 +10057,7 @@ export default defineApp({
   );
   const packagedArtifactRecord = readJson(packagedArtifact.recordPath);
 
+  verificationPhase = 'relocated-cli';
   const cleanArtifactPath = path.join(cleanRunDirectory, artifactName);
   copyFileSync(artifactPath, cleanArtifactPath);
   chmodSync(cleanArtifactPath, 0o755);
@@ -10482,6 +10523,7 @@ export default defineApp({
     applicationStatePath,
     revisionId: historicalOperatorRevisionId,
   });
+  verificationPhase = 'durable-execution';
   const durableIdempotencyKey = 'packaged-durable-managed-effect';
   const durableRunId = ledgerFixture.createRunId(
     embeddedManifest.app.id,
@@ -10716,6 +10758,7 @@ export default defineApp({
     'repeated packaged durable run changed its destination receipt',
   );
 
+  verificationPhase = 'managed-effect-crash';
   await verifyRelocatedSeaCrashMatrix({
     artifactPath: cleanArtifactPath,
     appId: embeddedManifest.app.id,
@@ -10724,6 +10767,7 @@ export default defineApp({
     revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'managed-effect-crash-matrix'),
   });
+  verificationPhase = 'mixed-settlement-crash';
   await verifyRelocatedSeaMixedSettlementCrashMatrix({
     artifactPath: cleanArtifactPath,
     appId: embeddedManifest.app.id,
@@ -10732,6 +10776,7 @@ export default defineApp({
     revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'mixed-settlement-crash-matrix'),
   });
+  verificationPhase = 'effect-reconciliation-crash';
   await verifyRelocatedSeaEffectReconciliationCrashMatrix({
     artifactPath: cleanArtifactPath,
     appId: embeddedManifest.app.id,
@@ -10740,6 +10785,7 @@ export default defineApp({
     revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'effect-reconciliation-crash-matrix'),
   });
+  verificationPhase = 'effect-successor-crash';
   await verifyRelocatedSeaManagedEffectSuccessorCrashMatrix({
     artifactPath: cleanArtifactPath,
     appId: embeddedManifest.app.id,
@@ -10748,6 +10794,7 @@ export default defineApp({
     revisionId: packagedRevisionId,
     root: path.join(cleanRunDirectory, 'managed-effect-successor-crash-matrix'),
   });
+  verificationPhase = 'workflow-crash';
   await verifyRelocatedSeaWorkflowCrashMatrix({
     artifactPath: cleanArtifactPath,
     appId: embeddedManifest.app.id,
@@ -10758,6 +10805,7 @@ export default defineApp({
     wharfieBin,
     appDirectory,
   });
+  verificationPhase = 'timer-signal-workflow';
   await verifyRelocatedSeaTimerSignalWorkflow({
     artifactPath: cleanArtifactPath,
     appId: embeddedManifest.app.id,
@@ -10770,6 +10818,7 @@ export default defineApp({
   // Destination setup needs a fresh authority of its own. Prepare historical
   // effect batches before the resident holds its long-lived token; their
   // distinct revision keeps its worker from consuming these operator targets.
+  verificationPhase = 'resident-recovery';
   const recoveryEffectSpecs = (/** @type {string} */ prefix) => [
     {
       effectId: `${prefix}-01-pending`,
@@ -11792,6 +11841,7 @@ export default defineApp({
   // revision is constructed.
   rmSync(outputDirectory, { recursive: true, force: true });
   assert.equal(existsSync(outputDirectory), false);
+  verificationPhase = 'schedule-restart';
   const scheduleProof =
     process.platform === 'linux'
       ? await packageAndVerifyRelocatedSeaScheduleRestart({
@@ -11804,6 +11854,7 @@ export default defineApp({
         })
       : null;
 
+  verificationPhase = 'artifact-integrity';
   const artifactSize = statSync(cleanArtifactPath).size;
   const artifactSha256 = createHash('sha256')
     .update(readFileSync(cleanArtifactPath))
@@ -11817,6 +11868,7 @@ export default defineApp({
   );
 } catch (error) {
   verificationError = error;
+  retainSeaFailure(error);
 } finally {
   for (const cleanup of [
     () => packaged?.cleanup(),
@@ -11835,6 +11887,10 @@ export default defineApp({
   }
 }
 if (verificationError || verificationCleanupErrors.length > 0) {
+  if (!verificationError) {
+    verificationPhase = 'cleanup';
+    retainSeaFailure(verificationCleanupErrors[0]);
+  }
   if (verificationError && verificationCleanupErrors.length === 0) {
     throw verificationError;
   }

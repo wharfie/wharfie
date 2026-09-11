@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { kitchenSinkExternalDependencies } from '../../../scratch/examples/apps/kitchen-sink/config.js';
+import { kitchenSinkExternalDependencies } from '../../fixtures/apps/native-kitchen-sink/config.js';
 import { runLocalApp } from '../../../src/cli/app/local-app.js';
 import {
   cleanupIsolatedAuthoredAppFixtures,
@@ -18,10 +18,10 @@ const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const authoredKitchenSinkDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'kitchen-sink',
+  'native-kitchen-sink',
 );
 /** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
 const authoredAppFixtures = [];

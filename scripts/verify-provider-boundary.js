@@ -509,8 +509,8 @@ try {
 
   const installedRoot = path.join(nodeModules, '@wharfie', 'wharfie');
   assertExactFailure(
-    'source CLI',
-    MISSING_PROVIDER_MESSAGE,
+    'removed source deployment command',
+    "error: unknown command 'deployment'",
     process.execPath,
     [
       path.join(installedRoot, 'bin', 'wharfie'),

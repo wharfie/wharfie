@@ -200,34 +200,8 @@ shared schema-v8 redacted trigger,
 activation-aware cursor, timer, signal-wait, and signal-delivery lifecycle;
 confirmed `recover` and evidence-backed `reconcile` use the same safe view.
 
-The source CLI also mounts an experimental provider-backed lifecycle:
-
-```text
-wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
-wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
-wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
-wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
-wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-```
-
-These are the only five leaves on the legacy AWS-oriented source surface. A
-canonical DeploymentProfileV2 is operator input outside the manifest, and the
-commands use the ordinary AWS credential chain without serializing credentials.
-Source plan/direct apply package and durably pre-stage a selected SEA; source
-`apply --plan` and reconcile consume exact durable staged evidence. The
-supported `@wharfie/wharfie/deployment-profile` Node authoring API creates the
-canonical profile and its `wpr2` identity. Source plan JSON is reusable only on
-source `apply --plan`.
-Plan requires an explicit control policy because source planning may package,
-stage, and create bootstrap control state. Direct apply defaults to `bootstrap`;
-prepared apply, inspect, reconcile, and destroy default to `require-active`.
-Source `apply --plan` rejects `--dir` and `--output-dir`. Scalar selectors may
-be supplied only once. An operation that returns a correlated but still-active
-head fails as incomplete rather than being reported as successful.
-
-An SEA built with `wharfie app package --self-deployable` exposes a different,
-narrow provider-neutral lifecycle: AWS and Hetzner `preview`, `apply`, `status`,
+An SEA built with `wharfie app package --self-deployable` exposes the
+provider-neutral cloud lifecycle: AWS and Hetzner `preview`, `apply`, `status`,
 `update`, `recover`, `exec`, and `destroy`. It does not expose packaged
 `deployment inspect` or `deployment reconcile`. AWS uses the ordinary credential
 chain; Hetzner reads ambient `HCLOUD_TOKEN`; neither accepts credentials as
@@ -284,26 +258,12 @@ selects explicit require-active, reconcile-existing, or bootstrap policy,
 dispatches one operation, and unconditionally closes that lifetime with
 ordered operation/cleanup failure precedence.
 
-A closed source-packaging path can now mint an empty frozen token whose private
-WeakMap state binds exactly one fresh generation-backed SEA record to one
-retained descriptor. That token creates one deployment revision from the same
-held-byte observation and can be claimed or discarded only once. It does not
-survive JSON, IPC, or a process exit.
+The former source-packaging token, source deployment commands, and public AWS
+profile API have been retired. Their checkpoints below describe historical
+implementation evidence. The retained AWS controller and host modules remain
+internal while the packaged two-provider journey replaces their evidence.
 
-The source-deployment boundary now transfers that claim into the invocation
-stager without an intervening await. The stager verifies the complete V61
-record, revision, runtime, held-byte observation, deployment revision, profile,
-and provider scope before durably accepting it, and closes the descriptor on
-every outcome. `prepareAwsSelectedSeaPlan()` returns only a frozen, JSON-safe
-`{plan, profile, artifactStage}` after the exact intent, object version, and
-receipt are durable and revalidated. `applyAwsSelectedSea()` stages once and
-passes the same bundle to `convergePreStaged()`. The one-shot runner's
-`converge-pre-staged` operation lets a later process validate that supplied
-bundle against durable evidence without opening or falling back to the running
-SEA. Ordinary `converge` remains the packaged running-SEA path.
-
-Source and packaged deployment commands now preserve that artifact-authority
-split. Exact guest artifact projection is now implemented and
+Exact guest artifact projection is now implemented and
 integration-tested behind the privileged host contract. Fixed-user desired
 service convergence and authorized non-destructive retained-storage
 preparation are also component- and activation-integration-tested with injected

@@ -99,15 +99,6 @@ exercises both clean installs, keeps the canonical core install within its
 dependency and 85 MiB limits, and runs a provider-enabled SEA after hiding its
 source install and clearing `PATH`.
 
-The source CLI mounts the experimental `deployment` group. These commands use
-the operator's ordinary AWS credential chain. They do not accept or persist
-credentials in the app manifest, DeploymentProfileV2, plan, or artifact.
-
-Deployment profiles are canonical `wpr2` operator-input JSON documents supplied
-with `--profile`; they remain separate from `wharfie.app.js`. Authors create
-them with the supported `@wharfie/wharfie/deployment-profile` Node subpath.
-Source plan and direct apply package and durably pre-stage a selected SEA;
-source prepared-plan apply and reconcile consume exact durable staged evidence.
 `wharfie app package --self-deployable` creates an application SEA whose
 packaged deployment surface has AWS and Hetzner `preview`, `apply`, `status`,
 `update`, `recover`, `exec`, and `destroy`:

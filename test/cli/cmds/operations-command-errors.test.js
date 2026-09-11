@@ -27,10 +27,10 @@ const authoredAppFixtures = [];
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const authoredHelloWorldDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'hello-world',
+  'authored-hello-world',
 );
 
 /** @returns {string} - Fresh copy of the tracked authored application. */

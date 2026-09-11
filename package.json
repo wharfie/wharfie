@@ -44,11 +44,6 @@
       "import": "./src/app.js",
       "default": "./src/app.js"
     },
-    "./deployment-profile": {
-      "types": "./src/deployment-profile.d.ts",
-      "import": "./src/deployment-profile.js",
-      "default": "./src/deployment-profile.js"
-    },
     "./single-node-deployment": {
       "types": "./src/single-node-deployment.d.ts",
       "import": "./src/single-node-deployment.js",
@@ -62,8 +57,6 @@
     "bin/",
     "src/app.js",
     "src/app.d.ts",
-    "src/deployment-profile.js",
-    "src/deployment-profile.d.ts",
     "src/single-node-deployment.js",
     "src/single-node-deployment.d.ts",
     "src/core/**",

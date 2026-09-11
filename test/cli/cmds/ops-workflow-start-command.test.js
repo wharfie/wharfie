@@ -23,10 +23,10 @@ const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
 const authoredHelloWorldDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'hello-world',
+  'authored-hello-world',
 );
 const APP_ID = 'hello-world-demo';
 const WORKFLOW_ID = 'echo-twice';

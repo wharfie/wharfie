@@ -492,19 +492,17 @@ function runCliSmoke(command, args, environment, cwd) {
 }
 
 /**
- * Prove the downloadable release CLI was sealed without AWS capability.
+ * Prove the downloadable builder rejects the removed source deployment surface.
  * @param {string} artifactPath - Relocated release executable.
  * @param {NodeJS.ProcessEnv} environment - Source-hidden runtime environment.
  * @param {string} cwd - Source-hidden working directory.
- * @param {string} version - Exact core/companion version.
  * @param {string} stateRoot - Probe home/config root that must remain absent.
  * @returns {void}
  */
-function assertProviderFreeReleaseCli(
+function assertBuilderDeploymentAbsent(
   artifactPath,
   environment,
   cwd,
-  version,
   stateRoot,
 ) {
   const result = spawnSync(
@@ -525,18 +523,21 @@ function assertProviderFreeReleaseCli(
     },
   );
   if (result.error) throw result.error;
-  const expected = `AWS deployment support was not embedded. Install matching '@wharfie/aws@${version}' beside '@wharfie/wharfie@${version}' in the builder, rebuild the application, and retry.`;
   const output = `${result.stdout || ''}${result.stderr || ''}`.trim();
-  assert.equal(result.status, 1, 'AWS release probe must fail with status 1.');
+  assert.equal(
+    result.status,
+    1,
+    'Removed deployment command must fail with status 1.',
+  );
   assert.equal(
     output,
-    expected,
-    'The standalone release CLI did not expose the sealed provider-free error.',
+    "error: unknown command 'deployment'",
+    'The standalone builder still exposes the removed deployment command.',
   );
   assert.equal(
     existsSync(stateRoot),
     false,
-    'The AWS release probe created deployment state before provider gating.',
+    'The removed deployment command created local state.',
   );
 }
 
@@ -660,19 +661,18 @@ export async function buildPreviewRelease(options = {}) {
       ).trim(),
       contract.release.version,
     );
-    const providerProbeHome = path.join(workspace, 'provider-probe-home');
-    assertProviderFreeReleaseCli(
+    const commandProbeHome = path.join(workspace, 'command-probe-home');
+    assertBuilderDeploymentAbsent(
       binaryPath,
       {
         ...isolatedEnvironment,
-        HOME: providerProbeHome,
-        XDG_CACHE_HOME: path.join(providerProbeHome, '.cache'),
-        XDG_CONFIG_HOME: path.join(providerProbeHome, '.config'),
-        XDG_DATA_HOME: path.join(providerProbeHome, '.local', 'share'),
+        HOME: commandProbeHome,
+        XDG_CACHE_HOME: path.join(commandProbeHome, '.cache'),
+        XDG_CONFIG_HOME: path.join(commandProbeHome, '.config'),
+        XDG_DATA_HOME: path.join(commandProbeHome, '.local', 'share'),
       },
       isolatedHome,
-      contract.release.version,
-      providerProbeHome,
+      commandProbeHome,
     );
 
     const artifactDescriptions = [

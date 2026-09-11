@@ -13,9 +13,9 @@ and evolve it later.
 
 ## What works today?
 
-The shipped source CLI exposes three top-level command groups: `wharfie app`,
-`wharfie ops`, and experimental `wharfie deployment`. The repository contains
-working foundations for loading manifests, invoking activities locally,
+The shipped source CLI exposes two top-level command groups: `wharfie app`
+and `wharfie ops`. The repository contains working foundations for loading
+manifests, invoking activities locally,
 persisting an append-only manual run → invocation → attempt ledger,
 inspecting/recovering exact runs from source or a packaged artifact, asking an
 exact live owner to cancel a foreground run, packaging target-specific Node SEA
@@ -58,24 +58,17 @@ not part of the current product, and no backward compatibility is promised.
 
 ## Is Wharfie a general cloud infrastructure-as-code tool?
 
-No. The legacy source deployment lifecycle and the packaged AWS lifecycle use
-the operator's normal AWS credential chain. The packaged Hetzner lifecycle
-instead reads ambient `HCLOUD_TOKEN`. Credentials are never accepted as command
-arguments. These commands preview and create only the fixed substrate required
-by Wharfie capabilities, such as a node, durable control state, or artifact
-storage. Provider-native application infrastructure remains application code
-or external IaC.
+No. The packaged AWS lifecycle uses the operator's normal AWS credential chain.
+The packaged Hetzner lifecycle reads ambient `HCLOUD_TOKEN`. Credentials are
+never accepted as command arguments. These commands preview and create one
+Linux node with restricted SSH access and application state on its root disk.
+Provider-native application infrastructure remains application code or external
+IaC.
 
-The legacy AWS-oriented source command tree has exactly five leaves: `plan`,
-`apply`, `inspect`, `reconcile`, and `destroy`. Plan and direct apply take a
-canonical DeploymentProfileV2 JSON file through `--profile`; that operator
-document is outside the app manifest and contains no credentials. Source plan
-and direct apply package and pre-stage a selected SEA; source prepared apply and
-reconcile use durable staged evidence. A `--self-deployable` SEA instead exposes
+Package an application with `wharfie app package --self-deployable` to use
 AWS and Hetzner `preview`, `apply`, `status`, `update`, `recover`, `exec`, and
-`destroy`; packaged `inspect` and `reconcile` are not exposed. This remains an
-experimental operator surface with a partial broader ADR 0035 acceptance
-artifact.
+`destroy` through its executable. This remains an experimental operator
+surface with a partial broader ADR 0035 acceptance artifact.
 
 ## Does Wharfie require a hosted control plane?
 

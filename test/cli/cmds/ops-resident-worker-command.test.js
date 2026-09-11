@@ -25,10 +25,10 @@ const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
 const authoredHelloWorldDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'hello-world',
+  'authored-hello-world',
 );
 const itOnUnix = process.platform === 'win32' ? it.skip : it;
 /** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */

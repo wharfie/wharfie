@@ -1,3 +1,4 @@
+// eslint-disable-next-line import/no-unresolved -- resolved through the package self-reference or isolated-fixture bridge.
 import { invokeActivity } from '@wharfie/wharfie/app';
 
 /**

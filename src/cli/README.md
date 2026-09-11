@@ -1,7 +1,7 @@
 # CLI
 
 The shipped Wharfie source CLI lives here. Its top-level command groups are
-`app`, `ops`, and the experimental `deployment`. Durable source workflow
+`app` and `ops`. Durable source workflow
 creation is the flat command
 `wharfie ops start --workflow <workflow-id> --idempotency-key <stable-key>`;
 the packaged equivalent is `<app> wharfie start ...` and deliberately has no
@@ -264,20 +264,6 @@ metadata. Branches, loops, parallel workflow steps, an early-signal inbox,
 managed-effect workflow successors, schedule pause/resume controls, and public
 log tail/search remain unsupported.
 
-The legacy source `deployment` group still has five AWS-oriented leaves:
-`plan`, `apply`, `inspect`, `reconcile`, and `destroy`. Source plan and direct
-apply accept a canonical DeploymentProfileV2 operator document separately
-from the app manifest:
-
-```text
-wharfie deployment plan <deployment> --profile <canonical-profile.json> --control-policy <policy> [--dir <app-dir>] [--output-dir <package-dir>] [--json]
-wharfie deployment apply <deployment> --profile <canonical-profile.json> [--dir <app-dir>] [--output-dir <package-dir>] [--control-policy <policy>] [--json]
-wharfie deployment apply --plan <plan.json> [--control-policy <policy>] [--json]
-wharfie deployment inspect <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-wharfie deployment reconcile <deployment-instance> --region <region> [--confirm-coordinator-stopped] [--control-policy <policy>] [--json]
-wharfie deployment destroy <deployment-instance> --region <region> [--control-policy <policy>] [--json]
-```
-
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
 AWS and Hetzner preview, apply, status, update, recover, exec, and destroy:
@@ -350,22 +336,6 @@ Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
 AWS has completed a live packaged apply/activate/adopt/restart/destroy slice
 with independently verified cleanup. Hetzner completed the equivalent live
 slice in `fsn1`, including second-process adoption without replacement.
-
-Source plan and direct apply package a selected SEA and durably pre-stage it.
-A later source `apply --plan` and source reconcile validate exact durable
-staged evidence. The source mode uses the operator's ordinary AWS credential
-chain; neither the canonical profile nor the reusable plan contains
-credentials. Both deployment surfaces remain experimental.
-Create canonical profiles with the narrow
-`@wharfie/wharfie/deployment-profile` Node authoring API. Source plan JSON
-includes durable staged-artifact evidence and is accepted only by source
-`apply --plan`.
-Plan requires an explicit control policy because source planning may package,
-stage, and create bootstrap control state. Direct apply defaults to `bootstrap`;
-prepared apply and the three located commands default to `require-active`.
-Source `apply --plan` rejects `--dir` and `--output-dir`. Scalar selectors may
-be supplied only once, and a returned active head is an incomplete nonzero
-result rather than success.
 
 Packaged Linux artifacts additionally expose
 `<app> wharfie service install|converge|update|rollback|recover|prune|purge|start|stop|restart|status|uninstall`.

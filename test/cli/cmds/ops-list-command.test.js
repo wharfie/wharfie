@@ -26,7 +26,7 @@ const REPOSITORY_ROOT = path.resolve(
 const BIN_PATH = path.join(REPOSITORY_ROOT, 'bin', 'wharfie');
 const AUTHORED_APP_DIRECTORY = path.join(
   REPOSITORY_ROOT,
-  'scratch/examples/apps/hello-world',
+  'test/fixtures/apps/authored-hello-world',
 );
 const APP_ID = 'hello-world-demo';
 const REVISION_A = `wrv1_${'A'.repeat(43)}`;

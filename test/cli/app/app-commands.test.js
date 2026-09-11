@@ -7,7 +7,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { kitchenSinkExternalDependencies } from '../../../scratch/examples/apps/kitchen-sink/config.js';
+import { kitchenSinkExternalDependencies } from '../../fixtures/apps/native-kitchen-sink/config.js';
 import {
   cleanupIsolatedAuthoredAppFixtures,
   createIsolatedAuthoredAppFixture,
@@ -18,17 +18,17 @@ const repoRoot = path.resolve(testDir, '../../..');
 const binPath = path.join(repoRoot, 'bin', 'wharfie');
 const authoredHelloWorldDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'hello-world',
+  'authored-hello-world',
 );
 const kitchenSinkDir = path.join(
   repoRoot,
-  'scratch',
-  'examples',
+  'test',
+  'fixtures',
   'apps',
-  'kitchen-sink',
+  'native-kitchen-sink',
 );
 /** @type {Array<ReturnType<typeof createIsolatedAuthoredAppFixture>>} */
 const authoredAppFixtures = [];
