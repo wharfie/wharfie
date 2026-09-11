@@ -47,6 +47,7 @@ import {
   getSingleNodeRemoteArtifactPaths,
 } from '../src/core/runtime/single-node-remote-activation.js';
 import { createPackageTarball } from './package-verification.js';
+import { remoteRecoveryServiceFailureContext } from './remote-recovery-diagnostics.js';
 // Keep the independent builder in the proof's checked import graph. Importing
 // it performs no work; only the separate process invokes its entrypoint.
 import { assertMatchingRemoteRecoveryPayloadRecords } from './remote-recovery-package-child.js';
@@ -149,35 +150,6 @@ function readPackageProgress() {
   } catch {
     return null;
   }
-}
-
-/** Keep only bounded diagnostics for the proof's two public service commands. */
-export function remoteRecoveryServiceFailureContext(
-  remotePath,
-  request,
-  outcome,
-) {
-  const argv = /** @type {{argv: string[]}} */ (request).argv;
-  if (
-    argv.length !== 5 ||
-    argv[0] !== remotePath ||
-    argv[1] !== 'wharfie' ||
-    argv[2] !== 'service' ||
-    !['converge', 'status'].includes(argv[3]) ||
-    argv[4] !== '--json' ||
-    (outcome.status === 'exited' && outcome.exitCode === 0)
-  ) {
-    return null;
-  }
-  return {
-    operation: argv[3],
-    status: outcome.status,
-    exitCode: outcome.exitCode,
-    signal: outcome.signal,
-    timedOut: outcome.timedOut,
-    stdout: outcome.stdout.subarray(0, 8192).toString('utf8'),
-    stderr: outcome.stderr.subarray(0, 8192).toString('utf8'),
-  };
 }
 
 /** Poll one finite observation under an overall monotonic deadline. */
@@ -398,6 +370,16 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
     );
   let remotePath;
   try {
+    const x64ProbePath =
+      process.arch === 'x64'
+        ? process.execPath
+        : '/opt/wharfie-proof-x64-node/bin/node';
+    const guestExecutionProbe = asGuest(x64ProbePath, [
+      '-p',
+      'process.arch + ":" + process.version',
+    ]).stdout.trim();
+    assert.equal(guestExecutionProbe, 'x64:v24.13.1');
+    announce('real-x64-node-execution-ready');
     const { guest, outer } = await buildArtifacts(repoRoot);
     const artifact = guest.artifacts[0];
     const outerPath = outer.artifacts[0].path;
@@ -630,6 +612,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
       (view) => view.workflowCursor?.disposition === 'TIMER_WAITING',
       'durable timer admission',
     );
+    announce('durable-timer-waiting');
     const beforeMarkers = markers();
     assert.deepEqual(
       beforeMarkers.map((entry) => entry.stepIndex),
@@ -659,6 +642,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
       initialActivation: activation,
     });
     asGuest('/usr/bin/kill', ['-KILL', String(pid)]);
+    announce('resident-killed');
     await waitFor(
       () =>
         asGuest('/usr/bin/test', ['-d', `/proc/${pid}`], {
@@ -672,6 +656,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
       (status) => status.health !== 'healthy' && status.systemd.mainPid !== pid,
       'killed resident failure',
     );
+    announce('resident-unhealthy-after-kill');
     const failedExec = exec(['wharfie', 'service', 'status', '--json'], {
       allowFailure: true,
     });
@@ -691,6 +676,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
     assert.equal(interrupted.timers[0].status, waiting.timers[0].status);
     assert.deepEqual(markers(), beforeMarkers);
     const inspection = inspectCoordinator();
+    announce('retained-predecessor-inspected');
     assert.deepEqual(
       inspection.observedAuthority,
       predecessor.observedAuthority,
@@ -718,6 +704,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
       '--json',
     ];
     const takeover = json(app(takeoverArgs));
+    announce('predecessor-taken-over-and-released');
     assert.equal(takeover.resultAuthority.status, 'RELEASED');
     assert.equal(
       takeover.takeoverAuthority.epoch,
@@ -729,6 +716,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
       }),
     );
     assert.equal(recovered.action, 'repair');
+    announce('deployment-repaired');
     const healthy = await waitFor(
       service,
       (status) => status.health === 'healthy',
@@ -783,6 +771,7 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
     receipt('remote-recovery-final.json', {
       schemaVersion: 1,
       kind: 'wharfie.remote-recovery.final',
+      guestExecutionProbe,
       sourceCommit: process.env.WHARFIE_SYSTEMD_PROOF_COMMIT,
       providerAuthority: 'synthetic-hetzner-journal-no-provider-calls',
       transport: 'real-loopback-openssh',

@@ -1,6 +1,6 @@
 import { describe, expect, test } from '@jest/globals';
 
-import { remoteRecoveryServiceFailureContext } from '../../scripts/verify-single-node-remote-recovery-linux.js';
+import { remoteRecoveryServiceFailureContext } from '../../scripts/remote-recovery-diagnostics.js';
 
 const REMOTE_PATH = '/home/wharfie/disposable-proof/app-sea';
 const REQUEST = {
@@ -8,6 +8,7 @@ const REQUEST = {
   stdin: Buffer.from('private request input'),
   environment: { TOKEN: 'private environment' },
 };
+/** @type {import('../../src/core/runtime/bounded-process.js').BoundedProcessOutcome} */
 const OUTCOME = {
   status: 'exited',
   exitCode: 1,

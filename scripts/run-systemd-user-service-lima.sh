@@ -371,7 +371,13 @@ host verify-image "${IMAGE_PLAN}"
 copy_host_evidence
 
 CREATED=1
-lima create --tty=false --mount-none --plain --containerd none --name "${INSTANCE}" "${CONFIG_PATH}"
+if [[ "${SCENARIO}" == "remote-recovery" ]]; then
+  # Plain mode disables Rosetta. This reviewed config explicitly disables
+  # host mounts, automatic port forwarding, SSH agent forwarding and containerd.
+  lima create --tty=false --mount-none --containerd none --name "${INSTANCE}" "${CONFIG_PATH}"
+else
+  lima create --tty=false --mount-none --plain --containerd none --name "${INSTANCE}" "${CONFIG_PATH}"
+fi
 lima start --tty=false "${INSTANCE}"
 lima copy --backend=scp "${ARCHIVE_PATH}" "${INSTANCE}:/tmp/wharfie-systemd-proof-repo.tar"
 lima shell --tty=false "${INSTANCE}" /bin/bash -lc \

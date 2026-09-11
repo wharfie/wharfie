@@ -14,6 +14,10 @@ const MAX_SOURCE_ARCHIVE_BYTES =
 const CONFIG_RELATIVE_PATH = 'test/systemd/lima.yaml';
 const REMOTE_RECOVERY_CONFIG_RELATIVE_PATH =
   'test/systemd/remote-recovery-lima.yaml';
+const REMOTE_RECOVERY_ROSETTA =
+  'vmOpts:\n  vz:\n    rosetta:\n      enabled: true\n      binfmt: true\n\n';
+const REMOTE_RECOVERY_ISOLATION =
+  'ssh:\n  loadDotSSHPubKeys: false\n  forwardAgent: false\nportForwards:\n  - guestIP: 0.0.0.0\n    proto: any\n    ignore: true\nhostResolver:\n  enabled: false\npropagateProxyEnv: false\n';
 const SAFE_ROOT_NPMRC = Buffer.from(
   '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\nregistry=https://registry.npmjs.org/\n',
   'utf8',
@@ -790,6 +794,7 @@ export function assertLimaSocketPath({ limaHome, instance }) {
  */
 export function deriveLimaConfig({ config, hostArch, imagePath }) {
   assertSafeAbsolutePath(imagePath, true);
+  const usesRosetta = config.includes('\nvmOpts:\n');
   const arch =
     hostArch === 'arm64' || hostArch === 'aarch64'
       ? 'aarch64'
@@ -818,10 +823,13 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
       'memory',
       'disk',
       'plain',
-      ...(config.includes('\nrosetta:\n') ? ['rosetta'] : []),
+      ...(usesRosetta ? ['vmOpts'] : []),
       'images',
       'mounts',
       'containerd',
+      ...(usesRosetta
+        ? ['ssh', 'portForwards', 'hostResolver', 'propagateProxyEnv']
+        : []),
       'provision',
       'probes',
     ],
@@ -830,8 +838,10 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
   assert.ok(
     /^vmType: vz$/m.test(config) &&
       /^arch: default$/m.test(config) &&
-      /^plain: true$/m.test(config),
-    'Lima proof must use plain native VZ mode.',
+      (usesRosetta
+        ? /^plain: false$/m.test(config)
+        : /^plain: true$/m.test(config)),
+    'Lima proof must use the reviewed native VZ isolation profile.',
   );
   assert.ok(
     /^mounts: \[\]\ncontainerd:\n {2}system: false\n {2}user: false\n/m.test(
@@ -849,13 +859,13 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
   );
   assert.match(
     config.slice(0, match.index),
-    /^minimumLimaVersion: \d+\.\d+\.\d+\n\nvmType: vz\narch: default\ncpus: [1-9]\d*\nmemory: [1-9]\d*(?:MiB|GiB)\ndisk: [1-9]\d*(?:MiB|GiB)\nplain: true\n\n(?:rosetta:\n {2}enabled: true\n {2}binfmt: true\n\n)?$/,
+    /^minimumLimaVersion: \d+\.\d+\.\d+\n\nvmType: vz\narch: default\ncpus: [1-9]\d*\nmemory: [1-9]\d*(?:MiB|GiB)\ndisk: [1-9]\d*(?:MiB|GiB)\n(?:plain: true\n\n|plain: false\n\nvmOpts:\n {2}vz:\n {4}rosetta:\n {6}enabled: true\n {6}binfmt: true\n\n)$/,
     'Unexpected values or nested keys before Lima images.',
   );
   const provisionIndex = config.indexOf('\nprovision:\n');
   assert.equal(
     config.slice(match.index + match[0].length, provisionIndex + 1),
-    '\nmounts: []\ncontainerd:\n  system: false\n  user: false\n\n',
+    `\nmounts: []\ncontainerd:\n  system: false\n  user: false\n${usesRosetta ? REMOTE_RECOVERY_ISOLATION : ''}\n`,
     'Unexpected Lima mounts/containerd configuration.',
   );
   const probesIndex = config.indexOf('\nprobes:\n');
@@ -907,10 +917,7 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
     `images:\n  - location: ${JSON.stringify(imagePath)}\n    arch: ${arch}\n    digest: ${selected[3]}\n`,
   );
   if (arch === 'x86_64') {
-    derived = derived.replace(
-      'rosetta:\n  enabled: true\n  binfmt: true\n\n',
-      '',
-    );
+    derived = derived.replace(REMOTE_RECOVERY_ROSETTA, '');
   }
   return {
     config: derived,

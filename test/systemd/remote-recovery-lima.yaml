@@ -5,11 +5,13 @@ arch: default
 cpus: 4
 memory: 6GiB
 disk: 20GiB
-plain: true
+plain: false
 
-rosetta:
-  enabled: true
-  binfmt: true
+vmOpts:
+  vz:
+    rosetta:
+      enabled: true
+      binfmt: true
 
 images:
   - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-arm64.img
@@ -23,6 +25,16 @@ mounts: []
 containerd:
   system: false
   user: false
+ssh:
+  loadDotSSHPubKeys: false
+  forwardAgent: false
+portForwards:
+  - guestIP: 0.0.0.0
+    proto: any
+    ignore: true
+hostResolver:
+  enabled: false
+propagateProxyEnv: false
 
 provision:
   - mode: system
@@ -93,11 +105,22 @@ provision:
         apt-get update
         apt-get install -y --no-install-recommends libc6:amd64 libstdc++6:amd64
         rm -rf /var/lib/apt/lists/*
+        # Fail before packaging if this VM cannot execute the actual x64 Node
+        # release used by the deployment payload, including its dynamic loader.
+        x64_archive="node-v${node_version}-linux-x64.tar.xz"
+        curl --fail --location --silent --show-error \
+          "https://nodejs.org/dist/v${node_version}/${x64_archive}" \
+          --output "/tmp/${x64_archive}"
+        echo "30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089  /tmp/${x64_archive}" | sha256sum --check --strict
+        install -d -m 0755 /opt/wharfie-proof-x64-node
+        tar --extract --xz --file "/tmp/${x64_archive}" \
+          --directory /opt/wharfie-proof-x64-node --strip-components 1
+        rm -f "/tmp/${x64_archive}"
       fi
 
 probes:
   - mode: readiness
-    description: exact Node and persistent systemd user manager are ready
+    description: exact Node, real x64 execution, and systemd user manager are ready
     script: |
       #!/bin/bash
       set -eu -o pipefail
@@ -105,5 +128,10 @@ probes:
       test "$(/usr/local/bin/npm --version)" = 11.12.0
       test "$(loginctl show-user "$(id -u)" --property=Linger --value)" = yes
       systemctl --user show-environment >/dev/null
+      x64_node=/usr/local/bin/node
+      if test "$(uname -m)" = aarch64; then
+        x64_node=/opt/wharfie-proof-x64-node/bin/node
+      fi
+      test "$(sudo -n -u wharfie "$x64_node" -p 'process.arch + ":" + process.version')" = x64:v24.13.1
     hint: |
-      Node 24.13.1, lingering, or the systemd user manager did not become ready.
+      Node 24.13.1, real x64 execution, lingering, or the user manager did not become ready.
