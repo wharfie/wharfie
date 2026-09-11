@@ -54,7 +54,7 @@ sudo -n install -d -m 0700 -o wharfie -g wharfie /home/wharfie/.local/share/whar
 sudo -n install -d -m 0755 /etc/wharfie
 sudo -n systemctl start ssh.service
 # Exercise a login/PAM environment without printing any environment contents.
-sudo -n -i -u wharfie /usr/bin/python3 -c '
+sudo -n -i -u wharfie /usr/bin/python3 - <<'PY'
 import os
 assert os.getuid() == 60706
 for name, expected in {
@@ -65,7 +65,7 @@ for name, expected in {
     "XDG_RUNTIME_DIR": "/run/user/60706",
 }.items():
     assert os.environ.get(name) in (None, "", expected), name + " has a foreign user path"
-'
+PY
 sudo -n -u wharfie /usr/bin/env -i \
   HOME=/home/wharfie USER=wharfie LOGNAME=wharfie PATH=/usr/bin:/bin \
   XDG_RUNTIME_DIR=/run/user/60706 \
