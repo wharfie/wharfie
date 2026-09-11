@@ -655,11 +655,18 @@ function isDesiredRelease(value, desired) {
 }
 
 /**
+ * Verify installed release authority independently of resident liveness.
+ * Recovery may inspect and fence a crashed coordinator only while the same
+ * immutable release, activation selection, and managed service remain proven.
+ * Convergence also considers live service ownership: a killed resident can
+ * retain matching ownership IDs after its socket disappears. Its conflict or
+ * unknown decision cannot block explicit coordinator recovery. The decision's
+ * desired release still binds the invoking SEA to the journal's artifact.
  * @param {Record<string, any>} status - Decoded service status.
  * @param {Readonly<Record<string, any>>} desired - Exact desired state.
- * @returns {{appId: string, unit: string, health: 'healthy', activeArtifactId: string, activeRevisionId: string}} - Safe exact status projection.
+ * @returns {{appId: string, unit: string, activeArtifactId: string, activeRevisionId: string}} - Exact installed release projection.
  */
-export function validateSingleNodeRemoteServiceStatus(status, desired) {
+export function validateSingleNodeRemoteServiceIdentity(status, desired) {
   const unit = `wharfie-${desired.intent.appId}.service`;
   const wiring = status.wiring;
   const installation = status.installation;
@@ -674,7 +681,9 @@ export function validateSingleNodeRemoteServiceStatus(status, desired) {
     status.kind !== 'wharfie.service.status' ||
     status.appId !== desired.intent.appId ||
     status.unit !== unit ||
-    status.health !== 'healthy' ||
+    !['healthy', 'starting', 'degraded', 'stopped', 'failed'].includes(
+      status.health,
+    ) ||
     !isObject(wiring) ||
     wiring.state !== 'managed' ||
     wiring.unitFile !== 'managed' ||
@@ -688,13 +697,7 @@ export function validateSingleNodeRemoteServiceStatus(status, desired) {
     !isObject(systemd) ||
     systemd.loadState !== 'loaded' ||
     systemd.unitFileState !== 'enabled' ||
-    systemd.activeState !== 'active' ||
-    systemd.subState !== 'running' ||
-    systemd.result !== 'success' ||
     !isObject(runtime) ||
-    runtime.status !== 'READY' ||
-    runtime.session !== 'active' ||
-    runtime.currentOwner !== true ||
     runtime.artifactId !== desired.artifact.artifactId ||
     runtime.revisionId !== desired.artifact.revisionId ||
     !isObject(activation) ||
@@ -713,20 +716,49 @@ export function validateSingleNodeRemoteServiceStatus(status, desired) {
     convergence.kind !== 'wharfie.service.desired-convergence' ||
     convergence.appId !== desired.intent.appId ||
     convergence.unit !== unit ||
-    convergence.disposition !== 'authorized' ||
-    convergence.basis !== 'durable-active' ||
+    !['authorized', 'conflict', 'unknown'].includes(convergence.disposition) ||
+    (convergence.disposition === 'authorized'
+      ? convergence.basis !== 'durable-active'
+      : convergence.basis !== null) ||
     !isDesiredRelease(convergence.desired, desired)
+  ) {
+    throw new Error(
+      'Remote service status did not prove the exact installed release authority.',
+    );
+  }
+  return Object.freeze({
+    appId: desired.intent.appId,
+    unit,
+    activeArtifactId: desired.artifact.artifactId,
+    activeRevisionId: desired.artifact.revisionId,
+  });
+}
+
+/**
+ * @param {Record<string, any>} status - Decoded service status.
+ * @param {Readonly<Record<string, any>>} desired - Exact desired state.
+ * @returns {{appId: string, unit: string, health: 'healthy', activeArtifactId: string, activeRevisionId: string}} - Safe healthy status projection.
+ */
+export function validateSingleNodeRemoteServiceStatus(status, desired) {
+  const identity = validateSingleNodeRemoteServiceIdentity(status, desired);
+  if (
+    status.desiredConvergence.disposition !== 'authorized' ||
+    status.desiredConvergence.basis !== 'durable-active' ||
+    status.health !== 'healthy' ||
+    status.systemd.activeState !== 'active' ||
+    status.systemd.subState !== 'running' ||
+    status.systemd.result !== 'success' ||
+    status.runtime.status !== 'READY' ||
+    status.runtime.session !== 'active' ||
+    status.runtime.currentOwner !== true
   ) {
     throw new Error(
       'Remote service status did not prove the exact desired artifact durably healthy.',
     );
   }
   return Object.freeze({
-    appId: desired.intent.appId,
-    unit,
+    ...identity,
     health: /** @type {const} */ ('healthy'),
-    activeArtifactId: desired.artifact.artifactId,
-    activeRevisionId: desired.artifact.revisionId,
   });
 }
 

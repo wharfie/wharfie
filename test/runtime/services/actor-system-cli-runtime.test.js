@@ -134,6 +134,7 @@ describe('packaged application dispatch', () => {
       'update',
       'recover',
       'exec',
+      'coordinator',
       'destroy',
     ]);
     expect(

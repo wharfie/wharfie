@@ -3,7 +3,7 @@ import { createCoordinatorAuthorityCommand } from '../../../../runtime/operator/
 /**
  * Build a fresh coordinator-authority command scoped to this artifact's
  * immutable embedded application identity.
- * @param {{resolveExpectedIdentity: () => Promise<{appId: string, revisionId?: string}> | {appId: string, revisionId?: string}, inspectAuthority?: typeof import('../../../../runtime/operator/coordinator-authority-command.js').inspectCoordinatorAuthority, takeoverAuthority?: typeof import('../../../../runtime/operator/coordinator-authority-command.js').takeoverCoordinatorAuthority, readJsonObjectFile?: typeof import('../../../../runtime/operator/json-document-file.js').readOperatorJsonObjectFile, output?: Partial<import('../../../../runtime/operator/coordinator-authority-command.js').CoordinatorAuthorityCommandOutput>, processRef?: import('../../../../runtime/operator/coordinator-authority-command.js').CoordinatorAuthorityCommandProcess}} options - Packaged host seams.
+ * @param {{resolveExpectedIdentity: () => Promise<{appId: string, revisionId?: string}> | {appId: string, revisionId?: string}, inspectAuthority?: typeof import('../../../../runtime/operator/coordinator-authority-command.js').inspectCoordinatorAuthority, takeoverAuthority?: typeof import('../../../../runtime/operator/coordinator-authority-command.js').takeoverCoordinatorAuthority, readJsonObjectFile?: typeof import('../../../../runtime/operator/json-document-file.js').readOperatorJsonObjectFile, readJsonObjectStdin?: typeof import('../../../../runtime/operator/json-document-stdin.js').readOperatorJsonObjectStdin, output?: Partial<import('../../../../runtime/operator/coordinator-authority-command.js').CoordinatorAuthorityCommandOutput>, processRef?: import('../../../../runtime/operator/coordinator-authority-command.js').CoordinatorAuthorityCommandProcess}} options - Packaged host seams.
  * @returns {import('commander').Command} - Fresh packaged coordinator command.
  */
 export function createPackagedCoordinatorAuthorityCommand(options) {
@@ -13,6 +13,7 @@ export function createPackagedCoordinatorAuthorityCommand(options) {
     );
   }
   return createCoordinatorAuthorityCommand({
+    allowInspectionStdin: true,
     async resolveIdentity() {
       const identity = await options.resolveExpectedIdentity();
       return { appId: identity.appId };
@@ -26,6 +27,9 @@ export function createPackagedCoordinatorAuthorityCommand(options) {
     ...(options.readJsonObjectFile === undefined
       ? {}
       : { readJsonObjectFile: options.readJsonObjectFile }),
+    ...(options.readJsonObjectStdin === undefined
+      ? {}
+      : { readJsonObjectStdin: options.readJsonObjectStdin }),
     ...(options.output === undefined ? {} : { output: options.output }),
     ...(options.processRef === undefined
       ? {}

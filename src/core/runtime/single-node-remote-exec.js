@@ -2,6 +2,7 @@
 
 import path from 'node:path';
 
+import { assertLedgerOpaqueId } from '../lib/ledger/record-key.js';
 import { createBoundedProcessRunner } from './bounded-process.js';
 import { sortCanonicalJsonValue } from './canonical-order.js';
 import {
@@ -19,9 +20,20 @@ import {
 } from './single-node-cloud-init.js';
 import {
   getSingleNodeDeploymentCurrentRelease,
+  getSingleNodeDeploymentReleaseTransition,
   validateSingleNodeDeploymentJournal,
 } from './single-node-deployment-journal.js';
-import { validateSingleNodeRemoteServiceStatus } from './single-node-remote-activation.js';
+import {
+  validateSingleNodeRemoteServiceIdentity,
+  validateSingleNodeRemoteServiceStatus,
+} from './single-node-remote-activation.js';
+import {
+  COORDINATOR_AUTHORITY_INSPECTION_MAX_BYTES,
+  COORDINATOR_AUTHORITY_TAKEOVER_RECEIPT_MAX_BYTES,
+  validateCoordinatorAuthorityInspectionDocument,
+  validateCoordinatorAuthorityTakeoverReceipt,
+} from './operator/coordinator-authority-command.js';
+import { renderTerminalSafeJson } from './operator/terminal-safe-json.js';
 
 export const SINGLE_NODE_REMOTE_EXEC_TIMEOUT_MILLISECONDS = 10 * 60 * 1000;
 export const SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES =
@@ -32,6 +44,15 @@ export const SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES =
 const MAX_BOOTSTRAP_IDENTITY_BYTES = 16 * 1024;
 const MAX_SERVICE_STATUS_BYTES = 256 * 1024;
 const INPUT_KEYS = new Set(['journal', 'dataRoot', 'argv']);
+const COORDINATOR_INSPECT_KEYS = new Set(['journal', 'dataRoot']);
+const COORDINATOR_TAKEOVER_KEYS = new Set([
+  'journal',
+  'dataRoot',
+  'inspection',
+  'coordinatorId',
+  'requestId',
+  'confirmAuthorityReplacement',
+]);
 const DEPENDENCY_KEYS = new Set([
   'readIdentity',
   'readHostKey',
@@ -340,7 +361,7 @@ function transportRunner(value) {
 /**
  * Create a provider-free, journal-bound remote application executor.
  * @param {unknown} dependencies - Exact local identity and SSH ports.
- * @returns {Readonly<{execute(value: unknown): Promise<import('./bounded-process.js').BoundedProcessOutcome>}>} - Strict executor.
+ * @returns {Readonly<{execute(value: unknown): Promise<import('./bounded-process.js').BoundedProcessOutcome>, inspectCoordinator(value: unknown): Promise<Readonly<Record<string, any>>>, takeoverCoordinator(value: unknown): Promise<Readonly<Record<string, any>>>}>} - Strict application and coordinator operations.
  */
 export function createSingleNodeRemoteExecutor(dependencies) {
   const ports = snapshotExactObject(
@@ -356,219 +377,368 @@ export function createSingleNodeRemoteExecutor(dependencies) {
     }
   }
 
-  return Object.freeze({
-    /**
-     * Re-prove an already-active deployment, then execute its exact artifact
-     * with application arguments only.
-     * @param {unknown} value - Existing journal, data root, and app argv.
-     * @returns {Promise<import('./bounded-process.js').BoundedProcessOutcome>} - Exact bounded application outcome.
-     */
-    async execute(value) {
-      const input = snapshotExactObject(
-        value,
-        INPUT_KEYS,
-        'singleNodeRemoteExec',
+  /**
+   * Re-prove an already-active deployment, then execute its exact artifact
+   * with an application command or one internally constructed coordinator command.
+   * @param {unknown} value - Existing journal, data root, and app argv.
+   * @param {boolean} [coordinator] - Require installed authority independently of health.
+   * @param {Buffer|null} [stdin] - Bounded coordinator inspection, never arbitrary application input.
+   * @param {number} [maximumStdoutBytes] - Exact operation output bound.
+   * @returns {Promise<import('./bounded-process.js').BoundedProcessOutcome>} - Exact bounded application outcome.
+   */
+  async function run(
+    value,
+    coordinator = false,
+    stdin = null,
+    maximumStdoutBytes = SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES,
+  ) {
+    const input = snapshotExactObject(
+      value,
+      INPUT_KEYS,
+      'singleNodeRemoteExec',
+    );
+    const journal = validateSingleNodeDeploymentJournal(
+      input.journal,
+      'singleNodeRemoteExec.journal',
+    );
+    const currentRelease = getSingleNodeDeploymentCurrentRelease(journal);
+    if (
+      journal.phase !== 'active' ||
+      journal.sshHost === null ||
+      currentRelease === null
+    ) {
+      throw new Error(
+        'Remote application execution requires an active deployment with exact activation evidence.',
       );
-      const journal = validateSingleNodeDeploymentJournal(
-        input.journal,
-        'singleNodeRemoteExec.journal',
+    }
+    if (
+      coordinator &&
+      getSingleNodeDeploymentReleaseTransition(journal) !== null
+    ) {
+      throw new Error(
+        'Remote coordinator operations require a settled deployment release; recover the deployment update first.',
       );
-      const currentRelease = getSingleNodeDeploymentCurrentRelease(journal);
-      if (
-        journal.phase !== 'active' ||
-        journal.sshHost === null ||
-        currentRelease === null
-      ) {
-        throw new Error(
-          'Remote application execution requires an active deployment with exact activation evidence.',
-        );
-      }
-      const dataRoot = canonicalAbsolutePath(
-        input.dataRoot,
-        'singleNodeRemoteExec.dataRoot',
-      );
-      const argv = applicationArgv(input.argv);
-      const remoteArtifactPath = currentRelease.activation.artifact.remotePath;
+    }
+    const dataRoot = canonicalAbsolutePath(
+      input.dataRoot,
+      'singleNodeRemoteExec.dataRoot',
+    );
+    const argv = applicationArgv(input.argv);
+    const remoteArtifactPath = currentRelease.activation.artifact.remotePath;
 
-      // Validate the complete projected command before opening local identity.
-      encodePosixArgv([remoteArtifactPath, ...argv]);
+    // Validate the complete projected command before opening local identity.
+    encodePosixArgv([remoteArtifactPath, ...argv]);
 
-      /** @type {Readonly<Record<string, any>>} */
-      let identity;
-      /** @type {Readonly<Record<string, any>>} */
-      let expectedCloudInit;
-      try {
-        identity = validateSshIdentity(
-          await Reflect.apply(ports.readIdentity, undefined, [
-            {
-              dataRoot,
-              deploymentInstanceId: journal.deploymentInstanceId,
-              incarnationId: journal.incarnationId,
-            },
-          ]),
-        );
-        expectedCloudInit = createSingleNodeCloudInit({
-          deploymentInstanceId: journal.deploymentInstanceId,
-          incarnationId: journal.incarnationId,
-          publicKey: identity.publicKey,
-          publicKeyFingerprint: identity.publicKeyFingerprint,
-        });
-      } catch {
-        throw new Error(
-          'Remote application execution could not authenticate its local SSH identity.',
-        );
-      }
-      const expectedDigest = journal.providerIntent.intent.cloudInitDigest;
-      if (
-        expectedCloudInit.digest.algorithm !== expectedDigest.algorithm ||
-        expectedCloudInit.digest.value !== expectedDigest.value
-      ) {
-        throw new Error(
-          'Remote application execution SSH identity does not match cloud-init authority.',
-        );
-      }
-
-      const address = journal.sshHost.address;
-      let hostKey;
-      try {
-        hostKey = validateHostKey(
-          await Reflect.apply(ports.readHostKey, undefined, [
-            { address, knownHostsPath: identity.knownHostsPath },
-          ]),
-          address,
-        );
-      } catch {
-        throw new Error(
-          'Remote application execution could not authenticate the pinned SSH host key.',
-        );
-      }
-      if (hostKey.fingerprint !== journal.sshHost.fingerprint) {
-        throw new Error(
-          'Remote application execution SSH host key conflicts with durable authority.',
-        );
-      }
-
-      const runRemoteArgv = transportRunner(
-        Reflect.apply(ports.createTransport, undefined, [
+    /** @type {Readonly<Record<string, any>>} */
+    let identity;
+    /** @type {Readonly<Record<string, any>>} */
+    let expectedCloudInit;
+    try {
+      identity = validateSshIdentity(
+        await Reflect.apply(ports.readIdentity, undefined, [
           {
-            address,
-            privateKeyPath: identity.privateKeyPath,
-            knownHostsPath: identity.knownHostsPath,
+            dataRoot,
+            deploymentInstanceId: journal.deploymentInstanceId,
+            incarnationId: journal.incarnationId,
           },
         ]),
       );
+      expectedCloudInit = createSingleNodeCloudInit({
+        deploymentInstanceId: journal.deploymentInstanceId,
+        incarnationId: journal.incarnationId,
+        publicKey: identity.publicKey,
+        publicKeyFingerprint: identity.publicKeyFingerprint,
+      });
+    } catch {
+      throw new Error(
+        'Remote application execution could not authenticate its local SSH identity.',
+      );
+    }
+    const expectedDigest = journal.providerIntent.intent.cloudInitDigest;
+    if (
+      expectedCloudInit.digest.algorithm !== expectedDigest.algorithm ||
+      expectedCloudInit.digest.value !== expectedDigest.value
+    ) {
+      throw new Error(
+        'Remote application execution SSH identity does not match cloud-init authority.',
+      );
+    }
 
-      let bootstrapOutcome;
-      try {
-        bootstrapOutcome = validateProcessOutcome(
-          await Reflect.apply(runRemoteArgv, undefined, [
-            {
-              argv: ['/usr/bin/cat', '--', SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH],
-              stdin: null,
-              timeoutMilliseconds: 20_000,
-              maximumStdoutBytes: MAX_BOOTSTRAP_IDENTITY_BYTES,
-              maximumStderrBytes: 8 * 1024,
-            },
-          ]),
-          MAX_BOOTSTRAP_IDENTITY_BYTES,
-          8 * 1024,
-          'singleNodeRemoteExec bootstrap identity',
-        );
-      } catch {
-        throw new Error(
-          'Remote application execution could not verify bootstrap identity.',
-        );
-      }
-      if (!succeeded(bootstrapOutcome)) {
-        throw new Error(
-          'Remote application execution could not verify bootstrap identity.',
-        );
-      }
-      let actualBootstrap;
-      try {
-        actualBootstrap = decodeJsonObject(
-          bootstrapOutcome.stdout,
-          MAX_BOOTSTRAP_IDENTITY_BYTES,
-          'singleNodeRemoteExec bootstrap identity',
-        );
-      } catch {
-        throw new Error(
-          'Remote application execution received invalid bootstrap identity evidence.',
-        );
-      }
-      if (!sameJson(actualBootstrap, expectedCloudInit.bootstrapIdentity)) {
-        throw new Error(
-          'Remote application execution bootstrap identity conflicts with durable authority.',
-        );
-      }
+    const address = journal.sshHost.address;
+    let hostKey;
+    try {
+      hostKey = validateHostKey(
+        await Reflect.apply(ports.readHostKey, undefined, [
+          { address, knownHostsPath: identity.knownHostsPath },
+        ]),
+        address,
+      );
+    } catch {
+      throw new Error(
+        'Remote application execution could not authenticate the pinned SSH host key.',
+      );
+    }
+    if (hostKey.fingerprint !== journal.sshHost.fingerprint) {
+      throw new Error(
+        'Remote application execution SSH host key conflicts with durable authority.',
+      );
+    }
 
-      let serviceOutcome;
-      try {
-        serviceOutcome = validateProcessOutcome(
-          await Reflect.apply(runRemoteArgv, undefined, [
-            {
-              argv: [
-                remoteArtifactPath,
-                'wharfie',
-                'service',
-                'status',
-                '--json',
-              ],
-              stdin: null,
-              timeoutMilliseconds: 2 * 60 * 1000,
-              maximumStdoutBytes: MAX_SERVICE_STATUS_BYTES,
-              maximumStderrBytes: 16 * 1024,
-            },
-          ]),
+    const runRemoteArgv = transportRunner(
+      Reflect.apply(ports.createTransport, undefined, [
+        {
+          address,
+          privateKeyPath: identity.privateKeyPath,
+          knownHostsPath: identity.knownHostsPath,
+        },
+      ]),
+    );
+
+    let bootstrapOutcome;
+    try {
+      bootstrapOutcome = validateProcessOutcome(
+        await Reflect.apply(runRemoteArgv, undefined, [
+          {
+            argv: ['/usr/bin/cat', '--', SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH],
+            stdin: null,
+            timeoutMilliseconds: 20_000,
+            maximumStdoutBytes: MAX_BOOTSTRAP_IDENTITY_BYTES,
+            maximumStderrBytes: 8 * 1024,
+          },
+        ]),
+        MAX_BOOTSTRAP_IDENTITY_BYTES,
+        8 * 1024,
+        'singleNodeRemoteExec bootstrap identity',
+      );
+    } catch {
+      throw new Error(
+        'Remote application execution could not verify bootstrap identity.',
+      );
+    }
+    if (!succeeded(bootstrapOutcome)) {
+      throw new Error(
+        'Remote application execution could not verify bootstrap identity.',
+      );
+    }
+    let actualBootstrap;
+    try {
+      actualBootstrap = decodeJsonObject(
+        bootstrapOutcome.stdout,
+        MAX_BOOTSTRAP_IDENTITY_BYTES,
+        'singleNodeRemoteExec bootstrap identity',
+      );
+    } catch {
+      throw new Error(
+        'Remote application execution received invalid bootstrap identity evidence.',
+      );
+    }
+    if (!sameJson(actualBootstrap, expectedCloudInit.bootstrapIdentity)) {
+      throw new Error(
+        'Remote application execution bootstrap identity conflicts with durable authority.',
+      );
+    }
+
+    let serviceOutcome;
+    try {
+      serviceOutcome = validateProcessOutcome(
+        await Reflect.apply(runRemoteArgv, undefined, [
+          {
+            argv: [
+              remoteArtifactPath,
+              'wharfie',
+              'service',
+              'status',
+              '--json',
+            ],
+            stdin: null,
+            timeoutMilliseconds: 2 * 60 * 1000,
+            maximumStdoutBytes: MAX_SERVICE_STATUS_BYTES,
+            maximumStderrBytes: 16 * 1024,
+          },
+        ]),
+        MAX_SERVICE_STATUS_BYTES,
+        16 * 1024,
+        'singleNodeRemoteExec service status',
+      );
+    } catch {
+      throw new Error(
+        'Remote application execution could not verify durable service status.',
+      );
+    }
+    if (!succeeded(serviceOutcome)) {
+      throw new Error(
+        'Remote application execution could not verify durable service status.',
+      );
+    }
+    try {
+      const validateStatus = coordinator
+        ? validateSingleNodeRemoteServiceIdentity
+        : validateSingleNodeRemoteServiceStatus;
+      validateStatus(
+        decodeJsonObject(
+          serviceOutcome.stdout,
           MAX_SERVICE_STATUS_BYTES,
-          16 * 1024,
           'singleNodeRemoteExec service status',
-        );
-      } catch {
-        throw new Error(
-          'Remote application execution could not verify durable service status.',
-        );
-      }
-      if (!succeeded(serviceOutcome)) {
-        throw new Error(
-          'Remote application execution could not verify durable service status.',
-        );
-      }
-      try {
-        validateSingleNodeRemoteServiceStatus(
-          decodeJsonObject(
-            serviceOutcome.stdout,
-            MAX_SERVICE_STATUS_BYTES,
-            'singleNodeRemoteExec service status',
-          ),
-          currentRelease.desired,
-        );
-      } catch {
-        throw new Error(
-          'Remote application execution service is not the exact healthy active release.',
-        );
-      }
+        ),
+        currentRelease.desired,
+      );
+    } catch {
+      throw new Error(
+        coordinator
+          ? 'Remote coordinator operation could not prove the exact installed release.'
+          : 'Remote application execution service is not the exact healthy active release.',
+      );
+    }
 
-      try {
-        return validateProcessOutcome(
-          await Reflect.apply(runRemoteArgv, undefined, [
-            {
-              argv: [remoteArtifactPath, ...argv],
-              stdin: null,
-              timeoutMilliseconds: SINGLE_NODE_REMOTE_EXEC_TIMEOUT_MILLISECONDS,
-              maximumStdoutBytes: SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES,
-              maximumStderrBytes: SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES,
-            },
-          ]),
-          SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES,
-          SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES,
-          'singleNodeRemoteExec application',
+    try {
+      return validateProcessOutcome(
+        await Reflect.apply(runRemoteArgv, undefined, [
+          {
+            argv: [remoteArtifactPath, ...argv],
+            stdin,
+            timeoutMilliseconds: SINGLE_NODE_REMOTE_EXEC_TIMEOUT_MILLISECONDS,
+            maximumStdoutBytes,
+            maximumStderrBytes: SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES,
+          },
+        ]),
+        maximumStdoutBytes,
+        SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES,
+        'singleNodeRemoteExec application',
+      );
+    } catch {
+      throw new Error(
+        coordinator
+          ? 'Remote coordinator operation returned no bounded outcome. If takeover may have run, retry the same inspection and request IDs.'
+          : 'Remote application execution failed before a bounded outcome was available.',
+      );
+    }
+  }
+
+  /**
+   * @param {import('./bounded-process.js').BoundedProcessOutcome} outcome - Remote outcome.
+   * @param {number} maximumBytes - Document size bound.
+   * @returns {Record<string, any>} - Complete successful JSON response.
+   */
+  function coordinatorDocument(outcome, maximumBytes) {
+    if (!succeeded(outcome)) {
+      if (outcome.status === 'exited' && outcome.exitCode !== null) {
+        const detail = renderTerminalSafeJson(
+          outcome.stderr.subarray(0, 4096).toString('utf8').trim(),
         );
-      } catch {
         throw new Error(
-          'Remote application execution failed before a bounded outcome was available.',
+          `Remote coordinator operation exited with status ${outcome.exitCode}: ${detail}. Retain the inspection and request IDs if the applied state is uncertain.`,
         );
       }
+      throw new Error(
+        'Remote coordinator operation did not return a successful receipt. If takeover may have run, retry the same inspection and request IDs.',
+      );
+    }
+    return decodeJsonObject(
+      outcome.stdout,
+      maximumBytes,
+      'remote coordinator response',
+    );
+  }
+
+  return Object.freeze({
+    /**
+     * @param {unknown} value - Existing journal, data root, and application argv.
+     * @returns {Promise<import('./bounded-process.js').BoundedProcessOutcome>} - Exact application outcome.
+     */
+    async execute(value) {
+      return await run(value);
+    },
+    /**
+     * @param {unknown} value - Existing journal and data root.
+     * @returns {Promise<Readonly<Record<string, any>>>} - Reusable exact authority inspection.
+     */
+    async inspectCoordinator(value) {
+      const input = snapshotExactObject(
+        value,
+        COORDINATOR_INSPECT_KEYS,
+        'singleNodeRemoteCoordinator.inspect',
+      );
+      const journal = validateSingleNodeDeploymentJournal(input.journal);
+      const appId = journal.providerIntent.intent.plan.desired.intent.appId;
+      const outcome = await run(
+        {
+          ...input,
+          journal,
+          argv: ['wharfie', 'coordinator', 'inspect', '--json'],
+        },
+        true,
+        null,
+        COORDINATOR_AUTHORITY_INSPECTION_MAX_BYTES,
+      );
+      return validateCoordinatorAuthorityInspectionDocument(
+        coordinatorDocument(
+          outcome,
+          COORDINATOR_AUTHORITY_INSPECTION_MAX_BYTES,
+        ),
+        appId,
+      );
+    },
+    /**
+     * @param {unknown} value - Exact retained inspection, stable IDs, journal, root, and confirmation.
+     * @returns {Promise<Readonly<Record<string, any>>>} - Replayable takeover-and-release receipt.
+     */
+    async takeoverCoordinator(value) {
+      const input = snapshotExactObject(
+        value,
+        COORDINATOR_TAKEOVER_KEYS,
+        'singleNodeRemoteCoordinator.takeover',
+      );
+      if (input.confirmAuthorityReplacement !== true) {
+        throw new Error(
+          'Remote coordinator takeover requires explicit authority replacement confirmation.',
+        );
+      }
+      const journal = validateSingleNodeDeploymentJournal(input.journal);
+      const appId = journal.providerIntent.intent.plan.desired.intent.appId;
+      const coordinatorId = assertLedgerOpaqueId(
+        input.coordinatorId,
+        'remote coordinator takeover coordinatorId',
+      );
+      const requestId = assertLedgerOpaqueId(
+        input.requestId,
+        'remote coordinator takeover requestId',
+      );
+      const inspection = validateCoordinatorAuthorityInspectionDocument(
+        input.inspection,
+        appId,
+        { requireActive: true },
+      );
+      const bytes = Buffer.from(
+        JSON.stringify(sortCanonicalJsonValue(inspection)),
+      );
+      const outcome = await run(
+        {
+          journal,
+          dataRoot: input.dataRoot,
+          argv: [
+            'wharfie',
+            'coordinator',
+            'takeover',
+            '--inspection-stdin',
+            '--coordinator-id',
+            coordinatorId,
+            '--request-id',
+            requestId,
+            '--confirm-authority-replacement',
+            '--json',
+          ],
+        },
+        true,
+        bytes,
+        COORDINATOR_AUTHORITY_TAKEOVER_RECEIPT_MAX_BYTES,
+      );
+      return validateCoordinatorAuthorityTakeoverReceipt(
+        coordinatorDocument(
+          outcome,
+          COORDINATOR_AUTHORITY_TAKEOVER_RECEIPT_MAX_BYTES,
+        ),
+        { appId, coordinatorId, requestId, inspection },
+      );
     },
   });
 }
@@ -610,6 +780,22 @@ export async function executeSingleNodeRemoteApplication(value) {
   return await Reflect.apply(productionExecutor.execute, undefined, [value]);
 }
 
+/**
+ * @param {unknown} value - Existing journal and data root.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Exact remote inspection.
+ */
+export async function inspectSingleNodeRemoteCoordinator(value) {
+  return await productionExecutor.inspectCoordinator(value);
+}
+
+/**
+ * @param {unknown} value - Explicit retained takeover request.
+ * @returns {Promise<Readonly<Record<string, any>>>} - Exact remote takeover receipt.
+ */
+export async function takeoverSingleNodeRemoteCoordinator(value) {
+  return await productionExecutor.takeoverCoordinator(value);
+}
+
 export default {
   SINGLE_NODE_REMOTE_EXEC_MAX_STDERR_BYTES,
   SINGLE_NODE_REMOTE_EXEC_MAX_STDOUT_BYTES,
@@ -617,4 +803,6 @@ export default {
   createProductionSingleNodeRemoteExecutor,
   createSingleNodeRemoteExecutor,
   executeSingleNodeRemoteApplication,
+  inspectSingleNodeRemoteCoordinator,
+  takeoverSingleNodeRemoteCoordinator,
 };

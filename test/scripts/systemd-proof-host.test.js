@@ -30,6 +30,7 @@ import {
   sealProofReceipt,
   verifyLimaImage,
   verifyProofHostHelper,
+  writeHostCleanup,
 } from '../../scripts/systemd-proof-host.js';
 
 const PINNED_CONFIG = readFileSync(
@@ -781,7 +782,102 @@ describe('frozen proof host helper', () => {
   });
 });
 
+describe('scenario-bound host cleanup evidence', () => {
+  test.each([
+    ['lifecycle', 'wharfie.systemd-proof.host-cleanup'],
+    ['steady-file', 'wharfie.steady-file-systemd-proof.host-cleanup'],
+    ['remote-recovery', 'wharfie.remote-recovery-proof.host-cleanup'],
+  ])(
+    'labels %s cleanup without changing its absence evidence',
+    (scenario, kind) => {
+      const directory = ownedRoot();
+      writeHostCleanup({
+        directory,
+        scenario,
+        commit: COMMIT,
+        instance: 'proof-owned',
+        limaHome: join(directory, 'deleted', 'lima'),
+        tempRoot: join(directory, 'deleted'),
+        instanceAbsent: true,
+        instanceRetained: false,
+        exitStatus: 1,
+      });
+      expect(
+        JSON.parse(readFileSync(join(directory, 'cleanup.json'), 'utf8')),
+      ).toMatchObject({
+        kind,
+        instanceAbsent: true,
+        instanceRetained: false,
+        taskRootAbsent: true,
+        privateImageCacheAbsent: true,
+        exitStatus: 1,
+      });
+    },
+  );
+});
+
 describe('pinned one-image Lima configuration', () => {
+  test.each(['arm64', 'x86_64'])(
+    'remote recovery selects its image and limits Rosetta to arm64 on %s',
+    (hostArch) => {
+      const config = readFileSync(
+        new URL('../systemd/remote-recovery-lima.yaml', import.meta.url),
+        'utf8',
+      );
+      const result = deriveLimaConfig({
+        config,
+        hostArch,
+        imagePath: join(ownedRoot(), 'image.img'),
+      });
+      expect(result.config.includes('rosetta:')).toBe(hostArch === 'arm64');
+      expect(result.config).toContain('plain: false\n');
+      expect(result.config).not.toMatch(/^rosetta:/m);
+      if (hostArch === 'arm64') {
+        expect(result.config).toContain(
+          'vmOpts:\n  vz:\n    rosetta:\n      enabled: true\n      binfmt: true\n',
+        );
+      }
+      expect(result.config).toContain(
+        'portForwards:\n  - guestIP: 0.0.0.0\n    proto: any\n    ignore: true\n',
+      );
+      expect(result.config.slice(result.config.indexOf('mounts:'))).toBe(
+        config.slice(config.indexOf('mounts:')),
+      );
+      expect(result.config.match(/^ {2}- location:/gm)).toHaveLength(1);
+      expect(result.originalConfigSha256).toBe(hash(config));
+      expect(result.derivedConfigSha256).toBe(hash(result.config));
+      expect(() =>
+        deriveLimaConfig({
+          config: config.replace('  binfmt: true', '  binfmt: false'),
+          hostArch,
+          imagePath: join(ownedRoot(), 'other.img'),
+        }),
+      ).toThrow('Unexpected values or nested keys before Lima images.');
+    },
+  );
+
+  test.each([
+    ['plain: false', 'plain: true'],
+    ['      binfmt: true', '      binfmt: false'],
+    ['  loadDotSSHPubKeys: false', '  loadDotSSHPubKeys: true'],
+    ['  forwardAgent: false', '  forwardAgent: true'],
+    ['    ignore: true', '    ignore: false'],
+    ['hostResolver:\n  enabled: false', 'hostResolver:\n  enabled: true'],
+    ['propagateProxyEnv: false', 'propagateProxyEnv: true'],
+  ])('refuses weakened Rosetta proof setting %s', (before, after) => {
+    const config = readFileSync(
+      new URL('../systemd/remote-recovery-lima.yaml', import.meta.url),
+      'utf8',
+    );
+    expect(() =>
+      deriveLimaConfig({
+        config: config.replace(before, after),
+        hostArch: 'arm64',
+        imagePath: join(ownedRoot(), 'image.img'),
+      }),
+    ).toThrow();
+  });
+
   test.each([
     ['arm64', 'aarch64', ARM_DIGEST, '-arm64.img'],
     ['aarch64', 'aarch64', ARM_DIGEST, '-arm64.img'],

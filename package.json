@@ -91,6 +91,7 @@
     "verify:release:preview": "node ./scripts/build-preview-release.js --check",
     "build:release:preview": "node ./scripts/build-preview-release.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
+    "verify:remote-recovery:systemd:lima": "WHARFIE_SYSTEMD_PROOF_SCENARIO=remote-recovery ./scripts/run-systemd-user-service-lima.sh",
     "verify:steady-file:systemd:lima": "./scripts/run-steady-file-preview-lima.sh",
     "verify:host:retained-storage:preflight": "node ./scripts/collect-aws-host-retained-storage-preflight-linux.js",
     "verify:host:retained-storage:preflight:sea:linux:docker:readiness": "node ./scripts/inspect-aws-host-retained-storage-host-preflight-sea-linux-docker-readiness.js",

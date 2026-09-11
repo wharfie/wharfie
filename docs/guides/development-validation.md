@@ -42,6 +42,13 @@ empty guard to allow future reports. Do not use recursive cleanup for a guard.
 
 ## Disposable Linux service proof
 
+`npm run verify:remote-recovery:systemd:lima -- --snapshot` runs the focused
+[packaged remote recovery proof](remote-recovery.md#reproduce-the-recovery-proof).
+It uses real SSH, systemd and packaged executables with a synthetic provider
+journal, and verifies recovery after SIGKILL plus safe replay against the healthy
+replacement. Native x64 GitHub CI runs the same proof; the Mac driver uses an
+owned Lima VM with Rosetta for the x64 payload on Apple Silicon.
+
 `npm run verify:service:systemd:lima` is a separate destructive gate for one
 newly owned Ubuntu VM on macOS with Lima 2.1 or newer and the pinned Node
 24.13.1 host runtime. It builds the installed npm package's SEAs, kills the

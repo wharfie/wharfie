@@ -265,3 +265,26 @@ by the application's packaged AWS/Hetzner deployment commands. Its service and
 workflow operator commands remain available. Existing AWS controller, graph,
 and host internals retain their component evidence; removal of that larger
 implementation still waits for replacement live proofs.
+
+## 2026-09-11 explicit remote coordinator recovery
+
+An unhealthy resident does not invalidate the identity of its installed release.
+Packaged `deployment coordinator inspect` and `takeover` therefore verify the
+journal-pinned host, bootstrap, managed installation, activation selection, and
+artifact integrity independently of runtime readiness. Ordinary `deployment exec`
+continues to require a healthy resident. Coordinator operations require an active
+journal with no pending release transition.
+
+Takeover uses the existing coordinator protocol: a caller-retained exact
+inspection, stable coordinator/request IDs, explicit replacement confirmation,
+and a replayable temporary takeover-and-release. The controller reads the local
+inspection file and transports bounded JSON stdin to fixed guest argv. The local
+deployment operation lock excludes concurrent update/destroy while authority is
+reread. No automatic inspection refresh or service stop is introduced; replay
+after a fresh resident starts preserves that resident. Existing `deployment
+recover` reconverges the committed service after authority repair.
+
+The focused Linux acceptance test uses real packaged executables, SSH and systemd
+with synthetic provider journal construction. It must prove a timer and unfinished
+run cross SIGKILL, then complete without repeated committed work. This is shared
+recovery evidence; live provider provisioning/lifecycle acceptance remains separate.

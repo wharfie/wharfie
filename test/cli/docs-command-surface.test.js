@@ -833,16 +833,13 @@ describe('docs command surface', () => {
       name: 'takeover',
       options: [
         '--inspection-file',
+        '--inspection-stdin',
         '--coordinator-id',
         '--request-id',
         '--confirm-authority-replacement',
         '--json',
       ],
-      requiredOptions: [
-        '--inspection-file',
-        '--coordinator-id',
-        '--request-id',
-      ],
+      requiredOptions: ['--coordinator-id', '--request-id'],
     });
     const packagedService = findCommand(packagedOperator, 'service');
     expectCommandShape(packagedService, {

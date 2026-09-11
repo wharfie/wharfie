@@ -266,7 +266,7 @@ log tail/search remain unsupported.
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
-AWS and Hetzner preview, apply, status, update, recover, exec, and destroy:
+AWS and Hetzner preview, apply, status, update, recover, exec, coordinator, and destroy:
 
 ```text
 <app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>... [--data-root <absolute>] [--json]
@@ -277,6 +277,8 @@ AWS and Hetzner preview, apply, status, update, recover, exec, and destroy:
 <next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]
 <app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]
 <app> wharfie deployment exec --deployment-instance <id> [--data-root <absolute>] [-- <application argv...>]
+<app> wharfie deployment coordinator inspect --deployment-instance <id> [--data-root <absolute>] [--json]
+<app> wharfie deployment coordinator takeover --deployment-instance <id> [--data-root <absolute>] --inspection-file <local-path> --coordinator-id <stable-id> --request-id <stable-id> --confirm-authority-replacement [--json]
 <app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]
 ```
 
@@ -310,6 +312,15 @@ Arguments after `--` are forwarded to only the journal-pinned active
 application SEA. Its bounded stdout and stderr bytes are relayed without
 formatting, and its observed remote exit code becomes the local exit code.
 Exec performs no provider reads or mutations.
+
+Coordinator inspection and explicit takeover verify the same pinned host and
+installed release while allowing an unhealthy resident. Takeover reads the
+inspection from a local controller file, sends it as bounded stdin, and retains
+the existing authority protocol's exact request replay. It neither stops a
+healthy replacement nor admits ordinary application execution before readiness.
+Pending deployment updates must be settled first. Follow the
+[remote recovery procedure](../../docs/guides/remote-recovery.md), then run
+`deployment recover` to restore service readiness.
 
 Update derives its target from the invoking SEA's authenticated embedded Linux
 payload. It leaves the committed release authoritative until exact remote

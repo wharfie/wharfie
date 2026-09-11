@@ -29,6 +29,9 @@ pin; published consumers may use the declared `>=24.13.1 <25` range.
 The deeper
 [single-host developer preview](./guides/developer-preview.md) installs the
 `steady-file` artifact as a Linux service and exercises its lifecycle. The
+[remote recovery guide](./guides/remote-recovery.md) covers inspecting and
+explicitly replacing a crashed deployment's coordinator from the packaged CLI.
+The
 [preview release guide](./guides/preview-release.md) defines the guarded npm
 `preview` channel, attested provider-free Linux x64 glibc standalone CLI, and
 maintainer release boundary.

@@ -1,0 +1,137 @@
+minimumLimaVersion: 2.1.0
+
+vmType: vz
+arch: default
+cpus: 4
+memory: 6GiB
+disk: 20GiB
+plain: false
+
+vmOpts:
+  vz:
+    rosetta:
+      enabled: true
+      binfmt: true
+
+images:
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
+    digest: sha256:cafa1a965b591b7c4184b484ffd8e625981a79d48f9b4ae8a4adf7b4c5ade927
+  - location: https://cloud-images.ubuntu.com/releases/noble/release-20260615/ubuntu-24.04-server-cloudimg-amd64.img
+    arch: x86_64
+    digest: sha256:5fa5b05e5ec239858c4531485d6023b0896448c2df7c63b34f8dae6ea6051a44
+
+mounts: []
+containerd:
+  system: false
+  user: false
+ssh:
+  loadDotSSHPubKeys: false
+  forwardAgent: false
+portForwards:
+  - guestIP: 0.0.0.0
+    proto: any
+    ignore: true
+hostResolver:
+  enabled: false
+propagateProxyEnv: false
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        git \
+        python3 \
+        rsync \
+        util-linux \
+        xz-utils
+      rm -rf /var/lib/apt/lists/*
+
+      node_version=24.13.1
+      case "$(uname -m)" in
+        aarch64)
+          node_arch=arm64
+          node_sha256=c827d3d301e2eed1a51f36d0116b71b9e3d9e3b728f081615270ea40faac34c1
+          ;;
+        x86_64)
+          node_arch=x64
+          node_sha256=30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089
+          ;;
+        *)
+          echo "Unsupported proof architecture: $(uname -m)" >&2
+          exit 1
+          ;;
+      esac
+      node_archive="node-v${node_version}-linux-${node_arch}.tar.xz"
+      if ! /usr/local/bin/node --version 2>/dev/null | grep -qx "v${node_version}"; then
+        curl --fail --location --silent --show-error \
+          "https://nodejs.org/dist/v${node_version}/${node_archive}" \
+          --output "/tmp/${node_archive}"
+        echo "${node_sha256}  /tmp/${node_archive}" | sha256sum --check --strict
+        tar --extract --xz --file "/tmp/${node_archive}" \
+          --directory /usr/local --strip-components 1
+        rm -f "/tmp/${node_archive}"
+      fi
+      if ! /usr/local/bin/npm --version 2>/dev/null | grep -qx '11.12.0'; then
+        /usr/local/bin/npm install --global --no-audit --no-fund npm@11.12.0
+      fi
+
+      loginctl enable-linger "{{.User}}"
+      # This whole machine is owned by the remote recovery proof. The normal
+      # Lima account builds; production OpenSSH uses its fixed wharfie account.
+      useradd --uid 60706 --create-home --shell /bin/bash wharfie
+      passwd --delete wharfie
+      loginctl enable-linger wharfie
+      install -d -m 0700 -o wharfie -g wharfie /home/wharfie/.ssh
+      install -d -m 0700 -o wharfie -g wharfie /home/wharfie/.local/share/wharfie-nodejs
+      install -d -m 0755 /etc/wharfie
+      # Rosetta executes the real x64 deployment SEA on Apple Silicon. Its
+      # native dependencies still require the guest x64 C/C++ libraries.
+      if test "$(uname -m)" = aarch64; then
+        dpkg --add-architecture amd64
+        sed -i '/^Types: deb$/a Architectures: arm64' /etc/apt/sources.list.d/ubuntu.sources
+        cat > /etc/apt/sources.list.d/wharfie-amd64.list <<'APT'
+      deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main universe
+      deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main universe
+      deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main universe
+      APT
+        apt-get update
+        apt-get install -y --no-install-recommends libc6:amd64 libstdc++6:amd64
+        rm -rf /var/lib/apt/lists/*
+        # Fail before packaging if this VM cannot execute the actual x64 Node
+        # release used by the deployment payload, including its dynamic loader.
+        x64_archive="node-v${node_version}-linux-x64.tar.xz"
+        curl --fail --location --silent --show-error \
+          "https://nodejs.org/dist/v${node_version}/${x64_archive}" \
+          --output "/tmp/${x64_archive}"
+        echo "30215f90ea3cd04dfbc06e762c021393fa173a1d392974298bbc871a8e461089  /tmp/${x64_archive}" | sha256sum --check --strict
+        install -d -m 0755 /opt/wharfie-proof-x64-node
+        tar --extract --xz --file "/tmp/${x64_archive}" \
+          --directory /opt/wharfie-proof-x64-node --strip-components 1
+        rm -f "/tmp/${x64_archive}"
+      fi
+
+probes:
+  - mode: readiness
+    description: exact Node, real x64 execution, and systemd user manager are ready
+    script: |
+      #!/bin/bash
+      set -eu -o pipefail
+      test "$(/usr/local/bin/node --version)" = v24.13.1
+      test "$(/usr/local/bin/npm --version)" = 11.12.0
+      test "$(loginctl show-user "$(id -u)" --property=Linger --value)" = yes
+      systemctl --user show-environment >/dev/null
+      x64_node=/usr/local/bin/node
+      if test "$(uname -m)" = aarch64; then
+        x64_node=/opt/wharfie-proof-x64-node/bin/node
+      fi
+      test "$(sudo -n -u wharfie "$x64_node" -p 'process.arch + ":" + process.version')" = x64:v24.13.1
+    hint: |
+      Node 24.13.1, real x64 execution, lingering, or the user manager did not become ready.

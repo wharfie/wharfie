@@ -38,8 +38,15 @@ case "${SCENARIO}" in
     GUEST_PREPARE_NAME="steady-file-prepare.json"
     GUEST_FINAL_NAME="steady-file-final.json"
     ;;
+  remote-recovery)
+    DEFAULT_INSTANCE="wfsr-$$"
+    DEFAULT_OUTPUT_ROOT="${REPO_ROOT}/llm_artifacts/remote-recovery-proof"
+    PROOF_UNIT_NAME="wharfie-remote-recovery-proof.service"
+    GUEST_PREPARE_NAME="remote-recovery-prepare.json"
+    GUEST_FINAL_NAME="remote-recovery-final.json"
+    ;;
   *)
-    echo "WHARFIE_SYSTEMD_PROOF_SCENARIO must be lifecycle or steady-file." >&2
+    echo "WHARFIE_SYSTEMD_PROOF_SCENARIO must be lifecycle, steady-file, or remote-recovery." >&2
     exit 1
     ;;
 esac
@@ -244,21 +251,44 @@ cleanup() {
   set +e
   if [[ "${status}" -ne 0 && "${CREATED}" -eq 1 && -n "${RECEIPT_STAGING}" && ! -f "${RECEIPT_STAGING}/SHA256SUMS" ]]; then
     if instance_is_listed; then
+      if [[ "${SCENARIO}" == "remote-recovery" ]]; then
+        for evidence in remote-recovery-prepare.json remote-recovery-final.json remote-recovery-failure.json; do
+          if lima shell --tty=false "${INSTANCE}" /usr/bin/test -f "${GUEST_PROOF_ROOT}/${evidence}"; then
+            lima copy --backend=scp \
+              "${INSTANCE}:${GUEST_PROOF_ROOT}/${evidence}" \
+              "${RECEIPT_STAGING}/${evidence}" || true
+          fi
+        done
+      fi
       if lima shell --tty=false "${INSTANCE}" \
         /usr/bin/test -f "${GUEST_PROOF_ROOT}/failure.json"; then
         lima copy --backend=scp \
           "${INSTANCE}:${GUEST_PROOF_ROOT}/failure.json" \
           "${RECEIPT_STAGING}/failure.json" || true
       fi
-      lima shell --tty=false "${INSTANCE}" \
-        /usr/bin/systemctl --user status \
-        "${PROOF_UNIT_NAME}" \
-        --no-pager --full > "${RECEIPT_STAGING}/systemd-status.log" || true
-      lima shell --tty=false "${INSTANCE}" \
-        /usr/bin/journalctl --user \
-        --boot=0 \
-        --unit="${PROOF_UNIT_NAME}" \
-        --no-pager > "${RECEIPT_STAGING}/service-journal.log" || true
+      if [[ "${SCENARIO}" == "remote-recovery" ]]; then
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/sudo -n -u wharfie /usr/bin/env -i \
+          HOME=/home/wharfie USER=wharfie LOGNAME=wharfie PATH=/usr/bin:/bin \
+          XDG_RUNTIME_DIR=/run/user/60706 \
+          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/60706/bus \
+          /usr/bin/systemctl --user status "${PROOF_UNIT_NAME}" \
+          --no-pager --full > "${RECEIPT_STAGING}/systemd-status.log" || true
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/sudo -n /usr/bin/journalctl --boot=0 \
+          _UID=60706 "_SYSTEMD_USER_UNIT=${PROOF_UNIT_NAME}" \
+          --lines=200 --no-pager > "${RECEIPT_STAGING}/service-journal.log" || true
+      else
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/systemctl --user status \
+          "${PROOF_UNIT_NAME}" \
+          --no-pager --full > "${RECEIPT_STAGING}/systemd-status.log" || true
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/journalctl --user \
+          --boot=0 \
+          --unit="${PROOF_UNIT_NAME}" \
+          --no-pager > "${RECEIPT_STAGING}/service-journal.log" || true
+      fi
       if [[ "${SCENARIO}" == "lifecycle" ]]; then
         lima shell --tty=false "${INSTANCE}" \
           /usr/bin/sudo /usr/bin/journalctl \
@@ -307,7 +337,7 @@ mkdir "${PROOF_LIMA_HOME}" "${PROOF_CACHE_ROOT}" "${TEMP_ROOT}/tmp" "${TEMP_ROOT
 cp "${HOST_HELPER_SOURCE}" "${HOST_HELPER}"
 host paths "${PROOF_LIMA_HOME}" "${INSTANCE}"
 
-COMMIT="$(host source "${SOURCE_MODE}" "${REPO_ROOT}" "${SOURCE_ROOT}")"
+COMMIT="$(host source "${SOURCE_MODE}" "${REPO_ROOT}" "${SOURCE_ROOT}" "${SCENARIO}")"
 host verify-helper "${SOURCE_ROOT}/source-provenance.json"
 RECEIPT_STAGING="$(host reserve "${OUTPUT_ROOT}" "${COMMIT}" "${TEMP_ROOT}")"
 cp "${HOST_HELPER}" "${RECEIPT_STAGING}/host-helper.mjs"
@@ -341,7 +371,13 @@ host verify-image "${IMAGE_PLAN}"
 copy_host_evidence
 
 CREATED=1
-lima create --tty=false --mount-none --plain --containerd none --name "${INSTANCE}" "${CONFIG_PATH}"
+if [[ "${SCENARIO}" == "remote-recovery" ]]; then
+  # Plain mode disables Rosetta. This reviewed config explicitly disables
+  # host mounts, automatic port forwarding, SSH agent forwarding and containerd.
+  lima create --tty=false --mount-none --containerd none --name "${INSTANCE}" "${CONFIG_PATH}"
+else
+  lima create --tty=false --mount-none --plain --containerd none --name "${INSTANCE}" "${CONFIG_PATH}"
+fi
 lima start --tty=false "${INSTANCE}"
 lima copy --backend=scp "${ARCHIVE_PATH}" "${INSTANCE}:/tmp/wharfie-systemd-proof-repo.tar"
 lima shell --tty=false "${INSTANCE}" /bin/bash -lc \
@@ -372,7 +408,7 @@ if [[ "${SCENARIO}" == "lifecycle" ]]; then
     verify \
     "${GUEST_REPO}" > "${VERIFY_LOG}"
   echo "Verified pre-login fail-closed boot and explicit recovery, both partial-adoption process kills, activation recovery, and retained history/output."
-else
+elif [[ "${SCENARIO}" == "steady-file" ]]; then
   lima shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
     /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
     "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
@@ -393,6 +429,14 @@ else
     verify \
     "${GUEST_REPO}" > "${VERIFY_LOG}"
   echo "Returned in a new verifier, observed unfinished work, read its result, updated, rolled back, uninstalled, and purged app data."
+else
+  lima shell --tty=false --workdir "${GUEST_REPO}" "${INSTANCE}" \
+    /usr/bin/env "WHARFIE_SYSTEMD_PROOF_COMMIT=${COMMIT}" \
+    "WHARFIE_SYSTEMD_PROOF_DISPOSABLE=lima" \
+    /usr/local/bin/node \
+    scripts/verify-single-node-remote-recovery-linux.js \
+    "${GUEST_REPO}" > "${VERIFY_LOG}"
+  echo "Verified the packaged coordinator diagnosis, confirmed takeover, and deployment recovery over real loopback SSH."
 fi
 
 lima copy --backend=scp \
@@ -421,7 +465,9 @@ RECEIPT_STAGING=""
 
 if [[ "${SCENARIO}" == "lifecycle" ]]; then
   echo "Verified Wharfie systemd reboot and two-release activation proof for ${COMMIT}."
-else
+elif [[ "${SCENARIO}" == "steady-file" ]]; then
   echo "Verified the literal steady-file systemd lifecycle for ${COMMIT}."
+else
+  echo "Verified packaged remote crash recovery with synthetic provider authority for ${COMMIT}."
 fi
 echo "Receipts: ${RECEIPT_DIRECTORY}"

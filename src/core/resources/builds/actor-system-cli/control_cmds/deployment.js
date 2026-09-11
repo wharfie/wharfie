@@ -39,7 +39,14 @@ import {
 } from '../../../../runtime/single-node-deployment-status.js';
 import { resolveStableLocalAppDataRoot } from '../../../../runtime/local-app-storage.js';
 import { readEmbeddedSingleNodeDeploymentPayload } from '../../../../runtime/single-node-deployment-payload.js';
-import { executeSingleNodeRemoteApplication } from '../../../../runtime/single-node-remote-exec.js';
+import {
+  executeSingleNodeRemoteApplication,
+  inspectSingleNodeRemoteCoordinator,
+  takeoverSingleNodeRemoteCoordinator,
+} from '../../../../runtime/single-node-remote-exec.js';
+import { acquireSingleNodeDeploymentOperationLock } from '../../../../runtime/single-node-deployment-operation-lock.js';
+import { createCoordinatorAuthorityCommand } from '../../../../runtime/operator/coordinator-authority-command.js';
+import { readOperatorJsonObjectFile } from '../../../../runtime/operator/json-document-file.js';
 import { SINGLE_NODE_REMOTE_ACTIVATION_EVIDENCE_ID_PREFIX } from '../../../../runtime/single-node-remote-activation.js';
 import { inspectSingleNodeRemoteStatus } from '../../../../runtime/single-node-remote-status.js';
 import { createAwsSingleNodePreview } from '../../../../runtime/providers/aws/single-node-preview.js';
@@ -547,6 +554,10 @@ function combineCleanupError(operationError, cleanupError, operation) {
  *   createStatusReceipt?: typeof createSingleNodeDeploymentStatus,
  *   inspectRemoteStatus?: typeof inspectSingleNodeRemoteStatus,
  *   executeRemote?: typeof executeSingleNodeRemoteApplication,
+ *   inspectRemoteCoordinator?: typeof inspectSingleNodeRemoteCoordinator,
+ *   takeoverRemoteCoordinator?: typeof takeoverSingleNodeRemoteCoordinator,
+ *   readCoordinatorInspectionFile?: typeof readOperatorJsonObjectFile,
+ *   acquireOperationLock?: typeof acquireSingleNodeDeploymentOperationLock,
  *   resolveDataRoot?: typeof resolveStableLocalAppDataRoot,
  *   requireAwsProvider?: typeof requireAwsProvider,
  *   output?: Partial<PackagedDeploymentCommandOutput>,
@@ -604,6 +615,12 @@ export function createPackagedDeploymentCommand(options = {}) {
     options.inspectRemoteStatus || inspectSingleNodeRemoteStatus;
   const executeRemote =
     options.executeRemote || executeSingleNodeRemoteApplication;
+  const inspectRemoteCoordinator =
+    options.inspectRemoteCoordinator || inspectSingleNodeRemoteCoordinator;
+  const takeoverRemoteCoordinator =
+    options.takeoverRemoteCoordinator || takeoverSingleNodeRemoteCoordinator;
+  const acquireOperationLock =
+    options.acquireOperationLock || acquireSingleNodeDeploymentOperationLock;
   const requireProvider = options.requireAwsProvider || requireAwsProvider;
   const output = resolveOutput(options.output);
   const processRef = options.processRef || process;
@@ -681,7 +698,7 @@ export function createPackagedDeploymentCommand(options = {}) {
    * Read one exact app-scoped journal without accepting mutable provider or
    * release selectors from the command line.
    * @param {Record<string, any>} commandOptions - Commander option snapshot.
-   * @param {'status'|'exec'|'update'|'recover'|'destroy'} operation - Public operation name.
+   * @param {'status'|'exec'|'update'|'recover'|'destroy'|'coordinator'} operation - Public operation name.
    * @returns {Promise<PackagedDeploymentJournalAuthority>} - Durable authority and store context.
    */
   async function readJournalAuthority(commandOptions, operation) {
@@ -1489,6 +1506,110 @@ export function createPackagedDeploymentCommand(options = {}) {
       processRef.exitCode = result.exitCode;
     });
 
+  const coordinator = createCoordinatorAuthorityCommand({
+    resolveIdentity: async () => {
+      const authority = await readJournalAuthority(
+        coordinator.opts(),
+        'coordinator',
+      );
+      return { appId: authority.appId };
+    },
+    readJsonObjectFile:
+      options.readCoordinatorInspectionFile || readOperatorJsonObjectFile,
+    inspectAuthority: async ({ appId }) => {
+      const { journal, dataRoot } = await readJournalAuthority(
+        coordinator.opts(),
+        'coordinator',
+      );
+      if (journal.providerIntent.intent.plan.desired.intent.appId !== appId) {
+        throw new Error(
+          'Remote coordinator application authority changed during inspection.',
+        );
+      }
+      return await inspectRemoteCoordinator({ journal, dataRoot });
+    },
+    takeoverAuthority: async ({
+      appId,
+      inspection,
+      coordinatorId,
+      requestId,
+      confirmAuthorityReplacement,
+    }) => {
+      // Hold the same local process lock as update/destroy, and re-read the
+      // journal under it. A retained inspection never pins a stale deployment
+      // release across a concurrent local lifecycle operation.
+      const releaseLock = await acquireOperationLock(
+        coordinator.opts().deploymentInstance,
+      );
+      if (typeof releaseLock !== 'function') {
+        throw new TypeError(
+          'Remote coordinator operation lock must return release().',
+        );
+      }
+      /** @type {unknown} */
+      let primaryError;
+      let failed = false;
+      /** @type {Readonly<Record<string, any>>|undefined} */
+      let result;
+      try {
+        const { journal, dataRoot } = await readJournalAuthority(
+          coordinator.opts(),
+          'coordinator',
+        );
+        if (journal.providerIntent.intent.plan.desired.intent.appId !== appId) {
+          throw new Error(
+            'Remote coordinator application authority changed during takeover.',
+          );
+        }
+        result = await takeoverRemoteCoordinator({
+          journal,
+          dataRoot,
+          inspection,
+          coordinatorId,
+          requestId,
+          confirmAuthorityReplacement,
+        });
+      } catch (error) {
+        failed = true;
+        primaryError = error;
+      }
+      try {
+        await releaseLock();
+      } catch (cleanupError) {
+        if (failed) {
+          throw new AggregateError(
+            [primaryError, cleanupError],
+            'Remote coordinator takeover failed and operation lock cleanup was incomplete.',
+            { cause: primaryError },
+          );
+        }
+        throw cleanupError;
+      }
+      if (failed) throw primaryError;
+      return /** @type {Readonly<Record<string, any>>} */ (result);
+    },
+    output: {
+      json: output.json,
+      table: (rows) => output.line(JSON.stringify(rows)),
+      info: output.line,
+      failure: output.failure,
+    },
+    processRef,
+  })
+    .description(
+      'Inspect or explicitly fence the pinned remote coordinator, including while the resident is unhealthy',
+    )
+    .requiredOption(
+      '--deployment-instance <instance-id>',
+      'Exact durable deployment instance identity',
+      parseSingleOption('--deployment-instance'),
+    )
+    .option(
+      '--data-root <absolute>',
+      'Stable local deployment authority root',
+      parseSingleOption('--data-root'),
+    );
+
   const destroy = new Command('destroy')
     .description(
       'Destroy or recover destruction of one locally authorized cloud node',
@@ -1568,6 +1689,7 @@ export function createPackagedDeploymentCommand(options = {}) {
     .addCommand(update)
     .addCommand(recover)
     .addCommand(exec)
+    .addCommand(coordinator)
     .addCommand(destroy);
 }
 

@@ -12,6 +12,12 @@ const MAX_SOURCE_FILES = 20000;
 const MAX_SOURCE_ARCHIVE_BYTES =
   MAX_SOURCE_BYTES + MAX_SOURCE_FILES * 1024 + 64 * 1024;
 const CONFIG_RELATIVE_PATH = 'test/systemd/lima.yaml';
+const REMOTE_RECOVERY_CONFIG_RELATIVE_PATH =
+  'test/systemd/remote-recovery-lima.yaml';
+const REMOTE_RECOVERY_ROSETTA =
+  'vmOpts:\n  vz:\n    rosetta:\n      enabled: true\n      binfmt: true\n\n';
+const REMOTE_RECOVERY_ISOLATION =
+  'ssh:\n  loadDotSSHPubKeys: false\n  forwardAgent: false\nportForwards:\n  - guestIP: 0.0.0.0\n    proto: any\n    ignore: true\nhostResolver:\n  enabled: false\npropagateProxyEnv: false\n';
 const SAFE_ROOT_NPMRC = Buffer.from(
   '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\nregistry=https://registry.npmjs.org/\n',
   'utf8',
@@ -517,11 +523,15 @@ function writeJson(target, value) {
  * Create immutable source evidence without staging, committing, cleaning or
  * otherwise writing to the user's Git repository. Snapshot commits exist only
  * in a newly initialized, independent repository below the owned output root.
- * @param {{repoRoot: string, outputRoot: string, mode: 'commit' | 'snapshot'}} options - Explicit source mode and fresh private destination.
+ * @param {{repoRoot: string, outputRoot: string, mode: 'commit' | 'snapshot', scenario?: string}} options - Explicit source mode and fresh private destination.
  * @param {{afterCapture?: () => void}} [ports] - Focused race-test observation seam.
  * @returns {Record<string, any>} - Durable source provenance, also written to disk.
  */
 export function createProofSource(options, ports = {}) {
+  const configRelativePath =
+    options.scenario === 'remote-recovery'
+      ? REMOTE_RECOVERY_CONFIG_RELATIVE_PATH
+      : CONFIG_RELATIVE_PATH;
   assert.ok(
     ['commit', 'snapshot'].includes(options.mode),
     'Source mode must be commit or snapshot.',
@@ -561,7 +571,7 @@ export function createProofSource(options, ports = {}) {
       ? captureHeadFiles(repoRoot, before.head, privateRepo, config)
       : captureFiles(repoRoot, before.paths, privateRepo);
   assert.ok(
-    capture.files.some((file) => file.path === CONFIG_RELATIVE_PATH),
+    capture.files.some((file) => file.path === configRelativePath),
     'Source must include the pinned systemd Lima config.',
   );
   const sourceTreeSha256 = sha256(JSON.stringify(capture));
@@ -688,7 +698,7 @@ export function createProofSource(options, ports = {}) {
     'Proof source archive exceeds its bounded maximum size.',
   );
   fs.copyFileSync(
-    path.join(privateRepo, CONFIG_RELATIVE_PATH),
+    path.join(privateRepo, configRelativePath),
     path.join(outputRoot, 'lima-original.yaml'),
     fs.constants.COPYFILE_EXCL,
   );
@@ -775,7 +785,8 @@ export function assertLimaSocketPath({ limaHome, instance }) {
 
 /**
  * A closed parser for this repository's pinned config, not a general YAML
- * parser. Only the images block changes; provision/probes remain byte-identical.
+ * parser. The images block changes and x64 hosts omit the fixed Rosetta block;
+ * provision/probes remain byte-identical.
  * Refuse includes, remote fallbacks, extra top-level keys, mounts or downloads
  * introduced outside that deliberately narrow config surface.
  * @param {{config: string, hostArch: string, imagePath: string}} options - Immutable config bytes and owned local image.
@@ -783,6 +794,7 @@ export function assertLimaSocketPath({ limaHome, instance }) {
  */
 export function deriveLimaConfig({ config, hostArch, imagePath }) {
   assertSafeAbsolutePath(imagePath, true);
+  const usesRosetta = config.includes('\nvmOpts:\n');
   const arch =
     hostArch === 'arm64' || hostArch === 'aarch64'
       ? 'aarch64'
@@ -811,9 +823,13 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
       'memory',
       'disk',
       'plain',
+      ...(usesRosetta ? ['vmOpts'] : []),
       'images',
       'mounts',
       'containerd',
+      ...(usesRosetta
+        ? ['ssh', 'portForwards', 'hostResolver', 'propagateProxyEnv']
+        : []),
       'provision',
       'probes',
     ],
@@ -822,8 +838,10 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
   assert.ok(
     /^vmType: vz$/m.test(config) &&
       /^arch: default$/m.test(config) &&
-      /^plain: true$/m.test(config),
-    'Lima proof must use plain native VZ mode.',
+      (usesRosetta
+        ? /^plain: false$/m.test(config)
+        : /^plain: true$/m.test(config)),
+    'Lima proof must use the reviewed native VZ isolation profile.',
   );
   assert.ok(
     /^mounts: \[\]\ncontainerd:\n {2}system: false\n {2}user: false\n/m.test(
@@ -841,13 +859,13 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
   );
   assert.match(
     config.slice(0, match.index),
-    /^minimumLimaVersion: \d+\.\d+\.\d+\n\nvmType: vz\narch: default\ncpus: [1-9]\d*\nmemory: [1-9]\d*(?:MiB|GiB)\ndisk: [1-9]\d*(?:MiB|GiB)\nplain: true\n\n$/,
+    /^minimumLimaVersion: \d+\.\d+\.\d+\n\nvmType: vz\narch: default\ncpus: [1-9]\d*\nmemory: [1-9]\d*(?:MiB|GiB)\ndisk: [1-9]\d*(?:MiB|GiB)\n(?:plain: true\n\n|plain: false\n\nvmOpts:\n {2}vz:\n {4}rosetta:\n {6}enabled: true\n {6}binfmt: true\n\n)$/,
     'Unexpected values or nested keys before Lima images.',
   );
   const provisionIndex = config.indexOf('\nprovision:\n');
   assert.equal(
     config.slice(match.index + match[0].length, provisionIndex + 1),
-    '\nmounts: []\ncontainerd:\n  system: false\n  user: false\n\n',
+    `\nmounts: []\ncontainerd:\n  system: false\n  user: false\n${usesRosetta ? REMOTE_RECOVERY_ISOLATION : ''}\n`,
     'Unexpected Lima mounts/containerd configuration.',
   );
   const probesIndex = config.indexOf('\nprobes:\n');
@@ -894,10 +912,13 @@ export function deriveLimaConfig({ config, hostArch, imagePath }) {
     url.pathname.endsWith(expectedSuffix),
     'Pinned image URL does not match its architecture.',
   );
-  const derived = config.replace(
+  let derived = config.replace(
     match[0],
     `images:\n  - location: ${JSON.stringify(imagePath)}\n    arch: ${arch}\n    digest: ${selected[3]}\n`,
   );
+  if (arch === 'x86_64') {
+    derived = derived.replace(REMOTE_RECOVERY_ROSETTA, '');
+  }
   return {
     config: derived,
     arch,
@@ -1108,7 +1129,9 @@ export function writeHostCleanup(options) {
   const kind =
     options.scenario === 'lifecycle'
       ? 'wharfie.systemd-proof.host-cleanup'
-      : 'wharfie.steady-file-systemd-proof.host-cleanup';
+      : options.scenario === 'remote-recovery'
+        ? 'wharfie.remote-recovery-proof.host-cleanup'
+        : 'wharfie.steady-file-systemd-proof.host-cleanup';
   writeJson(path.join(options.directory, 'cleanup.json'), {
     schemaVersion: 1,
     kind,
@@ -1351,11 +1374,11 @@ function main(args) {
   const [command, ...values] = args;
   switch (command) {
     case 'source': {
-      assert.equal(values.length, 3);
-      const [mode, repoRoot, outputRoot] = values;
+      assert.ok(values.length === 3 || values.length === 4);
+      const [mode, repoRoot, outputRoot, scenario] = values;
       assert.ok(mode === 'commit' || mode === 'snapshot');
       process.stdout.write(
-        `${createProofSource({ mode, repoRoot, outputRoot }).commit}\n`,
+        `${createProofSource({ mode, repoRoot, outputRoot, scenario }).commit}\n`,
       );
       break;
     }
