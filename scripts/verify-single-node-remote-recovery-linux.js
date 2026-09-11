@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 import { createBoundedProcessRunner } from '../src/core/runtime/bounded-process.js';
 import { sha256Base64Url } from '../src/core/runtime/content-id.js';
+import { createDeploymentOpenSshTransport } from '../src/core/runtime/deployment-openssh-transport.js';
 import { createDeploymentSshIdentityStore } from '../src/core/runtime/deployment-ssh-identity.js';
 import {
   createHetznerProvisionedResourceRecord,
@@ -41,7 +42,10 @@ import {
   recordSingleNodeDeploymentSshHost,
   settleSingleNodeDeploymentReleaseTransition,
 } from '../src/core/runtime/single-node-deployment-journal.js';
-import { createProductionSingleNodeRemoteActivator } from '../src/core/runtime/single-node-remote-activation.js';
+import {
+  createSingleNodeRemoteActivator,
+  getSingleNodeRemoteArtifactPaths,
+} from '../src/core/runtime/single-node-remote-activation.js';
 import { createPackageTarball } from './package-verification.js';
 // Keep the independent builder in the proof's checked import graph. Importing
 // it performs no work; only the separate process invokes its entrypoint.
@@ -58,6 +62,7 @@ const TIMER_DELAY_MS = 60_000;
 let currentPhase = 'preflight';
 let lastProcess = null;
 let failedProcess = null;
+let failedRemoteService = null;
 let ownsProofRoot = false;
 const LOCATION = Object.freeze({
   id: 1,
@@ -144,6 +149,35 @@ function readPackageProgress() {
   } catch {
     return null;
   }
+}
+
+/** Keep only bounded diagnostics for the proof's two public service commands. */
+export function remoteRecoveryServiceFailureContext(
+  remotePath,
+  request,
+  outcome,
+) {
+  const argv = /** @type {{argv: string[]}} */ (request).argv;
+  if (
+    argv.length !== 5 ||
+    argv[0] !== remotePath ||
+    argv[1] !== 'wharfie' ||
+    argv[2] !== 'service' ||
+    !['converge', 'status'].includes(argv[3]) ||
+    argv[4] !== '--json' ||
+    (outcome.status === 'exited' && outcome.exitCode === 0)
+  ) {
+    return null;
+  }
+  return {
+    operation: argv[3],
+    status: outcome.status,
+    exitCode: outcome.exitCode,
+    signal: outcome.signal,
+    timedOut: outcome.timedOut,
+    stdout: outcome.stdout.subarray(0, 8192).toString('utf8'),
+    stderr: outcome.stderr.subarray(0, 8192).toString('utf8'),
+  };
 }
 
 /** Poll one finite observation under an overall monotonic deadline. */
@@ -507,15 +541,41 @@ export async function verifySingleNodeRemoteRecovery(repoRoot) {
       }
     }
     await commit(advanceSingleNodeDeploymentJournal(journal, 'provisioned'));
-    const activation =
-      await createProductionSingleNodeRemoteActivator().activate({
-        desired,
-        incarnationId,
-        providerAddress: ADDRESS,
-        retainedArtifactIds: [artifact.record.artifactId],
-        sshIdentity: identity,
-        artifactPath: artifact.path,
-      });
+    remotePath = getSingleNodeRemoteArtifactPaths(
+      desired,
+      incarnationId,
+    ).remoteArtifactPath;
+    announce('initial-real-ssh-service-activation');
+    const activation = await createSingleNodeRemoteActivator({
+      runProcess: createBoundedProcessRunner(),
+      createTransport(options) {
+        const transport = createDeploymentOpenSshTransport(options);
+        return {
+          async runRemoteArgv(request) {
+            const outcome = await transport.runRemoteArgv(request);
+            const context = remoteRecoveryServiceFailureContext(
+              remotePath,
+              request,
+              outcome,
+            );
+            if (context) {
+              // These two proof-owned public commands receive no secrets. Keep
+              // only their bounded result, never SSH argv, input or environment.
+              failedRemoteService = context;
+              process.stderr.write(`${JSON.stringify(failedRemoteService)}\n`);
+            }
+            return outcome;
+          },
+        };
+      },
+    }).activate({
+      desired,
+      incarnationId,
+      providerAddress: ADDRESS,
+      retainedArtifactIds: [artifact.record.artifactId],
+      sshIdentity: identity,
+      artifactPath: artifact.path,
+    });
     remotePath = activation.artifact.remotePath;
     await commit(
       recordSingleNodeDeploymentSshHost(journal, {
@@ -774,8 +834,8 @@ if (
   try {
     await verifySingleNodeRemoteRecovery(path.resolve(process.argv[2] || '.'));
   } catch (error) {
-    // Upload only bounded execution context; command output, argv, journal
-    // state, environment and SSH keys are deliberately excluded.
+    // Upload bounded context and only failed public service-command output.
+    // SSH argv/input, journal state, environment and keys remain excluded.
     if (ownsProofRoot) {
       receipt('remote-recovery-failure.json', {
         schemaVersion: 1,
@@ -784,6 +844,7 @@ if (
         phase: currentPhase,
         packageProgress: readPackageProgress(),
         process: failedProcess || lastProcess,
+        remoteService: failedRemoteService,
         errorName: error instanceof Error ? error.name : 'UnknownFailure',
       });
     }

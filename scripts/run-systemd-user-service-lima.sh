@@ -266,15 +266,29 @@ cleanup() {
           "${INSTANCE}:${GUEST_PROOF_ROOT}/failure.json" \
           "${RECEIPT_STAGING}/failure.json" || true
       fi
-      lima shell --tty=false "${INSTANCE}" \
-        /usr/bin/systemctl --user status \
-        "${PROOF_UNIT_NAME}" \
-        --no-pager --full > "${RECEIPT_STAGING}/systemd-status.log" || true
-      lima shell --tty=false "${INSTANCE}" \
-        /usr/bin/journalctl --user \
-        --boot=0 \
-        --unit="${PROOF_UNIT_NAME}" \
-        --no-pager > "${RECEIPT_STAGING}/service-journal.log" || true
+      if [[ "${SCENARIO}" == "remote-recovery" ]]; then
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/sudo -n -u wharfie /usr/bin/env -i \
+          HOME=/home/wharfie USER=wharfie LOGNAME=wharfie PATH=/usr/bin:/bin \
+          XDG_RUNTIME_DIR=/run/user/60706 \
+          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/60706/bus \
+          /usr/bin/systemctl --user status "${PROOF_UNIT_NAME}" \
+          --no-pager --full > "${RECEIPT_STAGING}/systemd-status.log" || true
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/sudo -n /usr/bin/journalctl --boot=0 \
+          _UID=60706 "_SYSTEMD_USER_UNIT=${PROOF_UNIT_NAME}" \
+          --lines=200 --no-pager > "${RECEIPT_STAGING}/service-journal.log" || true
+      else
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/systemctl --user status \
+          "${PROOF_UNIT_NAME}" \
+          --no-pager --full > "${RECEIPT_STAGING}/systemd-status.log" || true
+        lima shell --tty=false "${INSTANCE}" \
+          /usr/bin/journalctl --user \
+          --boot=0 \
+          --unit="${PROOF_UNIT_NAME}" \
+          --no-pager > "${RECEIPT_STAGING}/service-journal.log" || true
+      fi
       if [[ "${SCENARIO}" == "lifecycle" ]]; then
         lima shell --tty=false "${INSTANCE}" \
           /usr/bin/sudo /usr/bin/journalctl \
