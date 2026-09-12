@@ -13,6 +13,7 @@
     "scripts/verify-steady-file-systemd-linux.js",
     "scripts/verify-systemd-user-service-linux.js",
     "scripts/verify-single-node-remote-recovery-linux.js",
+    "scripts/verify-live-deployment.js",
     "test/systemd/boot-check.js"
   ],
   "include": []

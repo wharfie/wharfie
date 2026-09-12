@@ -90,3 +90,8 @@ The provider inventory and initial deployment journal are synthetic. This proves
 the shared packaged recovery path; live AWS and Hetzner provisioning and lifecycle
 acceptance remain separate checks. Lima retains checksummed proof receipts and
 cleanup evidence; CI retains the bounded, explicitly selected JSON receipts.
+
+The [live deployment acceptance runner](live-deployment-acceptance.md) covers
+fresh packaging, real AWS or Hetzner provisioning, healthy remote execution,
+and independently checked destruction. Crash and reboot recovery on those
+provider-created hosts remain the next acceptance slice.
