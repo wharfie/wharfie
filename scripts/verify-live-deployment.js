@@ -4,12 +4,15 @@ import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   copyFileSync,
   createReadStream,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -141,16 +144,66 @@ function assertPrivateDirectory(directory) {
  * @param {string} directory
  * @param {string} name
  * @param {unknown} value
+ * @param {Record<string, any>} [io]
  */
-function writeJson(directory, name, value) {
+export function publishLiveDeploymentReceipt(directory, name, value, io = {}) {
+  const files = {
+    openSync,
+    writeFileSync,
+    fsyncSync,
+    closeSync,
+    renameSync,
+    ...io,
+  };
   const bytes = `${JSON.stringify(value, null, 2)}\n`;
   assert.ok(
     Buffer.byteLength(bytes) <= MAX_RECEIPT_BYTES,
     'Acceptance receipt exceeds its bound.',
   );
   const temporary = path.join(directory, `.${name}.${randomUUID()}.tmp`);
-  writeFileSync(temporary, bytes, { flag: 'wx', mode: 0o600 });
-  renameSync(temporary, path.join(directory, name));
+  const file = files.openSync(temporary, 'wx', 0o600);
+  try {
+    files.writeFileSync(file, bytes);
+    files.fsyncSync(file);
+  } finally {
+    files.closeSync(file);
+  }
+  files.renameSync(temporary, path.join(directory, name));
+  const parent = files.openSync(directory, 'r');
+  try {
+    files.fsyncSync(parent);
+  } finally {
+    files.closeSync(parent);
+  }
+}
+
+const writeJson = publishLiveDeploymentReceipt;
+
+/**
+ * Persist one file or directory before authorizing later cloud effects.
+ * @param {string} selected
+ */
+function flushPath(selected) {
+  const descriptor = openSync(selected, 'r');
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/**
+ * Persist each newly created parent through its nearest existing ancestor.
+ * @param {string} directory
+ */
+function ensureParentDirectories(directory) {
+  const firstCreated = mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (firstCreated === undefined) return;
+  const through = path.dirname(firstCreated);
+  for (let selected = directory; ; selected = path.dirname(selected)) {
+    flushPath(selected);
+    if (selected === through) break;
+  }
 }
 
 /**
@@ -216,6 +269,8 @@ async function buildCandidate({ workspace, provider, signal, onPhase }) {
     const executable = path.join(workspace, 'app');
     copyFileSync(candidate.executable, executable);
     chmodSync(executable, 0o700);
+    flushPath(executable);
+    flushPath(workspace);
     return { ...candidate, executable };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
@@ -389,8 +444,7 @@ export async function runLiveDeploymentAcceptance(options, dependencies = {}) {
       options.outputDir ??
       path.join(REPO, '.wharfie/live-deployment', randomUUID()),
   );
-  if (!options.cleanup)
-    mkdirSync(path.dirname(requested), { recursive: true, mode: 0o700 });
+  if (!options.cleanup) ensureParentDirectories(path.dirname(requested));
   const selected = options.cleanup
     ? realpathSync(requested)
     : path.join(
@@ -482,6 +536,7 @@ async function runAcceptance(options, dependencies) {
     mkdirSync(path.dirname(requested), { recursive: true, mode: 0o700 });
     mkdirSync(requested, { mode: 0o700 });
     runDir = realpathSync(requested);
+    flushPath(path.dirname(runDir));
     assertPrivateDirectory(runDir);
     mkdirSync(path.join(runDir, 'workspace'), { mode: 0o700 });
     state = {
@@ -639,10 +694,12 @@ async function runAcceptance(options, dependencies) {
       state.desiredRevisionId = preview.deployment.desiredRevisionId;
       state.guestArtifactId = preview.deployment.artifact.artifactId;
       state.guestRevisionId = preview.deployment.revisionId;
-      // Persist the selected identity and possible cloud mutation BEFORE spawning apply.
-      state.applyAttempted = true;
-      cleanup = { status: 'unknown' };
-      writeJson(runDir, 'run.json', state);
+      await phase('prepare-apply', async () => {
+        // Persist the selected identity and possible cloud mutation BEFORE spawning apply.
+        state.applyAttempted = true;
+        cleanup = { status: 'unknown' };
+        writeJson(runDir, 'run.json', state);
+      });
       const first = await phase('apply', async () => {
         const value = applyReceipt(
           JSON.parse(
