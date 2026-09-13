@@ -129,8 +129,9 @@ function serverType(name) {
 /**
  * Build one valid desired state, provider intent, and matching SSH/bootstrap
  * identity for read-only deployment-status tests.
+ * @param {{deploymentId?: string}} [options] - Optional canonical test deployment name.
  */
-export async function createSingleNodeStatusAuthorityFixture() {
+export async function createSingleNodeStatusAuthorityFixture(options = {}) {
   const revision = createApplicationRevision({
     contract: {
       schemaVersion: 4,
@@ -189,7 +190,7 @@ export async function createSingleNodeStatusAuthorityFixture() {
     },
   });
   const intent = createSingleNodeDeploymentIntent({
-    deployment: { id: 'production' },
+    deployment: { id: options.deploymentId ?? 'production' },
     appId: 'status-app',
     target: TARGET,
     mode: SINGLE_NODE_DEPLOYMENT_MODE,

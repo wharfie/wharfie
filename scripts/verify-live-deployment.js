@@ -37,21 +37,28 @@ import { validateSingleNodeDeploymentStatus } from '../src/core/runtime/single-n
 import { auditLiveDeploymentCleanupInChild } from './live-deployment-audit-child.js';
 import {
   buildLiveDeploymentCandidate,
+  LIVE_DEPLOYMENT_APP_ID,
+  LIVE_DEPLOYMENT_INPUT_BYTES,
   runLiveDeploymentProcess,
 } from './live-deployment-package.js';
+import {
+  assertLiveDeploymentFileOutput,
+  verifyLiveDeploymentDurability,
+} from './live-deployment-durability.js';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const FORMAT = 'wharfie.live-deployment.run.v1';
 const RETIREMENT_FORMAT = 'wharfie.live-deployment.retirement.v1';
-const APP_ID = 'hello-world';
+const APP_ID = LIVE_DEPLOYMENT_APP_ID;
 const MAX_RECEIPT_BYTES = 256 * 1024;
 const HELP = `Usage:
   npm run verify:deployment:live -- --provider hetzner --location fsn1 --allow-ssh-from <IPv4/32> [--output-dir <new-directory>]
   npm run verify:deployment:live -- --provider aws --region us-east-2 --allow-ssh-from <IPv4/32> [--output-dir <new-directory>]
   npm run verify:deployment:live -- --cleanup <run-directory>
 
-Builds a fresh installed candidate, provisions one real host, checks the packaged
-app, then destroys its resources and independently verifies their absence.
+Builds a fresh installed candidate and provisions one real host. Verifies durable
+work across controller exit, resident crash and host reboot, then destroys its
+resources and independently verifies their absence.
 Credentials: ambient AWS credential chain or HCLOUD_TOKEN. One provider per run.
 Unconfirmed cleanup retains the executable and controller state for --cleanup.
 `;
@@ -314,7 +321,7 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
   return {
     phase,
     durationMs: Math.max(0, Math.round(durationMs)),
-    command: ['node', 'npm', 'npm.cmd'].includes(diagnostic.command)
+    command: ['node', 'npm', 'npm.cmd', 'ssh'].includes(diagnostic.command)
       ? diagnostic.command
       : diagnostic.command
         ? 'packaged-app'
@@ -390,14 +397,14 @@ async function readJournal(state, dataRoot) {
   if (state.deploymentInstanceId === null) return null;
   assertSingleNodeDeploymentInstanceId(state.deploymentInstanceId);
   const store = createSingleNodeDeploymentJournalStore({
-    appId: APP_ID,
+    appId: state.appId,
     deploymentInstanceId: state.deploymentInstanceId,
     dataRoot,
   });
   const journal = await store.read();
   if (journal !== null) {
     const desired = getSingleNodeDeploymentEffectiveDesired(journal);
-    assert.equal(desired.intent.appId, APP_ID);
+    assert.equal(desired.intent.appId, state.appId);
     assert.equal(desired.intent.deployment.id, state.deploymentId);
     assert.equal(desired.intent.provider.kind, state.provider);
     assert.equal(
@@ -565,6 +572,7 @@ async function runAcceptance(options, dependencies) {
     verifyExecutable,
     validatePreview: validateSingleNodeDeploymentPreview,
     validateStatus: assertHealthyStatus,
+    durability: verifyLiveDeploymentDurability,
     wait: delay,
     log: (/** @type {Record<string, any>} */ event) =>
       process.stdout.write(`${JSON.stringify(event)}\n`),
@@ -579,7 +587,8 @@ async function runAcceptance(options, dependencies) {
     assertPrivateDirectory(runDir);
     state = readJson(runDir, 'run.json');
     assert.equal(state.format, FORMAT);
-    assert.equal(state.appId, APP_ID);
+    // Older hello-world runs may still retain real cleanup authority.
+    assert.ok([APP_ID, 'hello-world'].includes(state.appId));
     const checked = parseLiveDeploymentArguments([
       '--provider',
       state.provider,
@@ -672,13 +681,14 @@ async function runAcceptance(options, dependencies) {
    */
   async function phase(name, action) {
     currentPhase = name;
-    phaseStarted = performance.now();
+    const startedAt = performance.now();
+    phaseStarted = startedAt;
     ports.log({ phase: name, state: 'started', runDir });
     try {
       const result = await action();
       phases.push({
         phase: name,
-        durationMs: Math.round(performance.now() - phaseStarted),
+        durationMs: Math.round(performance.now() - startedAt),
         status: 'passed',
       });
       return result;
@@ -686,7 +696,7 @@ async function runAcceptance(options, dependencies) {
       phases.push({
         ...liveDeploymentFailureDiagnostic(
           name,
-          performance.now() - phaseStarted,
+          performance.now() - startedAt,
           error,
         ),
         result: 'failed',
@@ -756,12 +766,13 @@ async function runAcceptance(options, dependencies) {
         ports.verifyExecutable(executable, state.artifactRecord),
       );
       await phase('local-cli', async () => {
-        const result = await command(
-          'local-cli',
-          ['Wharfie acceptance'],
-          60_000,
-        );
-        assert.equal(result.stdout, 'Hello, Wharfie acceptance!\n');
+        const inputPath = path.join(workspace, 'local-input.txt');
+        writeFileSync(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES, {
+          mode: 0o600,
+          flag: 'wx',
+        });
+        const result = await command('local-cli', [inputPath], 60_000);
+        assertLiveDeploymentFileOutput(JSON.parse(result.stdout), inputPath);
       });
       const preview = await phase('preview', async () => {
         const result = await command(
@@ -809,7 +820,7 @@ async function runAcceptance(options, dependencies) {
         const journal = await ports.readJournal(state, dataRoot);
         assert.ok(journal !== null && journal.phase === 'active');
         writeJson(runDir, 'apply.json', value);
-        return { receipt: value, journalId: journal.journalId };
+        return { receipt: value, journalId: journal.journalId, journal };
       });
       await phase('status', async () => {
         const status = ports.validateStatus(
@@ -831,21 +842,6 @@ async function runAcceptance(options, dependencies) {
           state,
         );
         writeJson(runDir, 'status.json', status);
-      });
-      await phase('remote-cli', async () => {
-        const result = await command(
-          'remote-cli',
-          [
-            'wharfie',
-            'deployment',
-            'exec',
-            ...selectedArgs(),
-            '--',
-            'Wharfie acceptance',
-          ],
-          120_000,
-        );
-        assert.equal(result.stdout, 'Hello, Wharfie acceptance!\n');
       });
       await phase('fresh-controller', async () => {
         const next = applyReceipt(
@@ -870,6 +866,20 @@ async function runAcceptance(options, dependencies) {
         );
         writeJson(runDir, 'fresh-controller.json', next);
       });
+      await phase('durability', () =>
+        ports.durability({
+          state,
+          journal: first.journal,
+          dataRoot,
+          runDir,
+          env: environment,
+          signal: options.signal,
+          command,
+          phase,
+          /** @param {string} name @param {unknown} value */
+          receipt: (name, value) => writeJson(runDir, name, value),
+        }),
+      );
     }
   } catch (error) {
     failure = liveDeploymentFailureDiagnostic(
