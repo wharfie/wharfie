@@ -7,7 +7,7 @@ independently verifies cleanup. Each invocation targets one provider. It creates
 billable cloud resources and destroys the disposable host's root-disk data during
 cleanup.
 
-The workflow captures a file fingerprint, waits on a five-minute durable timer,
+The workflow captures a file fingerprint, waits on a ten-minute durable timer,
 and compares the retained fingerprint with a second observation. The runner
 creates a small input file on the guest; the workflow does not depend on a file
 remaining accessible from the controller's laptop.

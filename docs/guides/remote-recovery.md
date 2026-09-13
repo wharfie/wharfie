@@ -93,7 +93,7 @@ cleanup evidence; CI retains the bounded, explicitly selected JSON receipts.
 
 The [live deployment acceptance runner](live-deployment-acceptance.md) covers
 fresh packaging and real AWS or Hetzner provisioning. Its steady-file workflow
-captures a guest-local file fingerprint, waits on a five-minute durable timer,
+captures a guest-local file fingerprint, waits on a ten-minute durable timer,
 and verifies the retained fingerprint. The submitting controller exits while
 that timer is waiting. The runner then kills the resident with `SIGKILL`, uses
 the packaged inspection/takeover/recovery procedure above, and checks exact

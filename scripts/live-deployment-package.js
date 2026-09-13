@@ -23,7 +23,8 @@ const MAX_INPUT_BYTES = 256 * 1024;
 export const LIVE_DEPLOYMENT_APP_ID = 'steady-file-demo';
 export const LIVE_DEPLOYMENT_INPUT_BYTES =
   'Wharfie live durable acceptance input.\n';
-export const LIVE_DEPLOYMENT_TIMER_DELAY_MS = 300_000;
+// Both fault boundaries must fit even when SSH and packaged recovery are slow.
+export const LIVE_DEPLOYMENT_TIMER_DELAY_MS = 600_000;
 
 /**
  * Run an acceptance subprocess with bounded output, a hard deadline, and one
