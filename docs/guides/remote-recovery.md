@@ -127,9 +127,10 @@ after A's timer already finished fails the proof.
 After A completes, a normal update selects B while preserving A's completed
 history. B must produce its distinct `acceptanceRevision: "B"` CLI result and
 complete a new durable run with a one-second timer. The runner then starts an
-update back to A and pauses the owned submitting controller at its exact guest
-convergence SSH call. It verifies guest A is active while the local journal still
-records B with pending A, then kills and reaps the controller group. A fresh A
+update back to A and pauses the owned submitting controller at the exact guest
+status SSH call that follows successful convergence. It verifies guest A is
+active while the local journal still records B with pending A, then kills and
+reaps the controller group. A fresh A
 controller must settle the update through packaged recovery, retain both run
 histories, and return `repair` on replay without changing the selected release.
 

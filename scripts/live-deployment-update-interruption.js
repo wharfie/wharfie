@@ -28,7 +28,7 @@ export const LIVE_DEPLOYMENT_UPDATE_FAULT_STAGES = Object.freeze([
   'read-host-pin',
   'prepare-command',
   'spawn-controller',
-  'find-converge-child',
+  'find-status-child',
   'read-child-command',
   'pause-controller',
   'confirm-controller-paused',
@@ -61,8 +61,49 @@ function sameJson(actual, expected) {
   );
 }
 
-/** Read identities without collecting unrelated processes' argument strings. */
-async function listProcesses() {
+/**
+ * An unrelated exiting Darwin process can transiently report `?Es`. Select
+ * owned PID/parent/group relationships before interpreting process state, so
+ * unrelated unobservable rows cannot abort the acceptance. Every selected row
+ * still requires positive identity and an observable, supported state.
+ * @param {string} output
+ * @param {number} controllerPid
+ */
+export function parseLiveDeploymentUpdateProcesses(output, controllerPid) {
+  assert.ok(Number.isSafeInteger(controllerPid) && controllerPid > 0);
+  assert.ok(Buffer.byteLength(output) <= 1024 * 1024);
+  return output
+    .trim()
+    .split('\n')
+    .flatMap((line) => {
+      const match = /^\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(\S{1,32})\s*$/.exec(
+        line,
+      );
+      assert.ok(
+        match,
+        'Controller process identity observation was malformed.',
+      );
+      const [pid, parentPid, groupId] = match.slice(1, 4).map(Number);
+      assert.ok([pid, parentPid, groupId].every(Number.isSafeInteger));
+      if (
+        pid !== controllerPid &&
+        parentPid !== controllerPid &&
+        groupId !== controllerPid
+      )
+        return [];
+      assert.ok(pid > 0 && parentPid >= 0 && groupId > 0);
+      const state = match[4];
+      assert.match(
+        state,
+        /^[A-Za-z+<NsLslWXI-]+$/,
+        'Owned controller process state was unobservable.',
+      );
+      return [{ pid, parentPid, groupId, state }];
+    });
+}
+
+/** Read identities without collecting unrelated processes' argument strings. @param {number} controllerPid */
+async function listProcesses(controllerPid) {
   const result = await runLiveDeploymentProcess({
     file: '/bin/ps',
     args: ['-ax', '-o', 'pid=,ppid=,pgid=,stat='],
@@ -71,21 +112,7 @@ async function listProcesses() {
     timeoutMs: 5000,
     phase: 'update-process-observation',
   });
-  assert.ok(Buffer.byteLength(result.stdout) <= 1024 * 1024);
-  return result.stdout
-    .trim()
-    .split('\n')
-    .map((line) => {
-      const match =
-        /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([A-Za-z+<NsLslWXI-]+)\s*$/.exec(line);
-      assert.ok(match, 'Controller process observation was malformed.');
-      return {
-        pid: Number(match[1]),
-        parentPid: Number(match[2]),
-        groupId: Number(match[3]),
-        state: match[4],
-      };
-    });
+  return parseLiveDeploymentUpdateProcesses(result.stdout, controllerPid);
 }
 
 /** Read only one already-owned direct child's command; never retain it. @param {number} pid */
@@ -108,9 +135,13 @@ async function readProcessCommand(pid) {
 }
 
 /**
- * Hold the submitting controller immediately after its exact target-converge
- * SSH child starts. SIGSTOP affects only our controller, so that child can
- * finish the production guest operation while the local journal cannot settle.
+ * Hold the submitting controller when its exact target-status SSH child starts.
+ * Production starts this child only after convergence has returned and proved
+ * the target active. Waiting for that frontier avoids stopping the controller
+ * while convergence still depends on its stdin or pipe progress, and lets it
+ * release the guest service lock before the independent observer needs that
+ * lock. SIGSTOP affects only our controller, so the local journal cannot settle
+ * during observation.
  * After independent pinned observation proves the target healthy, SIGKILL the
  * entire owned group and wait for its exit before returning recovery authority.
  * No shipped operator code, executable bytes, SSH options, or journal files are
@@ -266,7 +297,7 @@ export async function interruptLiveDeploymentUpdate(
           .remoteArtifactPath,
         'wharfie',
         'service',
-        'converge',
+        'status',
         '--json',
       ],
       stdin: null,
@@ -347,7 +378,7 @@ export async function interruptLiveDeploymentUpdate(
     deadlineTimer.unref();
     options.signal?.addEventListener('abort', abort, { once: true });
     if (options.signal?.aborted) abort();
-    const processes = dependencies.listProcesses ?? listProcesses;
+    const processes = () => (dependencies.listProcesses ?? listProcesses)(pid);
     const command = dependencies.readProcessCommand ?? readProcessCommand;
     const sleep = dependencies.sleep ?? delay;
     const checkRunning = () => {
@@ -357,9 +388,9 @@ export async function interruptLiveDeploymentUpdate(
       );
     };
     /** @type {Record<string, any>|undefined} */
-    let convergeChild;
-    while (!convergeChild) {
-      diagnostic.faultStage = 'find-converge-child';
+    let statusChild;
+    while (!statusChild) {
+      diagnostic.faultStage = 'find-status-child';
       checkRunning();
       for (const candidate of await processes()) {
         if (
@@ -374,10 +405,10 @@ export async function interruptLiveDeploymentUpdate(
         diagnostic.faultStage = 'pause-controller';
         signalProcess(pid, 'SIGSTOP');
         diagnostic.controllerPaused = true;
-        convergeChild = candidate;
+        statusChild = candidate;
         break;
       }
-      if (!convergeChild) await sleep(40);
+      if (!statusChild) await sleep(40);
     }
     // Observe the stop itself before trusting the journal cannot advance.
     diagnostic.faultStage = 'confirm-controller-paused';
@@ -423,7 +454,7 @@ export async function interruptLiveDeploymentUpdate(
       pendingJournalGeneration: pending.generation,
       boundary: 'guest-active-controller-unsettled',
       controllerPid: pid,
-      convergeChildPid: convergeChild.pid,
+      statusChildPid: statusChild.pid,
       controllerPaused: true,
       guestHealthy: true,
       guestPid: observation.process.pid,

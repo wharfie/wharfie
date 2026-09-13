@@ -9,6 +9,7 @@ import {
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { setTimeout as realDelay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -161,16 +162,37 @@ describe('isolated live provider cleanup audit', () => {
     );
     directories.push(directory);
     const heartbeat = path.join(directory, 'credential-heartbeat');
+    const readyPath = path.join(directory, 'authority-ready.json');
     const authority = pathToFileURL(
       path.join(REPO_ROOT, 'src/core/runtime/providers/aws/authority.js'),
     ).href;
-    const descendant = `const fs = require('node:fs'); let count = 0; setInterval(() => fs.writeFileSync(process.env.HEARTBEAT, String(++count)), 10);`;
+    const descendant = `
+      const fs = require('node:fs');
+      let count = 0;
+      setInterval(() => {
+        fs.writeFileSync(process.env.HEARTBEAT + '.next', String(++count));
+        fs.renameSync(process.env.HEARTBEAT + '.next', process.env.HEARTBEAT);
+        if (count === 1) process.send('ready');
+      }, 10);
+    `;
     const fixture = `
       import { spawn } from 'node:child_process';
+      import { renameSync, writeFileSync } from 'node:fs';
       import { createAwsSingleNodeReadAuthorityFactory } from ${JSON.stringify(authority)};
-      spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {stdio: 'inherit'});
+      const child = spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}], {
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      });
+      const descendantReady = new Promise(resolve => child.once('message', resolve));
       const open = createAwsSingleNodeReadAuthorityFactory({
-        resolveCredentials: async () => await new Promise(() => {}),
+        resolveCredentials: async () => {
+          await descendantReady;
+          writeFileSync(process.env.READY_PATH + '.next', JSON.stringify({
+            authorityPid: process.pid,
+            descendantPid: child.pid,
+          }));
+          renameSync(process.env.READY_PATH + '.next', process.env.READY_PATH);
+          return await new Promise(() => {});
+        },
         createStsClient: async () => {},
         createEc2Client: async () => {},
       });
@@ -184,19 +206,59 @@ describe('isolated live provider cleanup audit', () => {
           args: ['--input-type=module', '-e', fixture],
         }),
     });
-    const error = await audit({
+    // Gate only the parent's deadline clock. Real processes, pipe close events,
+    // filesystem I/O, and this test's independent startup bound remain live.
+    jest.useFakeTimers({
+      doNotFake: [
+        'Date',
+        'hrtime',
+        'performance',
+        'nextTick',
+        'queueMicrotask',
+        'setImmediate',
+        'clearImmediate',
+        'setInterval',
+        'clearInterval',
+      ],
+    });
+    const result = audit({
       journal,
       dataRoot: DATA_ROOT,
-      env: { HEARTBEAT: heartbeat },
+      env: { HEARTBEAT: heartbeat, READY_PATH: readyPath },
     }).catch((failure) => failure);
-    expect(error.diagnostic).toMatchObject({
-      timedOut: true,
-      signal: 'SIGKILL',
-      phase: 'cleanup-audit',
-    });
-    const stopped = await readFile(heartbeat, 'utf8');
-    expect(Number(stopped)).toBeGreaterThan(0);
-    await new Promise((resolve) => setTimeout(resolve, 75));
-    expect(await readFile(heartbeat, 'utf8')).toBe(stopped);
-  });
+    try {
+      const deadline = performance.now() + 10_000;
+      let ready;
+      while (performance.now() < deadline) {
+        ready = await readFile(readyPath, 'utf8').catch((error) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        if (ready) break;
+        await realDelay(10);
+      }
+      expect(ready).toBeTruthy();
+      const identities = JSON.parse(ready ?? '{}');
+      expect(identities.authorityPid).toBeGreaterThan(0);
+      expect(identities.descendantPid).toBeGreaterThan(0);
+      expect(identities.descendantPid).not.toBe(identities.authorityPid);
+      expect(Number(await readFile(heartbeat, 'utf8'))).toBeGreaterThan(0);
+      await jest.advanceTimersByTimeAsync(1500);
+      const error = await result;
+      expect(error.diagnostic).toMatchObject({
+        timedOut: true,
+        signal: 'SIGKILL',
+        phase: 'cleanup-audit',
+      });
+      const stopped = await readFile(heartbeat, 'utf8');
+      expect(Number(stopped)).toBeGreaterThan(0);
+      await realDelay(75);
+      expect(await readFile(heartbeat, 'utf8')).toBe(stopped);
+    } finally {
+      // A failed readiness assertion must still kill and reap the owned group.
+      await jest.advanceTimersByTimeAsync(1500);
+      await result;
+      jest.useRealTimers();
+    }
+  }, 20_000);
 });

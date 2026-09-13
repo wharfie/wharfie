@@ -10,7 +10,11 @@ import {
   assertWaiting,
   runReceipt,
 } from './live-deployment-durability.js';
-import { createLiveDeploymentHost } from './live-deployment-host.js';
+import {
+  createLiveDeploymentHost,
+  LIVE_DEPLOYMENT_HOST_FAULT_CODES,
+  LIVE_DEPLOYMENT_HOST_FAULT_STAGES,
+} from './live-deployment-host.js';
 import { LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS } from './live-deployment-package.js';
 import { interruptLiveDeploymentUpdate } from './live-deployment-update-interruption.js';
 
@@ -453,21 +457,64 @@ export function createLiveDeploymentUpdateAcceptance(
             /** @type {{signal: AbortSignal}} */ { signal },
           ) => {
             const deadline = ports.now() + 180_000;
+            const observationReceipt = {
+              schemaVersion: 1,
+              kind: 'wharfie.live-deployment.target-observation',
+              deploymentInstanceId: state.deploymentInstanceId,
+              targetArtifactId: state.guestArtifactId,
+              attempts: 0,
+              outcome: 'retrying',
+              serviceObserved: false,
+              activeArtifactMatchesTarget: /** @type {boolean|null} */ (null),
+              hostFaultStage: /** @type {string|null} */ (null),
+              hostFaultCode: /** @type {string|null} */ (null),
+            };
+            const saveObservation = () =>
+              receipt('restore-target-observation.json', {
+                ...observationReceipt,
+              });
             do {
               signal.throwIfAborted();
               const journal = assertJournal(await readJournal(), 'B', 'A', 'A');
+              observationReceipt.attempts++;
+              observationReceipt.serviceObserved = false;
+              observationReceipt.activeArtifactMatchesTarget = null;
+              observationReceipt.hostFaultStage = null;
+              observationReceipt.hostFaultCode = null;
               try {
                 const host = await hostFor(journal, 'A', true, signal);
                 const observation = await host.observe();
+                observationReceipt.serviceObserved = true;
+                observationReceipt.activeArtifactMatchesTarget =
+                  observation.service.installation.activeArtifactId ===
+                  state.guestArtifactId;
                 if (observation.service.health === 'healthy') {
                   assert.equal(observation.bootId, proof.bootId);
+                  observationReceipt.outcome = 'healthy';
                   return observation;
                 }
-              } catch {
+              } catch (error) {
+                const diagnostic = /** @type {any} */ (error)?.diagnostic;
+                if (
+                  LIVE_DEPLOYMENT_HOST_FAULT_STAGES.includes(
+                    diagnostic?.hostFaultStage,
+                  )
+                )
+                  observationReceipt.hostFaultStage = diagnostic.hostFaultStage;
+                if (
+                  LIVE_DEPLOYMENT_HOST_FAULT_CODES.includes(
+                    diagnostic?.hostFaultCode,
+                  )
+                )
+                  observationReceipt.hostFaultCode = diagnostic.hostFaultCode;
                 signal.throwIfAborted();
+              } finally {
+                saveObservation();
               }
               await ports.wait(1_000, undefined, { signal });
             } while (ports.now() < deadline);
+            observationReceipt.outcome = 'deadline';
+            saveObservation();
             throw new Error(
               'Interrupted update target did not become healthy.',
             );

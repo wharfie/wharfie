@@ -120,9 +120,10 @@ The run:
 11. Starts a new durable run under B and verifies completion with B's one-second
     timer and one physical marker per activity.
 12. Starts an update from B back to A, then pauses that owned controller when its
-    exact guest `service converge` SSH child starts. The guest must activate A
-    while the controller journal still records current B and pending A. After
-    independently observing both states, the runner kills and reaps the owned
+    exact guest `service status` SSH child starts after successful convergence.
+    The guest must be running A while the controller journal still records
+    current B and pending A. After independently observing both states, the
+    runner kills and reaps the owned
     controller process group.
 13. Uses a fresh A controller's `deployment recover` to settle A. Both completed
     run histories, outputs, and activity markers must survive. Replaying recovery
@@ -151,6 +152,9 @@ The run directory retains bounded, redacted receipts and a private diagnostic
 report containing the phase, duration, command, and exit status or signal. It
 does not retain raw subprocess output or an environment dump. Successful cleanup
 removes the disposable workspace, build installs, and caches.
+Interruption failures also identify the fixed failing step and failure category.
+`restore-target-observation.json` overwrites the latest bounded guest observation
+result, including its attempt count and any fixed host verification failure.
 
 In addition to package, deployment, and cleanup receipts, the directory retains
 the workflow start, controller-exit and completion observations, activity markers,

@@ -1,9 +1,15 @@
 import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { interruptLiveDeploymentUpdate } from '../../scripts/live-deployment-update-interruption.js';
+import {
+  interruptLiveDeploymentUpdate,
+  parseLiveDeploymentUpdateProcesses,
+} from '../../scripts/live-deployment-update-interruption.js';
 import { runLiveDeploymentProcess } from '../../scripts/live-deployment-package.js';
 import { createApplicationRevision } from '../../src/core/runtime/application-revision.js';
 import { createArtifactRecord } from '../../src/core/runtime/artifact-record.js';
@@ -79,7 +85,7 @@ beforeAll(async () => {
         .remoteArtifactPath,
       'wharfie',
       'service',
-      'converge',
+      'status',
       '--json',
     ],
     stdin: null,
@@ -175,6 +181,33 @@ function setup() {
 }
 
 describe('live packaged update controller interruption', () => {
+  it('ignores the observed unrelated Darwin ?Es row while retaining exact owned identities', () => {
+    expect(
+      parseLiveDeploymentUpdateProcesses(
+        `
+      29940 1 29940 ?Es
+      7301 900 7301 T
+      7302 7301 7301 S
+      8302 1 -1 ?E
+    `,
+        7301,
+      ),
+    ).toEqual([
+      { pid: 7301, parentPid: 900, groupId: 7301, state: 'T' },
+      { pid: 7302, parentPid: 7301, groupId: 7301, state: 'S' },
+    ]);
+  });
+
+  it.each([
+    '7301 900 7301 ?Es',
+    '7302 7301 7301 ?Es',
+    '7302 1 7301 ?Es',
+    '7301 900 -1 T',
+    '-1 7301 7301 S',
+  ])('does not ignore an unobservable owned process row: %s', (row) => {
+    expect(() => parseLiveDeploymentUpdateProcesses(row, 7301)).toThrow();
+  });
+
   it('proves exact target active with prior authority unsettled, kills the owned group and confirms exit', async () => {
     const { options, dependencies, state, controllerPid, sshPid } = setup();
     const result = await interruptLiveDeploymentUpdate(options, dependencies);
@@ -228,7 +261,7 @@ describe('live packaged update controller interruption', () => {
       if (field === 'group') state.candidateGroup = 99;
       if (field === 'parent') state.candidateParent = 99;
       if (field === 'command')
-        state.command = expectedCommand.replace("'converge'", "'status'");
+        state.command = expectedCommand.replace("'status'", "'converge'");
       await expect(
         interruptLiveDeploymentUpdate(options, dependencies),
       ).rejects.toMatchObject({
@@ -549,6 +582,94 @@ describe('live packaged update controller interruption', () => {
     });
   }, 15_000);
 
+  it('lets convergence finish controller-dependent stdin before pausing at the post-converge status child', async () => {
+    const { options, dependencies, state, observation } = setup();
+    const temporary = await mkdtemp(
+      path.join(os.tmpdir(), 'wharfie-update-frontier-'),
+    );
+    const readyFile = path.join(temporary, 'target-active');
+    const convergeTitle = expectedCommand.replace("'status'", "'converge'");
+    expect(convergeTitle).not.toBe(expectedCommand);
+    // These local child processes expose exact SSH-shaped titles through real
+    // ps. The first cannot complete convergence until its controller writes
+    // stdin; SIGSTOP at that earlier child would strand the target inactive.
+    const convergeChildSource = `
+      process.title = process.argv[1];
+      process.stdin.once('data', () => {
+        require('node:fs').writeFileSync(process.argv[2], 'target-active');
+        process.exit(0);
+      });
+    `;
+    const statusChildSource = `
+      process.title = process.argv[1];
+      setInterval(() => {}, 1000);
+    `;
+    const controllerSource = `
+      const { spawn } = require('node:child_process');
+      const input = JSON.parse(process.argv[1]);
+      const converge = spawn(process.execPath, ['-e', input.convergeSource, input.convergeTitle, input.readyFile], {stdio: ['pipe', 'ignore', 'inherit']});
+      setTimeout(() => converge.stdin.end('proceed'), 1000);
+      converge.once('close', (status) => {
+        if (status !== 0) process.exit(1);
+        spawn(process.execPath, ['-e', input.statusSource, input.statusTitle], {stdio: 'inherit'});
+      });
+      setInterval(() => {}, 1000);
+    `;
+    try {
+      const result = await interruptLiveDeploymentUpdate(
+        {
+          ...options,
+          cwd: process.cwd(),
+          timeoutMs: 10_000,
+          observeTarget: async () => {
+            expect(await readFile(readyFile, 'utf8')).toBe('target-active');
+            return observation;
+          },
+        },
+        {
+          readIdentity: dependencies.readIdentity,
+          readHostKey: dependencies.readHostKey,
+          spawn: (
+            /** @type {string} */ _file,
+            /** @type {string[]} */ _args,
+            /** @type {import('node:child_process').SpawnOptions} */ spawnOptions,
+          ) => {
+            state.journal = pending;
+            return spawn(
+              process.execPath,
+              [
+                '-e',
+                controllerSource,
+                JSON.stringify({
+                  convergeSource: convergeChildSource,
+                  statusSource: statusChildSource,
+                  convergeTitle,
+                  statusTitle: expectedCommand,
+                  readyFile,
+                }),
+              ],
+              spawnOptions,
+            );
+          },
+        },
+      ).catch((error) => {
+        throw new Error(
+          `Local convergence gate failed: ${JSON.stringify(error.diagnostic)}`,
+        );
+      });
+      expect(result).toMatchObject({
+        controllerPaused: true,
+        guestHealthy: true,
+        controllerExitConfirmed: true,
+        processGroupExitConfirmed: true,
+        signal: 'SIGKILL',
+      });
+      expect(result.durationMs).toBeGreaterThanOrEqual(1000);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it('retains only a fixed observation failure code and stage before cleanup sends SIGKILL', async () => {
     const { options, dependencies } = setup();
     dependencies.listProcesses.mockRejectedValue(
@@ -564,7 +685,7 @@ describe('live packaged update controller interruption', () => {
       dependencies,
     ).catch((error) => error);
     expect(failure.diagnostic).toMatchObject({
-      faultStage: 'find-converge-child',
+      faultStage: 'find-status-child',
       faultCode: 'process-observation-failed',
       signal: 'SIGKILL',
       controllerExitConfirmed: true,

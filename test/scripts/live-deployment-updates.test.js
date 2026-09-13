@@ -382,6 +382,13 @@ function fixture(settings = {}) {
           ...host,
           observe: async () => {
             targetObservations++;
+            if (settings.targetProbeFailure)
+              throw Object.assign(
+                new Error('private target observation details'),
+                {
+                  diagnostic: settings.targetProbeFailure,
+                },
+              );
             if (settings.targetProbeTransient && targetObservations === 1) {
               throw new Error(
                 'Target activation has not published status yet.',
@@ -419,7 +426,7 @@ function fixture(settings = {}) {
         pendingJournalGeneration: journal.generation,
         boundary: 'guest-active-controller-unsettled',
         controllerPid: 400,
-        convergeChildPid: 401,
+        statusChildPid: 401,
         controllerPaused: true,
         guestHealthy: true,
         guestPid: 402,
@@ -595,6 +602,14 @@ describe('live release acceptance without provider calls', () => {
     expect(
       setup.records['restore-update-interrupted.json'].controllerExitConfirmed,
     ).toBe(true);
+    expect(setup.records['restore-target-observation.json']).toMatchObject({
+      attempts: 2,
+      outcome: 'healthy',
+      serviceObserved: true,
+      activeArtifactMatchesTarget: true,
+      hostFaultStage: null,
+      hostFaultCode: null,
+    });
   });
 
   test('bounds B completion instead of beginning restore with unfinished B work', async () => {
@@ -615,7 +630,45 @@ describe('live release acceptance without provider calls', () => {
     );
     expect(setup.targetObservations()).toBe(90);
     expect(setup.phases).not.toContain('restore-a-recovery');
+    expect(setup.records['restore-target-observation.json']).toMatchObject({
+      attempts: 90,
+      outcome: 'deadline',
+      serviceObserved: true,
+      hostFaultStage: null,
+    });
   });
+
+  test.each([
+    { hostFaultStage: 'observe-service-identity', hostFaultCode: 'assertion' },
+    {
+      hostFaultStage: 'private target observation details',
+      hostFaultCode: 'secret',
+    },
+  ])(
+    'retains only fixed target observation diagnostics on deadline: %j',
+    async (targetProbeFailure) => {
+      const setup = fixture({ targetProbeFailure });
+      await expect(setup.run()).rejects.toThrow(
+        'Interrupted update target did not become healthy',
+      );
+      const report = setup.records['restore-target-observation.json'];
+      expect(report).toMatchObject({
+        attempts: 90,
+        outcome: 'deadline',
+        serviceObserved: false,
+        activeArtifactMatchesTarget: null,
+        hostFaultStage:
+          targetProbeFailure.hostFaultCode === 'assertion'
+            ? 'observe-service-identity'
+            : null,
+        hostFaultCode:
+          targetProbeFailure.hostFaultCode === 'assertion' ? 'assertion' : null,
+      });
+      expect(JSON.stringify(report)).not.toMatch(
+        /private target observation details|secret/,
+      );
+    },
+  );
 
   test('release receipts retain fixed release evidence without copying unrelated journal fields', () => {
     const setup = fixture();

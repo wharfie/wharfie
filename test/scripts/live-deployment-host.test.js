@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import { createLiveDeploymentHost } from '../../scripts/live-deployment-host.js';
+import {
+  LIVE_DEPLOYMENT_HOST_FAULT_CODES,
+  LIVE_DEPLOYMENT_HOST_FAULT_STAGES,
+  createLiveDeploymentHost,
+} from '../../scripts/live-deployment-host.js';
 import {
   rebootLiveDeploymentInChild,
   rebootLiveDeploymentProvider,
@@ -192,7 +196,12 @@ describe('live acceptance pinned host operations', () => {
     );
     expect(remote).not.toHaveBeenCalled();
     observed.artifactDigest = fixture.artifactRecord.byteDigest.value;
-    await expect(host.observe()).rejects.toThrow('host-observe');
+    await expect(host.observe()).rejects.toMatchObject({
+      diagnostic: {
+        hostFaultStage: 'observe-artifact-digest',
+        hostFaultCode: 'assertion',
+      },
+    });
     expect(
       remote.mock.calls.some(([request]) => request.argv[0] === expectedPath),
     ).toBe(false);
@@ -267,13 +276,105 @@ describe('live acceptance pinned host operations', () => {
     const { host, observed } = await hostFixture();
     observed.disappeared = true;
     await expect(host.observe()).rejects.toMatchObject({
-      diagnostic: { retryable: true },
+      diagnostic: { retryable: true, hostFaultStage: 'observe-process' },
     });
     observed.disappeared = false;
     observed.uid = 0;
     await expect(host.observe()).rejects.toMatchObject({
-      diagnostic: { retryable: false },
+      diagnostic: {
+        retryable: false,
+        hostFaultStage: 'observe-runtime-uid',
+        hostFaultCode: 'assertion',
+      },
     });
+  });
+
+  it('retains the failed initialization boundary without exposing identity errors', async () => {
+    const { input, dependencies, createTransport } = await hostFixture();
+    createTransport.mockClear();
+    const cases = [
+      {
+        stage: 'initialize-scope',
+        selected: { ...input, state: { ...state, guestArtifactId: 'secret' } },
+        ports: dependencies,
+      },
+      {
+        stage: 'initialize-ssh-identity',
+        selected: input,
+        ports: {
+          ...dependencies,
+          readIdentity: async () => {
+            throw new Error('secret identity contents');
+          },
+        },
+      },
+      {
+        stage: 'initialize-bootstrap-binding',
+        selected: input,
+        ports: {
+          ...dependencies,
+          readIdentity: async () => ({
+            ...fixture.sshIdentity,
+            publicKeyFingerprint: 'secret fingerprint',
+          }),
+        },
+      },
+      {
+        stage: 'initialize-host-pin',
+        selected: input,
+        ports: {
+          ...dependencies,
+          readHostKey: async () => ({
+            ...journal.sshHost,
+            fingerprint: 'secret',
+          }),
+        },
+      },
+    ];
+    for (const entry of cases) {
+      const error = await createLiveDeploymentHost(
+        entry.selected,
+        entry.ports,
+      ).catch((failure) => failure);
+      expect(error.diagnostic.hostFaultStage).toBe(entry.stage);
+      expect(LIVE_DEPLOYMENT_HOST_FAULT_CODES).toContain(
+        error.diagnostic.hostFaultCode,
+      );
+      expect(JSON.stringify(error)).not.toContain('secret');
+    }
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes failed SSH from malformed guest data and installed-release mismatch', async () => {
+    const { host, remote, observed } = await hostFixture();
+    remote.mockImplementationOnce(async () => {
+      throw Object.assign(new Error('secret SSH stderr'), {
+        diagnostic: { status: 255, stderr: 'secret' },
+      });
+    });
+    const commandFailure = await host.observe().catch((failure) => failure);
+    expect(commandFailure.diagnostic).toMatchObject({
+      hostFaultStage: 'observe-bootstrap',
+      hostFaultCode: 'command-failed',
+      status: 255,
+    });
+    expect(JSON.stringify(commandFailure)).not.toContain('secret');
+    remote.mockImplementationOnce(async () =>
+      createProcessOutcome({ stdout: 'secret malformed JSON' }),
+    );
+    const malformed = await host.observe().catch((failure) => failure);
+    expect(malformed.diagnostic).toMatchObject({
+      hostFaultStage: 'observe-bootstrap',
+      hostFaultCode: 'invalid-json',
+    });
+    expect(JSON.stringify(malformed)).not.toContain('secret');
+    observed.service.installation.activeArtifactId = 'secret';
+    const mismatch = await host.observe().catch((failure) => failure);
+    expect(mismatch.diagnostic.hostFaultStage).toBe('observe-service-identity');
+    expect(LIVE_DEPLOYMENT_HOST_FAULT_STAGES).toContain(
+      mismatch.diagnostic.hostFaultStage,
+    );
+    expect(JSON.stringify(mismatch)).not.toContain('secret');
   });
 
   it('refuses changed bootstrap or installed artifact before any fault', async () => {
