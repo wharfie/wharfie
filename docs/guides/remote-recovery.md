@@ -92,6 +92,25 @@ acceptance remain separate checks. Lima retains checksummed proof receipts and
 cleanup evidence; CI retains the bounded, explicitly selected JSON receipts.
 
 The [live deployment acceptance runner](live-deployment-acceptance.md) covers
-fresh packaging, real AWS or Hetzner provisioning, healthy remote execution,
-and independently checked destruction. Crash and reboot recovery on those
-provider-created hosts remain the next acceptance slice.
+fresh packaging and real AWS or Hetzner provisioning. Its steady-file workflow
+captures a guest-local file fingerprint, waits on a ten-minute durable timer,
+and verifies the retained fingerprint. The submitting controller exits while
+that timer is waiting. The runner then kills the resident with `SIGKILL`, uses
+the packaged inspection/takeover/recovery procedure above, and checks exact
+takeover replay against the healthy replacement.
+
+The same run also crosses a provider-requested host reboot. A changed Linux boot
+ID establishes that the host rebooted; the receipt records whether ordinary
+service startup recovered automatically or explicit packaged recovery was
+needed. This requests a normal provider reboot and does not deliberately test
+abrupt power loss or permanent disk loss.
+
+Fresh controller processes must observe the original run completing with its
+original timer and first committed activity intact. The proof checks one
+completed attempt and one synchronized physical marker per activity, including
+boot identities on opposite sides of the reboot. It retains bounded private
+workflow, host, and recovery receipts, then independently verifies resource
+absence after destruction. An interruption that occurs after the timer already
+finished fails the proof. Release updates and rollback remain later acceptance
+work; the runner's implementation alone is not evidence that a live candidate
+passed.

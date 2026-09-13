@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import {
   chmod,
+  lstat,
   mkdtemp,
   readFile,
   realpath,
@@ -11,14 +12,23 @@ import {
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   assertLiveDeploymentPackageVersions,
   buildLiveDeploymentCandidate,
   createLiveDeploymentBuildEnvironment,
+  LIVE_DEPLOYMENT_APP_ID,
+  LIVE_DEPLOYMENT_INPUT_BYTES,
+  LIVE_DEPLOYMENT_TIMER_DELAY_MS,
+  prepareLiveDeploymentFixture,
   runLiveDeploymentProcess,
   verifyLiveDeploymentPackageOutput,
 } from '../../scripts/live-deployment-package.js';
+import {
+  capture,
+  verify,
+} from '../../scripts/live-deployment-fixture-activities.js';
 import { getBuildTargetId } from '../../src/core/runtime/build-target.js';
 import { REPO_ROOT } from '../../scripts/package-verification.js';
 
@@ -62,7 +72,7 @@ async function artifactFixture() {
   const bytes = Buffer.from('portable controller fixture');
   const digest = createHash('sha256').update(bytes).digest('base64url');
   const byteDigest = { algorithm: 'sha256', value: digest };
-  const fileName = `hello-world-sha256-${Buffer.from(digest, 'base64url').toString('hex')}`;
+  const fileName = `${LIVE_DEPLOYMENT_APP_ID}-sha256-${Buffer.from(digest, 'base64url').toString('hex')}`;
   const artifactPath = path.join(outputDir, fileName);
   const recordPath = `${artifactPath}.artifact.json`;
   const artifactId = `waf1_${digest}`;
@@ -70,7 +80,7 @@ async function artifactFixture() {
   const record = {
     schemaVersion: 1,
     kind: 'artifactRecord',
-    appId: 'hello-world',
+    appId: LIVE_DEPLOYMENT_APP_ID,
     artifactId,
     revisionId,
     byteDigest,
@@ -88,7 +98,7 @@ async function artifactFixture() {
   const receipt = {
     schemaVersion: 1,
     kind: 'wharfie.application.package',
-    appId: 'hello-world',
+    appId: LIVE_DEPLOYMENT_APP_ID,
     revisionId,
     outputDir,
     artifactCount: 1,
@@ -179,6 +189,200 @@ describe('live deployment installed-candidate boundary', () => {
   );
 });
 
+describe('live deployment durable installed starter', () => {
+  async function prepareFixture(timerDelayMs = LIVE_DEPLOYMENT_TIMER_DELAY_MS) {
+    const root = await temporaryDirectory();
+    const fixtureDirectory = path.join(root, 'app');
+    await prepareLiveDeploymentFixture({
+      installedDirectory: REPO_ROOT,
+      fixtureDirectory,
+      nativeTarget: NATIVE_TARGET,
+      timerDelayMs,
+    });
+    return { root, fixtureDirectory };
+  }
+
+  /** @param {string} root @param {string} source */
+  async function fixtureNode(root, source) {
+    return await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: ['--input-type=module', '-e', source],
+      cwd: root,
+      env: createLiveDeploymentBuildEnvironment(root),
+      timeoutMs: 10_000,
+    });
+  }
+
+  test('packages the installed CLI with two activities and the selected durable timer', async () => {
+    const { root, fixtureDirectory } = await prepareFixture(123_456);
+    const result = await fixtureNode(
+      root,
+      `const {default: manifest} = await import(${JSON.stringify(pathToFileURL(path.join(fixtureDirectory, 'wharfie.app.js')).href)});
+       process.stdout.write(JSON.stringify(manifest));`,
+    );
+    const manifest = JSON.parse(result.stdout);
+    expect(manifest.app.id).toBe(LIVE_DEPLOYMENT_APP_ID);
+    expect(manifest.targets).toEqual([NATIVE_TARGET]);
+    expect(manifest.cli).toEqual({
+      entrypoint: { kind: 'node', path: './cli.js', export: 'main' },
+      durable: { workflow: 'verify-stable', export: 'toDurableInput' },
+    });
+    expect(manifest.workflows['verify-stable'].steps).toEqual([
+      {
+        id: 'baseline',
+        kind: 'activity',
+        activity: 'capture',
+        input: { kind: 'workflow-input' },
+      },
+      { id: 'stability-window', kind: 'timer', delayMs: 123_456 },
+      {
+        id: 'comparison',
+        kind: 'activity',
+        activity: 'verify',
+        input: { kind: 'step-output', step: 'baseline' },
+      },
+    ]);
+    expect(manifest.activities).toEqual({
+      capture: {
+        entrypoint: {
+          kind: 'node',
+          path: './acceptance-activities.js',
+          export: 'capture',
+        },
+      },
+      verify: {
+        entrypoint: {
+          kind: 'node',
+          path: './acceptance-activities.js',
+          export: 'verify',
+        },
+      },
+    });
+  });
+
+  test.each([0, -1, 1.5, 2_147_483_648, Number.NaN])(
+    'rejects invalid timer %s before creating a fixture',
+    async (timerDelayMs) => {
+      const root = await temporaryDirectory();
+      const fixtureDirectory = path.join(root, 'app');
+      await expect(
+        prepareLiveDeploymentFixture({
+          installedDirectory: REPO_ROOT,
+          fixtureDirectory,
+          nativeTarget: NATIVE_TARGET,
+          timerDelayMs,
+        }),
+      ).rejects.toThrow('bounded positive duration');
+      await expect(lstat(fixtureDirectory)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+  );
+
+  test('ordinary CLI preserves useful output without recording durable activity entries', async () => {
+    const { root, fixtureDirectory } = await prepareFixture();
+    const inputPath = path.join(root, 'input.txt');
+    await writeFile(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES);
+    const result = await fixtureNode(
+      root,
+      `const {main} = await import(${JSON.stringify(pathToFileURL(path.join(fixtureDirectory, 'cli.js')).href)});
+       await main(['node', 'fixture', ${JSON.stringify(inputPath)}]);`,
+    );
+    const fingerprint = {
+      bytes: Buffer.byteLength(LIVE_DEPLOYMENT_INPUT_BYTES),
+      sha256: createHash('sha256')
+        .update(LIVE_DEPLOYMENT_INPUT_BYTES)
+        .digest('hex'),
+      readStable: true,
+    };
+    expect(JSON.parse(result.stdout)).toEqual({
+      path: inputPath,
+      stable: true,
+      baseline: fingerprint,
+      current: fingerprint,
+    });
+    await expect(lstat(`${inputPath}.activities.jsonl`)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  test('activity markers expose repeated execution even when logical output is unchanged', async () => {
+    const { root, fixtureDirectory } = await prepareFixture();
+    const inputPath = path.join(root, 'input.txt');
+    await writeFile(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES);
+    const result = await fixtureNode(
+      root,
+      `const {capture, verify} = await import(${JSON.stringify(pathToFileURL(path.join(fixtureDirectory, 'acceptance-activities.js')).href)});
+       const input = {path: ${JSON.stringify(inputPath)}};
+       const baseline = await capture(input);
+       const output = await verify(baseline);
+       const replayed = await capture(input);
+       process.stdout.write(JSON.stringify({baseline,output,replayed}));`,
+    );
+    const { baseline, output, replayed } = JSON.parse(result.stdout);
+    expect(output.stable).toBe(true);
+    expect(replayed).toEqual(baseline);
+    const markers = (await readFile(`${inputPath}.activities.jsonl`, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(markers.map((marker) => marker.activity)).toEqual([
+      'capture',
+      'verify',
+      'capture',
+    ]);
+    for (const marker of markers) {
+      expect(marker).toEqual({
+        schemaVersion: 1,
+        kind: 'wharfie.live-deployment.activity-entry',
+        activity: expect.any(String),
+        bootId: process.platform === 'linux' ? expect.any(String) : null,
+        processId: expect.any(Number),
+      });
+    }
+    expect((await lstat(`${inputPath}.activities.jsonl`)).mode & 0o777).toBe(
+      0o600,
+    );
+  });
+
+  test('retains the first observation and reports a file changed during the durable wait', async () => {
+    const root = await temporaryDirectory();
+    const inputPath = path.join(root, 'input.txt');
+    await writeFile(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES);
+    const baseline = await capture({ path: inputPath });
+    await writeFile(inputPath, 'changed during the durable timer\n');
+    const result = await verify(baseline);
+    expect(result.stable).toBe(false);
+    expect(result.baseline.sha256).toBe(baseline.sha256);
+    expect(result.current.sha256).not.toBe(baseline.sha256);
+    const markers = (await readFile(`${inputPath}.activities.jsonl`, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(markers.map((marker) => marker.activity)).toEqual([
+      'capture',
+      'verify',
+    ]);
+  });
+
+  test('refuses symlinked activity evidence without overwriting its target', async () => {
+    const { root, fixtureDirectory } = await prepareFixture();
+    const inputPath = path.join(root, 'input.txt');
+    const unrelated = path.join(root, 'unrelated.txt');
+    await writeFile(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES);
+    await writeFile(unrelated, 'preserve');
+    await symlink(unrelated, `${inputPath}.activities.jsonl`);
+    await expect(
+      fixtureNode(
+        root,
+        `const {capture} = await import(${JSON.stringify(pathToFileURL(path.join(fixtureDirectory, 'acceptance-activities.js')).href)});
+         await capture({path: ${JSON.stringify(inputPath)}});`,
+      ),
+    ).rejects.toThrow('Live deployment command failed');
+    expect(await readFile(unrelated, 'utf8')).toBe('preserve');
+  });
+});
+
 describe('live deployment public package evidence', () => {
   test('accepts native Darwin ARM64 controller with matching exact bytes and record', async () => {
     const fixture = await artifactFixture();
@@ -189,7 +393,7 @@ describe('live deployment public package evidence', () => {
       ),
     ).resolves.toMatchObject({
       executable: fixture.artifactPath,
-      appId: 'hello-world',
+      appId: LIVE_DEPLOYMENT_APP_ID,
       revisionId: fixture.receipt.revisionId,
       artifactRecord: fixture.record,
     });

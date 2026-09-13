@@ -1,5 +1,8 @@
 /* eslint-disable jsdoc/require-jsdoc, jsdoc/require-param-description, jsdoc/require-returns-description -- These offline fixtures describe injected acceptance boundaries. */
 
+import { createHash } from 'node:crypto';
+import { LIVE_DEPLOYMENT_INPUT_BYTES } from '../../scripts/live-deployment-package.js';
+
 import { afterEach, describe, expect, jest, test } from '@jest/globals';
 import {
   existsSync,
@@ -88,7 +91,7 @@ function fixture(settings = {}) {
       provider: options.provider,
       status: 'active',
       deploymentId: request.args[request.args.indexOf('--deployment') + 1],
-      appId: 'hello-world',
+      appId: 'steady-file-demo',
       revisionId: ARTIFACT_RECORD.revisionId,
       artifactId: ARTIFACT_RECORD.artifactId,
       deploymentInstanceId: INSTANCE_ID,
@@ -136,7 +139,7 @@ function fixture(settings = {}) {
         mode: 0o700,
       });
       return {
-        appId: 'hello-world',
+        appId: 'steady-file-demo',
         executable: path.join(request.workspace, 'app'),
         artifactRecord: ARTIFACT_RECORD,
         packageVersion: '0.0.15',
@@ -178,7 +181,19 @@ function fixture(settings = {}) {
         });
       }
       if (request.phase === 'local-cli' || request.phase === 'remote-cli') {
-        return output('Hello, Wharfie acceptance!\n');
+        const fingerprint = {
+          bytes: Buffer.byteLength(LIVE_DEPLOYMENT_INPUT_BYTES),
+          sha256: createHash('sha256')
+            .update(LIVE_DEPLOYMENT_INPUT_BYTES)
+            .digest('hex'),
+          readStable: true,
+        };
+        return output({
+          path: request.args[0],
+          stable: true,
+          baseline: fingerprint,
+          current: fingerprint,
+        });
       }
       if (request.phase === 'preview') {
         return output({
@@ -187,7 +202,7 @@ function fixture(settings = {}) {
           provider: options.provider,
           status: 'actionable',
           deployment: {
-            appId: 'hello-world',
+            appId: 'steady-file-demo',
             deploymentId:
               request.args[request.args.indexOf('--deployment') + 1],
             deploymentInstanceId: INSTANCE_ID,
@@ -223,11 +238,19 @@ function fixture(settings = {}) {
           kind: 'wharfie.deployment.destroy',
           provider: options.provider,
           status: 'destroyed',
-          appId: 'hello-world',
+          appId: 'steady-file-demo',
           deploymentInstanceId: INSTANCE_ID,
         });
       }
       throw new Error(`Unexpected offline command phase: ${request.phase}`);
+    },
+    /** @param {Record<string, any>} request */
+    durability: async (request) => {
+      expect(lockHeld).toBe(true);
+      expect(request.journal.phase).toBe('active');
+      expect(request.state.appId).toBe('steady-file-demo');
+      events.push('durability');
+      if (settings.failAt === 'durability') throw commandFailure();
     },
     readJournal: async () => {
       expect(lockHeld).toBe(true);
@@ -468,7 +491,6 @@ describe('live acceptance orchestration without cloud calls', () => {
       'preview',
       'apply',
       'status',
-      'remote-cli',
       'fresh-controller',
       'destroy',
     ]);
@@ -533,6 +555,23 @@ describe('live acceptance orchestration without cloud calls', () => {
       'destroy',
     ]);
     expect(setup.events).toContain('audit');
+  });
+
+  test('a failed durable recovery still destroys and independently verifies cleanup', async () => {
+    const setup = fixture({ failAt: 'durability' });
+    const report = await setup.run();
+    expect(report).toMatchObject({
+      status: 'failed',
+      failure: { phase: 'durability' },
+      cleanup: { status: 'absent' },
+      workspaceRemoved: true,
+    });
+    expect(setup.events.indexOf('destroy')).toBeGreaterThan(
+      setup.events.indexOf('durability'),
+    );
+    expect(setup.events.indexOf('audit')).toBeGreaterThan(
+      setup.events.indexOf('destroy'),
+    );
   });
 
   test('an attempted apply with no recoverable journal preserves cleanup authority', async () => {

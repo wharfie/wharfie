@@ -11,6 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { parseApplicationPackageReceiptOutput } from '../src/cli/app/package-command-receipt.js';
 import { getBuildTargetId } from '../src/core/runtime/build-target.js';
@@ -19,7 +20,11 @@ import { assertPackageContents, REPO_ROOT } from './package-verification.js';
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
-const APP_ID = 'hello-world';
+export const LIVE_DEPLOYMENT_APP_ID = 'steady-file-demo';
+export const LIVE_DEPLOYMENT_INPUT_BYTES =
+  'Wharfie live durable acceptance input.\n';
+// Both fault boundaries must fit even when SSH and packaged recovery are slow.
+export const LIVE_DEPLOYMENT_TIMER_DELAY_MS = 600_000;
 
 /**
  * Run an acceptance subprocess with bounded output, a hard deadline, and one
@@ -241,7 +246,7 @@ export function assertLiveDeploymentPackageVersions(
  */
 export async function verifyLiveDeploymentPackageOutput(stdout, expected) {
   const receipt = parseApplicationPackageReceiptOutput(stdout);
-  assert.equal(receipt.appId, APP_ID);
+  assert.equal(receipt.appId, LIVE_DEPLOYMENT_APP_ID);
   assert.equal(receipt.outputDir, await realpath(expected.outputDir));
   assert.equal(receipt.artifactCount, 1);
   const artifact = receipt.artifacts[0];
@@ -291,9 +296,76 @@ export async function verifyLiveDeploymentPackageOutput(stdout, expected) {
 }
 
 /**
+ * Copy the installed useful starter, adapting only target selection, the timer
+ * duration, and physical activity evidence used by the live recovery proof.
+ * @param {{installedDirectory: string, fixtureDirectory: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, timerDelayMs?: number}} options - Fresh installation and native package target.
+ * @returns {Promise<void>} - Ready-to-package consumer-owned starter.
+ */
+export async function prepareLiveDeploymentFixture(options) {
+  const timerDelayMs = options.timerDelayMs ?? LIVE_DEPLOYMENT_TIMER_DELAY_MS;
+  assert.ok(
+    Number.isSafeInteger(timerDelayMs) &&
+      timerDelayMs > 0 &&
+      timerDelayMs <= 2_147_483_647,
+    'Live acceptance timer must have a bounded positive duration.',
+  );
+  assert.ok(path.isAbsolute(options.installedDirectory));
+  assert.ok(path.isAbsolute(options.fixtureDirectory));
+  const starterDirectory = path.join(
+    options.installedDirectory,
+    'examples/steady-file',
+  );
+  const { default: starter } = await import(
+    pathToFileURL(path.join(starterDirectory, 'wharfie.app.js')).href
+  );
+  const manifest = JSON.parse(JSON.stringify(starter));
+  assert.equal(manifest.app.id, LIVE_DEPLOYMENT_APP_ID);
+  assert.equal(manifest.cli.durable.workflow, 'verify-stable');
+  const steps = /** @type {Record<string, any>[]} */ (
+    manifest.workflows['verify-stable'].steps
+  );
+  assert.deepEqual(
+    steps.map((step) => ({ id: step.id, kind: step.kind })),
+    [
+      { id: 'baseline', kind: 'activity' },
+      { id: 'stability-window', kind: 'timer' },
+      { id: 'comparison', kind: 'activity' },
+    ],
+  );
+  manifest.targets = [options.nativeTarget];
+  steps[1].delayMs = timerDelayMs;
+  for (const activity of ['capture', 'verify']) {
+    assert.deepEqual(manifest.activities[activity].entrypoint, {
+      kind: 'node',
+      path: './activities.js',
+      export: activity,
+    });
+    manifest.activities[activity].entrypoint.path =
+      './acceptance-activities.js';
+  }
+  const wrapperSource = await readFile(
+    new URL('./live-deployment-fixture-activities.js', import.meta.url),
+    'utf8',
+  );
+  const activityImport = "'../examples/steady-file/activities.js'";
+  assert.equal(wrapperSource.split(activityImport).length, 2);
+  await cp(starterDirectory, options.fixtureDirectory, { recursive: true });
+  await writeFile(
+    path.join(options.fixtureDirectory, 'acceptance-activities.js'),
+    wrapperSource.replace(activityImport, "'./activities.js'"),
+    { mode: 0o600, flag: 'wx' },
+  );
+  await writeFile(
+    path.join(options.fixtureDirectory, 'wharfie.app.js'),
+    `export default ${JSON.stringify(manifest, null, 2)};\n`,
+    { mode: 0o600 },
+  );
+}
+
+/**
  * Build through a fresh installation of checkout tarballs and the public CLI.
  * The caller owns and cleans the complete external workspace even on failure.
- * @param {{workspace: string, provider: 'aws'|'hetzner', signal?: AbortSignal, onPhase?: (event: Record<string, any>) => void}} options - Build workspace and selected provider.
+ * @param {{workspace: string, provider: 'aws'|'hetzner', timerDelayMs?: number, signal?: AbortSignal, onPhase?: (event: Record<string, any>) => void}} options - Build workspace and selected provider.
  * @returns {Promise<{executable: string, appId: string, revisionId: string, artifactId: string, artifactRecord: Record<string, any>, packageReceipt: ReturnType<typeof parseApplicationPackageReceiptOutput>, packageVersion: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, consumerDirectory: string}>} - Exact runnable local controller.
  */
 export async function buildLiveDeploymentCandidate(options) {
@@ -443,21 +515,12 @@ export async function buildLiveDeploymentCandidate(options) {
     packageVersion,
   );
   const fixture = path.join(consumerDirectory, 'app');
-  await cp(path.join(installed, 'examples/hello-world/app'), fixture, {
-    recursive: true,
+  await prepareLiveDeploymentFixture({
+    installedDirectory: installed,
+    fixtureDirectory: fixture,
+    nativeTarget,
+    timerDelayMs: options.timerDelayMs,
   });
-  // The starter is host-default. Declare the one exact controller target so
-  // the public --target filter is exercised on both Darwin and Linux hosts.
-  await writeFile(
-    path.join(fixture, 'wharfie.app.js'),
-    `import { defineApp } from '@wharfie/wharfie/app';\nexport default defineApp(${JSON.stringify(
-      {
-        id: APP_ID,
-        main: './hello.js',
-        targets: [nativeTarget],
-      },
-    )});\n`,
-  );
   const outputDir = path.join(root, 'dist');
   const output = await run(
     'package-self-deployable-sea',
