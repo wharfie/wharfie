@@ -253,6 +253,50 @@ describe('live deployment public package evidence', () => {
 });
 
 describe('live deployment subprocess lifecycle', () => {
+  test('sends a bounded document over stdin and requires the child to receive EOF', async () => {
+    const cwd = await temporaryDirectory();
+    const input = JSON.stringify({ document: 'x'.repeat(128 * 1024) });
+    const result = await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: ['-e', 'process.stdin.pipe(process.stdout)'],
+      cwd,
+      env: {},
+      stdin: input,
+      timeoutMs: 5000,
+    });
+    expect(result.stdout).toBe(input);
+    await expect(
+      runLiveDeploymentProcess({
+        file: process.execPath,
+        args: ['-e', 'process.exit(0)'],
+        cwd,
+        env: {},
+        stdin: 'x'.repeat(256 * 1024 + 1),
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow('input exceeds its bound');
+  });
+
+  test('contains broken stdin pipes without exposing their document', async () => {
+    const cwd = await temporaryDirectory();
+    const result = await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: [
+        '-e',
+        'require("node:fs").closeSync(0); setInterval(() => {}, 1000)',
+      ],
+      cwd,
+      env: {},
+      stdin: 'private-document'.repeat(16000),
+      timeoutMs: 5000,
+    }).catch((error) => error);
+    expect(result.diagnostic).toMatchObject({
+      stdinError: true,
+      timedOut: false,
+    });
+    expect(JSON.stringify(result)).not.toContain('private-document');
+  });
+
   test('returns bounded successful output without inheriting ambient credentials', async () => {
     const cwd = await temporaryDirectory();
     const result = await runLiveDeploymentProcess({

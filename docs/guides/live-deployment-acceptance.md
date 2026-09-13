@@ -33,6 +33,10 @@ IPv4 addresses and have working internet routing, gateway, network ACLs, and
 instance capacity. Wharfie uses that existing network; this run does not create
 a VPC. See [installation](./installation.md) for the AWS companion boundary.
 
+To select a named AWS profile, set `AWS_PROFILE=<profile>` for both acceptance
+and cleanup commands. For an SSO profile, refresh its session first with
+`aws sso login --profile <profile>`.
+
 Credentials are not command arguments and are not copied into the application
 or guest. Keep the same provider authority available until cleanup is confirmed.
 
@@ -89,6 +93,10 @@ The run directory retains bounded, redacted receipts and a private diagnostic
 report containing the phase, duration, command, and exit status or signal. It
 does not retain raw subprocess output or an environment dump. Successful cleanup
 removes the disposable workspace, build installs, and caches.
+
+After cloud cleanup is confirmed, the runner saves a durable receipt before
+removing the workspace. If removal is interrupted, `--cleanup` uses that receipt
+to finish local cleanup even when the executable or journal is already gone.
 
 If destruction or its independent verification is ambiguous, the runner
 preserves the workspace, controller executable, deployment journal, and SSH

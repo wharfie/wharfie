@@ -242,7 +242,24 @@ function fixture(settings = {}) {
       expect(existsSync(request.dataRoot)).toBe(true);
       const statuses = settings.auditStatuses ?? ['absent'];
       const status = statuses[Math.min(auditIndex++, statuses.length - 1)];
-      return { status, provider: options.provider };
+      const roles =
+        options.provider === 'aws'
+          ? ['instance', 'rootVolume', 'securityGroup']
+          : ['server', 'primaryIp', 'firewall'];
+      return {
+        schemaVersion: 1,
+        kind: 'wharfie.live-deployment.cleanup',
+        deploymentInstanceId: INSTANCE_ID,
+        status,
+        provider: options.provider,
+        reason: status === 'unknown' ? 'provider-read-failed' : null,
+        resources: roles.map((role) => ({ role, id: '123', status })),
+        inventory: roles.map((role) => ({
+          role,
+          status,
+          count: status === 'absent' ? 0 : 1,
+        })),
+      };
     },
     /** @param {string} executable */
     verifyExecutable: async (executable) => {
@@ -257,7 +274,37 @@ function fixture(settings = {}) {
     wait: async () => {
       events.push('wait');
     },
-    log: () => {},
+    /** @param {Record<string, any>} event */
+    log: (event) => {
+      if (
+        event.phase === 'prepare-removal' &&
+        settings.revertArtifactReceiptAtRemoval
+      ) {
+        const runFile = path.join(runDir, 'run.json');
+        const state = JSON.parse(readFileSync(runFile, 'utf8'));
+        writeFileSync(
+          runFile,
+          JSON.stringify({ ...state, artifactRecord: null }),
+        );
+      }
+      if (
+        event.phase === 'remove-workspace' &&
+        settings.interruptRemoval !== undefined
+      ) {
+        const retirement = JSON.parse(
+          readFileSync(path.join(runDir, 'retirement.json'), 'utf8'),
+        );
+        expect(retirement.cleanup.status).toBe('absent');
+        rmSync(path.join(runDir, 'workspace', 'app'));
+        if (settings.interruptRemoval === 'complete') {
+          rmSync(path.join(runDir, 'workspace'), {
+            recursive: true,
+            force: true,
+          });
+        }
+        throw new Error('Interrupted workspace removal.');
+      }
+    },
   };
   return {
     runDir,
@@ -529,6 +576,7 @@ describe('live acceptance orchestration without cloud calls', () => {
     });
     expect(setup.commands.some((call) => call.phase === 'destroy')).toBe(true);
     expect(existsSync(setup.workspace)).toBe(true);
+    expect(existsSync(path.join(setup.runDir, 'retirement.json'))).toBe(false);
   });
 
   test('eventually absent provider inventory is checked again before removing the workspace', async () => {
@@ -631,6 +679,150 @@ describe('live acceptance orchestration without cloud calls', () => {
     expect(report).toMatchObject({ status: 'passed', workspaceRemoved: true });
     expect(setup.lockIds).toHaveLength(2);
     expect(setup.lockIds[1]).toBe(setup.lockIds[0]);
+  });
+
+  test.each([
+    ['partial', 'missing'],
+    ['partial', 'stale'],
+    ['complete', 'missing'],
+    ['complete', 'stale'],
+  ])(
+    'cleanup resumes %s workspace removal with a %s final report using durable retirement evidence',
+    async (interruptRemoval, reportState) => {
+      const setup = fixture({ interruptRemoval, failAt: 'apply' });
+      const initial = await setup.run();
+      expect(initial).toMatchObject({
+        mode: 'acceptance',
+        status: 'failed',
+        failure: { phase: 'apply' },
+        workspaceRemoved: false,
+      });
+      expect(existsSync(path.join(setup.workspace, 'app'))).toBe(false);
+      expect(existsSync(setup.workspace)).toBe(interruptRemoval === 'partial');
+      const reportFile = path.join(setup.runDir, 'report.json');
+      const originalReport = readFileSync(reportFile, 'utf8');
+      if (reportState === 'missing') rmSync(reportFile);
+      setup.settings.interruptRemoval = undefined;
+      const commands = setup.commands.length;
+      const events = setup.events.length;
+      const cleaned = await runLiveDeploymentAcceptance(
+        { cleanup: setup.runDir },
+        setup.ports,
+      );
+      expect(cleaned).toMatchObject({
+        mode: 'cleanup',
+        status: 'passed',
+        cleanup: { status: 'absent' },
+        workspaceRemoved: true,
+      });
+      expect(setup.commands).toHaveLength(commands);
+      expect(setup.events.slice(events)).toEqual([
+        'acquire-lock',
+        'release-lock',
+      ]);
+      expect(existsSync(setup.workspace)).toBe(false);
+      if (reportState === 'missing') expect(existsSync(reportFile)).toBe(false);
+      else expect(readFileSync(reportFile, 'utf8')).toBe(originalReport);
+      expect(
+        JSON.parse(
+          readFileSync(path.join(setup.runDir, 'cleanup-report.json'), 'utf8'),
+        ),
+      ).toMatchObject({ mode: 'cleanup', status: 'passed' });
+    },
+  );
+
+  test.each(['binding', 'unknown', 'inventory', 'identity'])(
+    'cleanup rejects mismatched or unconfirmed retirement evidence: %s',
+    async (change) => {
+      const setup = fixture({ interruptRemoval: 'partial' });
+      await setup.run();
+      setup.settings.interruptRemoval = undefined;
+      const retirementFile = path.join(setup.runDir, 'retirement.json');
+      const retirement = JSON.parse(readFileSync(retirementFile, 'utf8'));
+      if (change === 'binding') retirement.binding.runId = 'another-run';
+      if (change === 'unknown') retirement.cleanup.status = 'unknown';
+      if (change === 'inventory') retirement.cleanup.inventory[0].count = 1;
+      if (change === 'identity')
+        retirement.cleanup.deploymentInstanceId = 'another-deployment';
+      writeFileSync(retirementFile, JSON.stringify(retirement));
+      const commands = setup.commands.length;
+      await expect(
+        runLiveDeploymentAcceptance({ cleanup: setup.runDir }, setup.ports),
+      ).rejects.toThrow();
+      expect(setup.commands).toHaveLength(commands);
+      expect(existsSync(setup.workspace)).toBe(true);
+    },
+  );
+
+  test('cleanup retirement binds the entire run state while allowing harmless JSON reformatting and key order', async () => {
+    const setup = fixture({ interruptRemoval: 'partial' });
+    await setup.run();
+    setup.settings.interruptRemoval = undefined;
+    const runFile = path.join(setup.runDir, 'run.json');
+    const state = JSON.parse(readFileSync(runFile, 'utf8'));
+    writeFileSync(
+      runFile,
+      JSON.stringify({ ...state, allowedIpv4: '203.0.113.43/32' }),
+    );
+    await expect(
+      runLiveDeploymentAcceptance({ cleanup: setup.runDir }, setup.ports),
+    ).rejects.toThrow();
+    expect(existsSync(setup.workspace)).toBe(true);
+    writeFileSync(
+      runFile,
+      JSON.stringify(Object.fromEntries(Object.entries(state).reverse())),
+    );
+    const cleaned = await runLiveDeploymentAcceptance(
+      { cleanup: setup.runDir },
+      setup.ports,
+    );
+    expect(cleaned).toMatchObject({ status: 'passed', workspaceRemoved: true });
+  });
+
+  test('retirement preserves a workspace when an earlier run-state publication left stale artifact authority', async () => {
+    const setup = fixture({
+      failAt: 'preview',
+      revertArtifactReceiptAtRemoval: true,
+    });
+    const report = await setup.run();
+    expect(report).toMatchObject({
+      status: 'failed',
+      failure: { phase: 'preview' },
+      cleanup: {
+        status: 'not-created',
+        failure: { phase: 'prepare-removal' },
+      },
+      workspaceRemoved: false,
+    });
+    expect(existsSync(setup.workspace)).toBe(true);
+    expect(existsSync(path.join(setup.runDir, 'retirement.json'))).toBe(false);
+    setup.settings.revertArtifactReceiptAtRemoval = false;
+    const commands = setup.commands.length;
+    const cleaned = await runLiveDeploymentAcceptance(
+      { cleanup: setup.runDir },
+      setup.ports,
+    );
+    expect(cleaned).toMatchObject({
+      mode: 'cleanup',
+      status: 'passed',
+      cleanup: { status: 'not-created' },
+      workspaceRemoved: true,
+    });
+    expect(setup.commands).toHaveLength(commands);
+  });
+
+  test('retirement cannot authorize removal through a dangling workspace symlink', async () => {
+    const setup = fixture({ interruptRemoval: 'complete' });
+    await setup.run();
+    setup.settings.interruptRemoval = undefined;
+    const target = path.join(path.dirname(setup.runDir), 'missing-target');
+    symlinkSync(target, setup.workspace, 'dir');
+    const commands = setup.commands.length;
+    await expect(
+      runLiveDeploymentAcceptance({ cleanup: setup.runDir }, setup.ports),
+    ).rejects.toThrow('Expected a real private directory.');
+    expect(setup.commands).toHaveLength(commands);
+    expect(readdirSync(setup.runDir)).toContain('workspace');
   });
 
   test('ordinary local application arguments receive no cloud credentials', async () => {

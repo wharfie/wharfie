@@ -18,13 +18,14 @@ import { getHostBuildTarget } from '../src/core/runtime/host-build-target.js';
 import { assertPackageContents, REPO_ROOT } from './package-verification.js';
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_INPUT_BYTES = 256 * 1024;
 const APP_ID = 'hello-world';
 
 /**
  * Run an acceptance subprocess with bounded output, a hard deadline, and one
  * process group that can also reap npm and builder descendants. Raw output is
  * available only on success; failure metadata never includes argv or logs.
- * @param {{file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal, phase?: string}} options - Exact command boundary.
+ * @param {{file: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, timeoutMs: number, signal?: AbortSignal, phase?: string, stdin?: string}} options - Exact command boundary.
  * @returns {Promise<{stdout: string, stderr: string, status: number, signal: null, durationMs: number}>} - Successful bounded output.
  */
 export async function runLiveDeploymentProcess(options) {
@@ -42,6 +43,12 @@ export async function runLiveDeploymentProcess(options) {
       options.timeoutMs <= 2_147_483_647,
   );
   assert.ok(['darwin', 'linux'].includes(process.platform));
+  assert.ok(
+    options.stdin === undefined ||
+      (typeof options.stdin === 'string' &&
+        Buffer.byteLength(options.stdin) <= MAX_INPUT_BYTES),
+    'Live deployment subprocess input exceeds its bound.',
+  );
   const started = performance.now();
   const diagnostic = {
     phase: options.phase || 'subprocess',
@@ -53,6 +60,7 @@ export async function runLiveDeploymentProcess(options) {
     aborted: false,
     outputLimitExceeded: false,
     spawnError: false,
+    stdinError: false,
   };
   /** @returns {Error} - Safe failure with bounded structured metadata. */
   const failure = () => {
@@ -72,8 +80,9 @@ export async function runLiveDeploymentProcess(options) {
       env: options.env,
       shell: false,
       detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
     });
+    assert.ok(child.stdout && child.stderr);
     /** @type {Buffer[]} */
     const stdout = [];
     /** @type {Buffer[]} */
@@ -128,6 +137,11 @@ export async function runLiveDeploymentProcess(options) {
       diagnostic.spawnError = true;
       killGroup();
     });
+    child.stdin?.once('error', () => {
+      diagnostic.stdinError = true;
+      killGroup();
+    });
+    child.stdin?.end(options.stdin);
     child.once('close', (status, signal) => {
       clearTimeout(timer);
       options.signal?.removeEventListener('abort', abort);
@@ -139,7 +153,8 @@ export async function runLiveDeploymentProcess(options) {
         diagnostic.timedOut ||
         diagnostic.aborted ||
         diagnostic.outputLimitExceeded ||
-        diagnostic.spawnError
+        diagnostic.spawnError ||
+        diagnostic.stdinError
       ) {
         killGroup();
         reject(failure());

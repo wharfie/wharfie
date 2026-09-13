@@ -25,6 +25,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { createCanonicalJsonSha256Id } from '../src/core/runtime/content-id.js';
 import { assertSingleNodeDeploymentInstanceId } from '../src/core/runtime/single-node-deployment-identity.js';
 import { acquireSingleNodeDeploymentOperationLock } from '../src/core/runtime/single-node-deployment-operation-lock.js';
 import {
@@ -33,7 +34,7 @@ import {
 } from '../src/core/runtime/single-node-deployment-journal.js';
 import { validateSingleNodeDeploymentPreview } from '../src/core/runtime/single-node-deployment-preview.js';
 import { validateSingleNodeDeploymentStatus } from '../src/core/runtime/single-node-deployment-status.js';
-import { auditLiveDeploymentCleanup } from './live-deployment-provider-audit.js';
+import { auditLiveDeploymentCleanupInChild } from './live-deployment-audit-child.js';
 import {
   buildLiveDeploymentCandidate,
   runLiveDeploymentProcess,
@@ -41,6 +42,7 @@ import {
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const FORMAT = 'wharfie.live-deployment.run.v1';
+const RETIREMENT_FORMAT = 'wharfie.live-deployment.retirement.v1';
 const APP_ID = 'hello-world';
 const MAX_RECEIPT_BYTES = 256 * 1024;
 const HELP = `Usage:
@@ -220,6 +222,85 @@ function readJson(directory, name) {
     'Invalid acceptance receipt.',
   );
   return JSON.parse(readFileSync(selected, 'utf8'));
+}
+
+/**
+ * Bind terminal cleanup evidence to the complete persisted run authority.
+ * @param {Record<string, any>} state
+ */
+function retirementBinding(state) {
+  return {
+    runId: state.runId,
+    deploymentId: state.deploymentId,
+    deploymentInstanceId: state.deploymentInstanceId,
+    provider: state.provider,
+    runStateId: createCanonicalJsonSha256Id({
+      domain: 'wharfie:live-deployment-run:v1',
+      prefix: 'wlrs1',
+      value: state,
+    }),
+  };
+}
+
+/**
+ * Only confirmed absence or a run with no attempted apply authorizes removal.
+ * @param {Record<string, any>} cleanup
+ * @param {Record<string, any>} state
+ */
+function assertTerminalCleanup(cleanup, state) {
+  if (!state.applyAttempted) {
+    assert.deepEqual(cleanup, { status: 'not-created' });
+    return;
+  }
+  assert.equal(cleanup.schemaVersion, 1);
+  assert.equal(cleanup.kind, 'wharfie.live-deployment.cleanup');
+  assert.equal(cleanup.provider, state.provider);
+  assert.equal(cleanup.deploymentInstanceId, state.deploymentInstanceId);
+  assert.equal(cleanup.status, 'absent');
+  assert.equal(cleanup.reason, null);
+  assert.equal(cleanup.failure, undefined);
+  const roles =
+    state.provider === 'aws'
+      ? ['instance', 'rootVolume', 'securityGroup']
+      : ['firewall', 'primaryIp', 'server'];
+  assert.ok(
+    Array.isArray(cleanup.resources) &&
+      cleanup.resources.length === 3 &&
+      cleanup.resources.every((/** @type {Record<string, any>} */ resource) =>
+        ['absent', 'unrecorded'].includes(resource.status),
+      ),
+  );
+  assert.ok(
+    Array.isArray(cleanup.inventory) &&
+      cleanup.inventory.length === 3 &&
+      cleanup.inventory.every(
+        (/** @type {Record<string, any>} */ resource) =>
+          resource.status === 'absent' && resource.count === 0,
+      ),
+  );
+  for (const collection of [cleanup.resources, cleanup.inventory]) {
+    assert.deepEqual(
+      collection
+        .map((/** @type {Record<string, any>} */ resource) => resource.role)
+        .sort(),
+      roles,
+    );
+  }
+}
+
+/**
+ * Recover removal authority without depending on partially deleted workspace files.
+ * @param {string} runDir
+ * @param {Record<string, any>} state
+ * @returns {Record<string, any>|null}
+ */
+function readRetirement(runDir, state) {
+  if (!existsSync(path.join(runDir, 'retirement.json'))) return null;
+  const retirement = readJson(runDir, 'retirement.json');
+  assert.equal(retirement.format, RETIREMENT_FORMAT);
+  assert.deepEqual(retirement.binding, retirementBinding(state));
+  assertTerminalCleanup(retirement.cleanup, state);
+  return retirement;
 }
 
 /**
@@ -480,7 +561,7 @@ async function runAcceptance(options, dependencies) {
     build: buildCandidate,
     run: runLiveDeploymentProcess,
     readJournal,
-    audit: auditLiveDeploymentCleanup,
+    audit: auditLiveDeploymentCleanupInChild,
     verifyExecutable,
     validatePreview: validateSingleNodeDeploymentPreview,
     validateStatus: assertHealthyStatus,
@@ -491,6 +572,7 @@ async function runAcceptance(options, dependencies) {
   });
   const started = performance.now();
   let state = /** @type {Record<string, any>} */ ({});
+  let retirement = /** @type {Record<string, any>|null} */ (null);
   let runDir = '';
   if (options.cleanup) {
     runDir = realpathSync(options.cleanup);
@@ -509,7 +591,12 @@ async function runAcceptance(options, dependencies) {
     assert.equal(checked.provider, state.provider);
     assert.ok(/^acceptance-[0-9a-f-]{36}$/.test(state.deploymentId));
     assert.equal(typeof state.applyAttempted, 'boolean');
-    if (!existsSync(path.join(runDir, 'workspace'))) {
+    retirement = readRetirement(runDir, state);
+    if (
+      retirement === null &&
+      lstatSync(path.join(runDir, 'workspace'), { throwIfNoEntry: false }) ===
+        undefined
+    ) {
       const report = readJson(
         runDir,
         existsSync(path.join(runDir, 'cleanup-report.json'))
@@ -557,7 +644,11 @@ async function runAcceptance(options, dependencies) {
     writeJson(runDir, 'run.json', state);
   }
   const workspace = path.join(runDir, 'workspace');
-  assertPrivateDirectory(workspace);
+  if (
+    retirement === null ||
+    lstatSync(workspace, { throwIfNoEntry: false }) !== undefined
+  )
+    assertPrivateDirectory(workspace);
   const executable = path.join(workspace, 'app');
   const dataRoot = path.join(workspace, 'controller');
   const environment = liveDeploymentControllerEnvironment(state.provider);
@@ -566,9 +657,11 @@ async function runAcceptance(options, dependencies) {
     /** @type {ReturnType<typeof liveDeploymentFailureDiagnostic>|null} */ (
       null
     );
-  let cleanup = /** @type {Record<string, any>} */ ({
-    status: state.applyAttempted ? 'unknown' : 'not-created',
-  });
+  let cleanup = /** @type {Record<string, any>} */ (
+    retirement?.cleanup ?? {
+      status: state.applyAttempted ? 'unknown' : 'not-created',
+    }
+  );
   let workspaceRemoved = false;
   let currentPhase = 'preflight';
   let phaseStarted = started;
@@ -787,7 +880,7 @@ async function runAcceptance(options, dependencies) {
   }
   // Always run journal-directed destruction, including a lost/failed apply response.
   try {
-    if (state.applyAttempted) {
+    if (state.applyAttempted && retirement === null) {
       await phase('cleanup', async () => {
         await ports.verifyExecutable(executable, state.artifactRecord);
         let journal = await ports.readJournal(state, dataRoot);
@@ -824,7 +917,7 @@ async function runAcceptance(options, dependencies) {
         }
         const deadline = performance.now() + 120_000;
         do {
-          cleanup = await ports.audit({ journal, dataRoot });
+          cleanup = await ports.audit({ journal, dataRoot, env: environment });
           writeJson(runDir, 'cleanup.json', cleanup);
           if (cleanup.status === 'absent') return;
           assert.equal(
@@ -838,9 +931,28 @@ async function runAcceptance(options, dependencies) {
         throw new Error('Provider resources remain after destruction.');
       });
     }
+    if (retirement === null) {
+      await phase('prepare-removal', async () => {
+        assertTerminalCleanup(cleanup, state);
+        const binding = retirementBinding(readJson(runDir, 'run.json'));
+        assert.deepEqual(
+          binding,
+          retirementBinding(state),
+          'Persisted run authority changed before workspace retirement.',
+        );
+        retirement = {
+          format: RETIREMENT_FORMAT,
+          binding,
+          cleanup,
+        };
+        writeJson(runDir, 'retirement.json', retirement);
+      });
+    }
     await phase('remove-workspace', async () => {
-      assertPrivateDirectory(workspace);
-      rmSync(workspace, { recursive: true, force: true });
+      if (lstatSync(workspace, { throwIfNoEntry: false }) !== undefined) {
+        assertPrivateDirectory(workspace);
+        rmSync(workspace, { recursive: true, force: true });
+      }
       workspaceRemoved = true;
     });
   } catch (error) {

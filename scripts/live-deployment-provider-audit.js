@@ -302,6 +302,7 @@ async function auditAws(journal, report, ports) {
  */
 async function auditHetzner(journal, dataRoot, report, ports) {
   let api;
+  const cancellation = new AbortController();
   try {
     if (typeof dataRoot !== 'string' || !path.isAbsolute(dataRoot))
       throw new AuditError();
@@ -326,7 +327,7 @@ async function auditHetzner(journal, dataRoot, report, ports) {
     );
     if (evidence.deploymentInstanceId !== journal.deploymentInstanceId)
       throw new AuditError();
-    api = ports.createHetznerReadClient({ token });
+    api = ports.createHetznerReadClient({ token, signal: cancellation.signal });
   } catch {
     throw new AuditError('credential-binding-failed');
   }
@@ -369,12 +370,16 @@ async function auditHetzner(journal, dataRoot, report, ports) {
       },
     ];
   });
-  const outcomes = await bounded(
-    Promise.allSettled(checks.map((check) => check())),
-    ports.timeoutMs,
-  );
-  const failed = outcomes.find((entry) => entry.status === 'rejected');
-  if (failed?.status === 'rejected') throw failed.reason;
+  try {
+    const outcomes = await bounded(
+      Promise.allSettled(checks.map((check) => check())),
+      ports.timeoutMs,
+    );
+    const failed = outcomes.find((entry) => entry.status === 'rejected');
+    if (failed?.status === 'rejected') throw failed.reason;
+  } finally {
+    cancellation.abort();
+  }
 }
 
 /**

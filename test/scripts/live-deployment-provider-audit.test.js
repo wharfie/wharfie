@@ -265,6 +265,7 @@ function hetznerHarness(overrides = {}) {
     deploymentInstanceId: fixture.desired.deploymentInstanceId,
     bindingId: `whcb1_${sha256Base64Url('binding')}`,
   }));
+  /** @type {jest.Mock<(input: any) => any>} */
   const createClient = jest.fn(() => api);
   const audit = createLiveDeploymentCleanupAuditor({
     readHetznerToken: () => 'private-token',
@@ -315,7 +316,7 @@ describe('independent live deployment cleanup audit', () => {
   });
 
   it('requires all exact Hetzner IDs absent and independently inventories each owned resource kind', async () => {
-    const { audit, api, requireBinding } = hetznerHarness();
+    const { audit, api, requireBinding, createClient } = hetznerHarness();
     const journal = createSingleNodeStatusActiveJournal(fixture);
     const result = await audit({ journal, dataRoot: DATA_ROOT });
     expect(result.status).toBe('absent');
@@ -339,6 +340,44 @@ describe('independent live deployment cleanup audit', () => {
       token: 'private-token',
     });
     expect(JSON.stringify(result)).not.toContain('private-token');
+    expect(createClient.mock.calls[0][0].signal.aborted).toBe(true);
+  });
+
+  it('cancels every started Hetzner GET at the audit deadline without retrying', async () => {
+    const { requireBinding } = hetznerHarness();
+    /** @type {Array<AbortSignal|null|undefined>} */
+    const requests = [];
+    const fetchImplementation = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (_url, options) => {
+        const signal = options?.signal;
+        requests.push(signal);
+        return await new Promise((_resolve, reject) =>
+          signal?.addEventListener('abort', () =>
+            reject(new Error('private cancellation reason')),
+          ),
+        );
+      });
+    try {
+      const audit = createLiveDeploymentCleanupAuditor({
+        readHetznerToken: () => 'private-token',
+        requireHetznerBinding: requireBinding,
+        timeoutMs: 10,
+      });
+      const result = await audit({
+        journal: createSingleNodeStatusActiveJournal(fixture),
+        dataRoot: DATA_ROOT,
+      });
+      expect(result.status).toBe('unknown');
+      expect(result.reason).toBe('provider-read-timeout');
+      expect(requests).toHaveLength(6);
+      expect(requests.every((signal) => signal?.aborted)).toBe(true);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(fetchImplementation).toHaveBeenCalledTimes(6);
+      expect(JSON.stringify(result)).not.toContain('private cancellation');
+    } finally {
+      fetchImplementation.mockRestore();
+    }
   });
 
   it('finds an ID whose ownership labels disappeared even when inventory is empty', async () => {
