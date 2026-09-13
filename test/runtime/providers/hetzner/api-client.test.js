@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import {
   createHetznerApiClient,
   createHetznerApiClientForTest,
+  createHetznerPreviewApiClient,
   createHetznerStatusApiClient,
   HetznerApiError,
 } from '../../../../src/core/runtime/providers/hetzner/api-client.js';
@@ -182,6 +183,113 @@ function fetchMock(implementation) {
 }
 
 describe('Hetzner API client', () => {
+  it('permits cancellation only through the production status read capability', async () => {
+    const cancellation = new AbortController();
+    const options = { token: TOKEN, signal: cancellation.signal };
+    cancellation.abort('private cancellation reason');
+    const client = createHetznerStatusApiClient(options);
+    await expect(client.listServers()).rejects.toMatchObject({
+      code: 'HETZNER_API_REQUEST_ABORTED',
+      message: 'Hetzner API read was cancelled.',
+    });
+    expect(() => createHetznerApiClient(options)).toThrow();
+    expect(() => createHetznerPreviewApiClient(options)).toThrow();
+    expect(() =>
+      createHetznerStatusApiClient({ token: TOKEN, signal: {} }),
+    ).toThrow();
+    expect(() =>
+      createHetznerStatusApiClient({ token: TOKEN, baseUrl: BASE_URL }),
+    ).toThrow();
+  });
+
+  it('cancels the retry delay and never retries after cancellation', async () => {
+    const cancellation = new AbortController();
+    const fetchImplementation = fetchMock(async () =>
+      jsonResponse({ error: { code: 'rate_limit_exceeded' } }, { status: 429 }),
+    );
+    const client = clientWith(fetchImplementation, {
+      signal: cancellation.signal,
+      waitForRetry: undefined,
+    });
+    const pending = client
+      .listServers()
+      .catch((/** @type {unknown} */ error) => error);
+    await new Promise((resolve) => setImmediate(resolve));
+    cancellation.abort('private cancellation reason');
+    expect(await pending).toMatchObject({
+      code: 'HETZNER_API_REQUEST_ABORTED',
+      message: 'Hetzner API read was cancelled.',
+    });
+    await expect(client.listServers()).rejects.toMatchObject({
+      code: 'HETZNER_API_REQUEST_ABORTED',
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts an in-progress response body without exposing the abort reason', async () => {
+    const cancellation = new AbortController();
+    const fetchImplementation = fetchMock(
+      async (_url, options) =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              options.signal.addEventListener('abort', () =>
+                controller.error(new Error('private body cancellation reason')),
+              );
+            },
+          }),
+        ),
+    );
+    const client = clientWith(fetchImplementation, {
+      signal: cancellation.signal,
+    });
+    const pending = client
+      .getServer(6)
+      .catch((/** @type {unknown} */ error) => error);
+    await new Promise((resolve) => setImmediate(resolve));
+    cancellation.abort('private cancellation reason');
+    expect(await pending).toMatchObject({
+      code: 'HETZNER_API_REQUEST_ABORTED',
+      message: 'Hetzner API read was cancelled.',
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts a slow subsequent inventory page without starting another request', async () => {
+    const cancellation = new AbortController();
+    const fetchImplementation = fetchMock(async (url, options) => {
+      if (url.endsWith('page=1')) {
+        return jsonResponse(
+          listDocument(
+            { servers: [server()] },
+            { next_page: 2, last_page: 3, total_entries: 3, per_page: 1 },
+          ),
+        );
+      }
+      return await new Promise((_resolve, reject) =>
+        options.signal.addEventListener('abort', () =>
+          reject(new Error('private fetch cancellation reason')),
+        ),
+      );
+    });
+    const waitForRetry = jest.fn(async () => {});
+    const client = clientWith(fetchImplementation, {
+      signal: cancellation.signal,
+      waitForRetry,
+    });
+    const pending = client
+      .listServers()
+      .catch((/** @type {unknown} */ error) => error);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    cancellation.abort();
+    expect(await pending).toMatchObject({
+      code: 'HETZNER_API_REQUEST_ABORTED',
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
   it('projects the exact frozen six-method status read capability', () => {
     const client = createHetznerStatusApiClient({ token: TOKEN });
 

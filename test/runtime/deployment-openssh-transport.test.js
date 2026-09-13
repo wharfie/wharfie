@@ -111,6 +111,8 @@ describe('deployment OpenSSH transport', () => {
         '-o',
         'ClearAllForwardings=yes',
         '-o',
+        'Compression=yes',
+        '-o',
         'ConnectionAttempts=1',
         '-o',
         'ConnectTimeout=10',

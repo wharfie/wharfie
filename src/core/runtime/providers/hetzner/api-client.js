@@ -1,3 +1,5 @@
+import { setTimeout as wait } from 'node:timers/promises';
+
 import {
   decodeHetznerActionResponse,
   decodeHetznerFirewallCreationResponse,
@@ -369,16 +371,35 @@ function safeRequestId(value) {
 
 /**
  * @param {number} attempt - One-based attempt number.
+ * @param {AbortSignal|undefined} signal - Optional read cancellation.
  * @returns {Promise<void>} - Delay.
  */
-function defaultWaitForRetry(attempt) {
+async function defaultWaitForRetry(attempt, signal) {
   const delay = Math.min(250 * 2 ** (attempt - 1), 2_000);
-  return new Promise((resolve) => setTimeout(resolve, delay));
+  try {
+    await wait(delay, undefined, { signal });
+  } catch {
+    // The request loop emits a fixed error without exposing signal.reason.
+    assertNotAborted(signal);
+  }
+}
+
+/**
+ * @param {AbortSignal|undefined} signal - Optional read cancellation.
+ * @returns {void} - Throws a fixed error after cancellation.
+ */
+function assertNotAborted(signal) {
+  if (signal?.aborted) {
+    throw new HetznerApiError(
+      'HETZNER_API_REQUEST_ABORTED',
+      'Hetzner API read was cancelled.',
+    );
+  }
 }
 
 /**
  * @param {unknown} value - Internal client options.
- * @returns {{token: string, fetchImplementation: typeof fetch, baseUrl: string, maxGetAttempts: number, requestTimeoutMs: number, waitForRetry: (attempt: number, status: number|null) => Promise<void>}} - Validated options.
+ * @returns {{token: string, fetchImplementation: typeof fetch, baseUrl: string, maxGetAttempts: number, requestTimeoutMs: number, waitForRetry: (attempt: number, status: number|null) => Promise<void>, signal: AbortSignal|undefined}} - Validated options.
  */
 function clientOptions(value) {
   if (!isPlainObject(value)) throw new TypeError(INVALID_OPTIONS);
@@ -389,6 +410,7 @@ function clientOptions(value) {
     'maxGetAttempts',
     'requestTimeoutMs',
     'waitForRetry',
+    'signal',
   ]);
   if (
     Reflect.ownKeys(value).some(
@@ -413,7 +435,10 @@ function clientOptions(value) {
   const baseUrl = value.baseUrl ?? PRODUCTION_BASE_URL;
   const maxGetAttempts = value.maxGetAttempts ?? DEFAULT_MAX_GET_ATTEMPTS;
   const requestTimeoutMs = value.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  const waitForRetry = value.waitForRetry ?? defaultWaitForRetry;
+  const signal = value.signal;
+  const waitForRetry =
+    value.waitForRetry ??
+    ((/** @type {number} */ attempt) => defaultWaitForRetry(attempt, signal));
   if (
     typeof token !== 'string' ||
     token.length === 0 ||
@@ -429,7 +454,8 @@ function clientOptions(value) {
     !Number.isSafeInteger(requestTimeoutMs) ||
     requestTimeoutMs < 1 ||
     requestTimeoutMs > MAX_REQUEST_TIMEOUT_MS ||
-    typeof waitForRetry !== 'function'
+    typeof waitForRetry !== 'function' ||
+    (signal !== undefined && !(signal instanceof AbortSignal))
   ) {
     throw new TypeError(INVALID_OPTIONS);
   }
@@ -440,6 +466,7 @@ function clientOptions(value) {
     maxGetAttempts,
     requestTimeoutMs,
     waitForRetry,
+    signal,
   };
 }
 
@@ -457,6 +484,7 @@ function createClient(rawOptions) {
     maxGetAttempts,
     requestTimeoutMs,
     waitForRetry,
+    signal,
   } = clientOptions(rawOptions);
 
   /**
@@ -476,6 +504,7 @@ function createClient(rawOptions) {
     const attemptLimit = method === 'GET' ? maxGetAttempts : 1;
 
     for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
+      assertNotAborted(signal);
       /** @type {Response} */
       let response;
       try {
@@ -484,7 +513,13 @@ function createClient(rawOptions) {
           {
             method,
             redirect: 'error',
-            signal: AbortSignal.timeout(requestTimeoutMs),
+            signal:
+              signal === undefined
+                ? AbortSignal.timeout(requestTimeoutMs)
+                : AbortSignal.any([
+                    signal,
+                    AbortSignal.timeout(requestTimeoutMs),
+                  ]),
             headers: {
               accept: 'application/json',
               authorization: `Bearer ${token}`,
@@ -497,6 +532,7 @@ function createClient(rawOptions) {
           },
         ]);
       } catch {
+        assertNotAborted(signal);
         if (method === 'GET' && attempt < attemptLimit) {
           await waitForRetry(attempt, null);
           continue;
@@ -515,6 +551,7 @@ function createClient(rawOptions) {
         attempt < attemptLimit
       ) {
         await discardBody(response);
+        assertNotAborted(signal);
         await waitForRetry(attempt, response.status);
         continue;
       }
@@ -555,6 +592,7 @@ function createClient(rawOptions) {
       try {
         return await readBoundedJson(response);
       } catch (error) {
+        assertNotAborted(signal);
         if (method !== 'GET') {
           throw mutationOutcomeUnknown({ status: response.status, requestId });
         }
@@ -855,14 +893,18 @@ export function createHetznerPreviewApiClient(value) {
  * Create the production GET-only API capability used by deployment status.
  * Catalog reads and every mutation remain outside this exact resource
  * inspection boundary.
- * @param {unknown} value - Exact `{token}` options.
+ * @param {unknown} value - Exact `{token}` options with optional read-only `signal`.
  * @returns {Readonly<Record<string, Function>>} - Resource list/get methods.
  */
 export function createHetznerStatusApiClient(value) {
-  return readClientProjection(
-    createHetznerApiClient(value),
-    STATUS_READ_METHODS,
-  );
+  if (
+    !isPlainObject(value) ||
+    !Object.hasOwn(value, 'token') ||
+    Reflect.ownKeys(value).some((key) => key !== 'token' && key !== 'signal')
+  ) {
+    throw new TypeError(INVALID_OPTIONS);
+  }
+  return readClientProjection(createClient(value), STATUS_READ_METHODS);
 }
 
 /**

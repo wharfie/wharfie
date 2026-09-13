@@ -258,6 +258,10 @@ export function createDeploymentOpenSshTransport(options) {
     '-o',
     'ClearAllForwardings=yes',
     '-o',
+    // SEA uploads contain a full Node executable. Compress this one pinned,
+    // non-multiplexed connection while preserving the exact received bytes.
+    'Compression=yes',
+    '-o',
     'ConnectionAttempts=1',
     '-o',
     'ConnectTimeout=10',
