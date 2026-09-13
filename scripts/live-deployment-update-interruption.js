@@ -497,6 +497,7 @@ export async function interruptLiveDeploymentUpdate(
       [],
       'Owned controller process group did not exit.',
     );
+    assert.ok(!failureReason);
     return {
       ...receipt,
       controllerExitConfirmed: true,

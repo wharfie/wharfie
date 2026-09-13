@@ -365,6 +365,75 @@ describe('live packaged update controller interruption', () => {
     });
   });
 
+  it('rejects cancellation during the final journal observation after controller exit', async () => {
+    const { options, dependencies, state } = setup();
+    const cancellation = new AbortController();
+    options.readJournal.mockImplementation(async () => {
+      if (state.closed) cancellation.abort();
+      return state.journal;
+    });
+    await expect(
+      interruptLiveDeploymentUpdate(
+        { ...options, signal: cancellation.signal },
+        dependencies,
+      ),
+    ).rejects.toMatchObject({
+      diagnostic: {
+        aborted: true,
+        controllerExitConfirmed: true,
+        signal: 'SIGKILL',
+        faultStage: 'confirm-process-group-exit',
+        faultCode: 'aborted',
+      },
+    });
+  });
+
+  it('rejects a deadline during the final process observation after controller exit', async () => {
+    const { options, dependencies, state, observation } = setup();
+    /** @type {AbortSignal|undefined} */
+    let observationSignal;
+    const original =
+      dependencies.listProcesses.getMockImplementation() ?? (async () => []);
+    dependencies.listProcesses.mockImplementation(async () => {
+      const entries = await original();
+      if (state.closed && !observationSignal?.aborted) {
+        await new Promise((resolve) => {
+          observationSignal?.addEventListener(
+            'abort',
+            () => resolve(undefined),
+            {
+              once: true,
+            },
+          );
+        });
+      }
+      return entries;
+    });
+    await expect(
+      interruptLiveDeploymentUpdate(
+        {
+          ...options,
+          timeoutMs: 50,
+          observeTarget: async (
+            /** @type {{signal: AbortSignal}} */ { signal },
+          ) => {
+            observationSignal = signal;
+            return observation;
+          },
+        },
+        dependencies,
+      ),
+    ).rejects.toMatchObject({
+      diagnostic: {
+        timedOut: true,
+        controllerExitConfirmed: true,
+        signal: 'SIGKILL',
+        faultStage: 'confirm-process-group-exit',
+        faultCode: 'deadline',
+      },
+    });
+  });
+
   it('handles an unsuccessful spawn without an unhandled error or signaling another process', async () => {
     const { options, dependencies, child } = setup();
     dependencies.spawn.mockImplementation(() => {
