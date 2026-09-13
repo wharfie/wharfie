@@ -6,11 +6,14 @@ import {
   rebootLiveDeploymentProvider,
 } from '../../scripts/live-deployment-reboot-child.js';
 import { SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH } from '../../src/core/runtime/single-node-cloud-init.js';
+import { prepareSingleNodeDeploymentReleaseUpdate } from '../../src/core/runtime/single-node-deployment-journal.js';
+import { getSingleNodeRemoteArtifactPaths } from '../../src/core/runtime/single-node-remote-activation.js';
 import {
   createHealthySingleNodeServiceStatus,
   createProcessOutcome,
   createSingleNodeStatusActiveJournal,
   createSingleNodeStatusAuthorityFixture,
+  createSingleNodeStatusUpdateTarget,
 } from '../runtime/fixtures/single-node-status-fixture.js';
 
 const ACCEPTANCE_ID = 'a8234df0-0cc3-455f-8d75-afd7b7482903';
@@ -52,6 +55,7 @@ async function hostFixture() {
     input: '',
     markers: '',
     disappeared: false,
+    artifactDigest: fixture.artifactRecord.byteDigest.value,
     service: createHealthySingleNodeServiceStatus(fixture),
   };
   const remote = jest.fn(async (/** @type {Record<string, any>} */ request) => {
@@ -72,6 +76,8 @@ async function hostFixture() {
       else throw new Error('Unexpected fixture read.');
     } else if (argv[0] === '/usr/bin/id' || argv[0] === '/usr/bin/stat') {
       output = String(observed.uid);
+    } else if (argv[0] === '/usr/bin/sha256sum') {
+      output = `${Buffer.from(observed.artifactDigest, 'base64url').toString('hex')}  ${argv.at(-1)}\n`;
     } else if (argv[0] === '/bin/sh') {
       if (argv[2].includes('set -C'))
         observed.input = request.stdin.toString('utf8');
@@ -126,6 +132,101 @@ async function hostFixture() {
 }
 
 describe('live acceptance pinned host operations', () => {
+  it('observes exact uploaded target bytes before the local journal settles them', async () => {
+    const { input, dependencies, observed, remote } = await hostFixture();
+    const target = createSingleNodeStatusUpdateTarget(
+      fixture,
+      'target-observation',
+    );
+    const pending = prepareSingleNodeDeploymentReleaseUpdate(
+      journal,
+      target.desired,
+    );
+    observed.service = createHealthySingleNodeServiceStatus({
+      ...fixture,
+      desired: target.desired,
+    });
+    observed.artifactDigest = target.artifactRecord.byteDigest.value;
+    const host = await createLiveDeploymentHost(
+      {
+        ...input,
+        journal: pending,
+        release: 'target',
+        state: {
+          ...state,
+          desiredRevisionId: target.desired.desiredRevisionId,
+          guestArtifactId: target.artifactRecord.artifactId,
+          guestRevisionId: target.artifactRecord.revisionId,
+        },
+      },
+      dependencies,
+    );
+    const observation = await host.observe();
+    expect(observation.artifactId).toBe(target.artifactRecord.artifactId);
+    expect(observation.service.health).toBe('healthy');
+    expect(pending.release.current.desired.artifact.artifactId).toBe(
+      fixture.artifactRecord.artifactId,
+    );
+    expect(pending.release.transition.target.activation).toBeNull();
+    const expectedPath = getSingleNodeRemoteArtifactPaths(
+      target.desired,
+      journal.incarnationId,
+    ).remoteArtifactPath;
+    expect(remote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: ['/usr/bin/sha256sum', '--', expectedPath],
+      }),
+    );
+    expect(remote).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: [expectedPath, 'wharfie', 'service', 'status', '--json'],
+      }),
+    );
+    remote.mockClear();
+    await expect(host.killResident(observation)).rejects.toThrow(
+      'host-kill-resident',
+    );
+    await expect(host.reboot(observation)).rejects.toThrow('host-reboot');
+    await expect(host.stageInput(INPUT_PATH, 'bytes')).rejects.toThrow(
+      'host-stage-input',
+    );
+    expect(remote).not.toHaveBeenCalled();
+    observed.artifactDigest = fixture.artifactRecord.byteDigest.value;
+    await expect(host.observe()).rejects.toThrow('host-observe');
+    expect(
+      remote.mock.calls.some(([request]) => request.argv[0] === expectedPath),
+    ).toBe(false);
+  });
+
+  it('requires a prepared matching target and keeps current-only behavior unchanged', async () => {
+    const { input, dependencies, createTransport } = await hostFixture();
+    createTransport.mockClear();
+    await expect(
+      createLiveDeploymentHost({ ...input, release: 'target' }, dependencies),
+    ).rejects.toThrow('host-initialize');
+    const target = createSingleNodeStatusUpdateTarget(
+      fixture,
+      'target-selection',
+    );
+    const pending = prepareSingleNodeDeploymentReleaseUpdate(
+      journal,
+      target.desired,
+    );
+    await expect(
+      createLiveDeploymentHost({ ...input, journal: pending }, dependencies),
+    ).rejects.toThrow('host-initialize');
+    await expect(
+      createLiveDeploymentHost(
+        { ...input, journal: pending, release: 'target' },
+        dependencies,
+      ),
+    ).rejects.toThrow('host-initialize');
+    await expect(
+      createLiveDeploymentHost({ ...input, release: 'rollback' }, dependencies),
+    ).rejects.toThrow('host-initialize');
+    expect(createTransport).not.toHaveBeenCalled();
+  });
+
   it('observes installed release and exact boot/process identity through pinned SSH', async () => {
     const { host, remote, createTransport } = await hostFixture();
     const observed = await host.observe();

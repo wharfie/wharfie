@@ -37,6 +37,12 @@ const ARTIFACT_RECORD = {
   size: 4,
   target: { platform: 'linux', architecture: 'x64', libc: 'glibc' },
 };
+const NEXT_ARTIFACT_RECORD = {
+  ...ARTIFACT_RECORD,
+  artifactId: `wsaa1:${'n'.repeat(43)}`,
+  revisionId: `wsar1:${'r'.repeat(43)}`,
+  byteDigest: { algorithm: 'sha256', value: 'test-next-executable-digest' },
+};
 
 /** @param {Record<string, any>} [changes] */
 function commandFailure(changes = {}) {
@@ -70,6 +76,10 @@ function fixture(settings = {}) {
   let journal = null;
   let auditIndex = 0;
   let buildCount = 0;
+  const durabilityProof = {
+    runId: 'original-durable-run',
+    completed: { revisionId: ARTIFACT_RECORD.revisionId },
+  };
   let lockHeld = false;
   /** @type {string[]} */
   const lockIds = [];
@@ -138,11 +148,22 @@ function fixture(settings = {}) {
       writeFileSync(path.join(request.workspace, 'app'), 'test', {
         mode: 0o700,
       });
+      writeFileSync(path.join(request.workspace, 'app-next'), 'next', {
+        mode: 0o700,
+      });
       return {
         appId: 'steady-file-demo',
+        revisionId: ARTIFACT_RECORD.revisionId,
         executable: path.join(request.workspace, 'app'),
         artifactRecord: ARTIFACT_RECORD,
         packageVersion: '0.0.15',
+        next: {
+          appId: 'steady-file-demo',
+          revisionId: NEXT_ARTIFACT_RECORD.revisionId,
+          executable: path.join(request.workspace, 'app-next'),
+          artifactRecord: NEXT_ARTIFACT_RECORD,
+          packageVersion: '0.0.15',
+        },
       };
     },
     /** @param {Record<string, any>} request */
@@ -180,7 +201,9 @@ function fixture(settings = {}) {
           aborted: settings.abortController !== undefined,
         });
       }
-      if (request.phase === 'local-cli' || request.phase === 'remote-cli') {
+      if (
+        ['local-cli', 'local-cli-next', 'remote-cli'].includes(request.phase)
+      ) {
         const fingerprint = {
           bytes: Buffer.byteLength(LIVE_DEPLOYMENT_INPUT_BYTES),
           sha256: createHash('sha256')
@@ -193,9 +216,14 @@ function fixture(settings = {}) {
           stable: true,
           baseline: fingerprint,
           current: fingerprint,
+          ...(request.phase === 'local-cli-next'
+            ? { acceptanceRevision: 'B' }
+            : {}),
         });
       }
-      if (request.phase === 'preview') {
+      if (request.phase === 'preview' || request.phase === 'preview-next') {
+        const next = request.phase === 'preview-next';
+        const artifact = next ? NEXT_ARTIFACT_RECORD : ARTIFACT_RECORD;
         return output({
           schemaVersion: 1,
           kind: 'wharfie.single-node-deployment.preview',
@@ -206,9 +234,11 @@ function fixture(settings = {}) {
             deploymentId:
               request.args[request.args.indexOf('--deployment') + 1],
             deploymentInstanceId: INSTANCE_ID,
-            desiredRevisionId: 'desired-revision',
-            revisionId: ARTIFACT_RECORD.revisionId,
-            artifact: ARTIFACT_RECORD,
+            desiredRevisionId: next
+              ? 'next-desired-revision'
+              : 'desired-revision',
+            revisionId: artifact.revisionId,
+            artifact,
           },
           journal: { state: 'absent' },
         });
@@ -242,6 +272,20 @@ function fixture(settings = {}) {
           deploymentInstanceId: INSTANCE_ID,
         });
       }
+      if (['update-next', 'restore-primary'].includes(request.phase)) {
+        const next = request.phase === 'update-next';
+        const artifact = next ? NEXT_ARTIFACT_RECORD : ARTIFACT_RECORD;
+        journal = {
+          ...journal,
+          journalId: next ? 'journal-next' : 'journal-restored',
+          generation: next ? 5 : 6,
+          currentRelease: {
+            revisionId: artifact.revisionId,
+            artifactId: artifact.artifactId,
+          },
+        };
+        return output({ status: 'active', deploymentInstanceId: INSTANCE_ID });
+      }
       throw new Error(`Unexpected offline command phase: ${request.phase}`);
     },
     /** @param {Record<string, any>} request */
@@ -251,6 +295,47 @@ function fixture(settings = {}) {
       expect(request.state.appId).toBe('steady-file-demo');
       events.push('durability');
       if (settings.failAt === 'durability') throw commandFailure();
+      await request.onWaiting({ runId: durabilityProof.runId });
+      events.push('durability-completed');
+      return durabilityProof;
+    },
+    /** @param {Record<string, any>} request */
+    updates: async (request) => {
+      expect(lockHeld).toBe(true);
+      expect(request.journal.phase).toBe('active');
+      expect(request.state.nextRelease).toEqual({
+        artifactRecord: NEXT_ARTIFACT_RECORD,
+        desiredRevisionId: 'next-desired-revision',
+        guestArtifactId: NEXT_ARTIFACT_RECORD.artifactId,
+        guestRevisionId: NEXT_ARTIFACT_RECORD.revisionId,
+      });
+      expect(await request.readJournal()).toEqual(request.journal);
+      events.push('updates-prepared');
+      return {
+        /** @param {Record<string, any>} waiting */
+        whileWaiting: async (waiting) => {
+          expect(waiting.runId).toBe(durabilityProof.runId);
+          events.push('update-while-waiting');
+        },
+        /** @param {Record<string, any>} proof */
+        afterDurability: async (proof) => {
+          expect(proof).toBe(durabilityProof);
+          events.push('release-updates');
+          const args = [
+            'wharfie',
+            'deployment',
+            'update',
+            '--deployment-instance',
+            request.state.deploymentInstanceId,
+            '--data-root',
+            request.dataRoot,
+            '--json',
+          ];
+          await request.command('B', 'update-next', args, 180_000);
+          if (settings.failAt === 'release-updates') throw commandFailure();
+          await request.command('A', 'restore-primary', args, 180_000);
+        },
+      };
     },
     readJournal: async () => {
       expect(lockHeld).toBe(true);
@@ -262,6 +347,12 @@ function fixture(settings = {}) {
       expect(lockHeld).toBe(true);
       events.push('audit');
       expect(request.journal.phase).toBe('destroyed');
+      if (settings.failAt === 'release-updates') {
+        expect(request.journal.currentRelease).toEqual({
+          revisionId: NEXT_ARTIFACT_RECORD.revisionId,
+          artifactId: NEXT_ARTIFACT_RECORD.artifactId,
+        });
+      }
       expect(existsSync(request.dataRoot)).toBe(true);
       const statuses = settings.auditStatuses ?? ['absent'];
       const status = statuses[Math.min(auditIndex++, statuses.length - 1)];
@@ -284,11 +375,13 @@ function fixture(settings = {}) {
         })),
       };
     },
-    /** @param {string} executable */
-    verifyExecutable: async (executable) => {
+    /** @param {string} executable @param {Record<string, any>} record */
+    verifyExecutable: async (executable, record) => {
       expect(lockHeld).toBe(true);
       events.push('verify-executable');
-      expect(readFileSync(executable, 'utf8')).toBe('test');
+      const next = path.basename(executable) === 'app-next';
+      expect(readFileSync(executable, 'utf8')).toBe(next ? 'next' : 'test');
+      expect(record).toEqual(next ? NEXT_ARTIFACT_RECORD : ARTIFACT_RECORD);
     },
     /** @param {Record<string, any>} value */
     validatePreview: (value) => value,
@@ -488,10 +581,14 @@ describe('live acceptance orchestration without cloud calls', () => {
     });
     expect(setup.commands.map((call) => call.phase)).toEqual([
       'local-cli',
+      'local-cli-next',
       'preview',
+      'preview-next',
       'apply',
       'status',
       'fresh-controller',
+      'update-next',
+      'restore-primary',
       'destroy',
     ]);
     expect(new Set(setup.commands).size).toBe(setup.commands.length);
@@ -501,9 +598,39 @@ describe('live acceptance orchestration without cloud calls', () => {
     );
     expect(second?.args).toEqual(first?.args);
     for (const call of setup.commands) {
-      expect(call.file).toBe(path.join(setup.workspace, 'app'));
+      const next = ['local-cli-next', 'preview-next', 'update-next'].includes(
+        call.phase,
+      );
+      expect(call.file).toBe(
+        path.join(setup.workspace, next ? 'app-next' : 'app'),
+      );
       expect(call.cwd).toBe(setup.workspace);
     }
+    expect(
+      setup.events.filter((event) =>
+        [
+          'updates-prepared',
+          'durability',
+          'update-while-waiting',
+          'durability-completed',
+          'release-updates',
+          'update-next',
+          'restore-primary',
+          'destroy',
+          'audit',
+        ].includes(event),
+      ),
+    ).toEqual([
+      'updates-prepared',
+      'durability',
+      'update-while-waiting',
+      'durability-completed',
+      'release-updates',
+      'update-next',
+      'restore-primary',
+      'destroy',
+      'audit',
+    ]);
     expect(setup.events.indexOf('audit')).toBeGreaterThan(
       setup.events.indexOf('destroy'),
     );
@@ -518,7 +645,7 @@ describe('live acceptance orchestration without cloud calls', () => {
     );
   });
 
-  test.each(['package', 'preview'])(
+  test.each(['package', 'preview', 'preview-next'])(
     'a %s failure creates no cloud mutation and removes the workspace',
     async (failAt) => {
       const setup = fixture({ failAt });
@@ -550,7 +677,9 @@ describe('live acceptance orchestration without cloud calls', () => {
     });
     expect(setup.commands.map((call) => call.phase)).toEqual([
       'local-cli',
+      'local-cli-next',
       'preview',
+      'preview-next',
       'apply',
       'destroy',
     ]);
@@ -572,6 +701,37 @@ describe('live acceptance orchestration without cloud calls', () => {
     expect(setup.events.indexOf('audit')).toBeGreaterThan(
       setup.events.indexOf('destroy'),
     );
+  });
+
+  test('a failed release proof after B update still destroys through A and independently verifies cleanup', async () => {
+    const setup = fixture({ failAt: 'release-updates' });
+    const report = await setup.run();
+    expect(report).toMatchObject({
+      status: 'failed',
+      failure: { phase: 'release-updates' },
+      cleanup: { status: 'absent' },
+      workspaceRemoved: true,
+    });
+    expect(setup.commands.slice(-2).map((call) => call.phase)).toEqual([
+      'update-next',
+      'destroy',
+    ]);
+    expect(setup.commands.at(-2)?.file).toBe(
+      path.join(setup.workspace, 'app-next'),
+    );
+    expect(setup.commands.at(-1)?.file).toBe(path.join(setup.workspace, 'app'));
+    expect(setup.events.indexOf('update-next')).toBeGreaterThan(
+      setup.events.indexOf('durability-completed'),
+    );
+    expect(setup.events.indexOf('audit')).toBeGreaterThan(
+      setup.events.indexOf('destroy'),
+    );
+    expect(existsSync(setup.workspace)).toBe(false);
+    expect(
+      JSON.parse(
+        readFileSync(path.join(setup.runDir, 'retirement.json'), 'utf8'),
+      ),
+    ).toMatchObject({ cleanup: { status: 'absent' } });
   });
 
   test('an attempted apply with no recoverable journal preserves cleanup authority', async () => {
@@ -875,8 +1035,10 @@ describe('live acceptance orchestration without cloud calls', () => {
     const setup = fixture();
     await setup.run();
     const local = setup.commands.find((call) => call.phase === 'local-cli');
+    const next = setup.commands.find((call) => call.phase === 'local-cli-next');
     const preview = setup.commands.find((call) => call.phase === 'preview');
     expect(JSON.stringify(local?.env)).not.toContain(SECRET);
+    expect(JSON.stringify(next?.env)).not.toContain(SECRET);
     expect(preview?.env.HCLOUD_TOKEN).toBe(SECRET);
     expect(preview?.env.AWS_ACCESS_KEY_ID).toBeUndefined();
     expect(preview?.env.UNRELATED_SECRET).toBeUndefined();

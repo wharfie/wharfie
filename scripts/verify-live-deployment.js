@@ -28,15 +28,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createCanonicalJsonSha256Id } from '../src/core/runtime/content-id.js';
 import { assertSingleNodeDeploymentInstanceId } from '../src/core/runtime/single-node-deployment-identity.js';
 import { acquireSingleNodeDeploymentOperationLock } from '../src/core/runtime/single-node-deployment-operation-lock.js';
-import {
-  createSingleNodeDeploymentJournalStore,
-  getSingleNodeDeploymentEffectiveDesired,
-} from '../src/core/runtime/single-node-deployment-journal.js';
+import { createSingleNodeDeploymentJournalStore } from '../src/core/runtime/single-node-deployment-journal.js';
 import { validateSingleNodeDeploymentPreview } from '../src/core/runtime/single-node-deployment-preview.js';
 import { validateSingleNodeDeploymentStatus } from '../src/core/runtime/single-node-deployment-status.js';
 import { auditLiveDeploymentCleanupInChild } from './live-deployment-audit-child.js';
 import {
-  buildLiveDeploymentCandidate,
+  buildLiveDeploymentCandidates,
   LIVE_DEPLOYMENT_APP_ID,
   LIVE_DEPLOYMENT_INPUT_BYTES,
   runLiveDeploymentProcess,
@@ -45,6 +42,10 @@ import {
   assertLiveDeploymentFileOutput,
   verifyLiveDeploymentDurability,
 } from './live-deployment-durability.js';
+import {
+  assertLiveDeploymentNextOutput,
+  createLiveDeploymentUpdateAcceptance,
+} from './live-deployment-updates.js';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const FORMAT = 'wharfie.live-deployment.run.v1';
@@ -340,7 +341,7 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
 
 /**
  * Package outside the checkout, retaining only the verified executable.
- * @param {Parameters<typeof buildLiveDeploymentCandidate>[0]} options
+ * @param {Parameters<typeof buildLiveDeploymentCandidates>[0]} options
  */
 async function buildCandidate({ workspace, provider, signal, onPhase }) {
   const temporary = mkdtempSync(
@@ -348,18 +349,26 @@ async function buildCandidate({ workspace, provider, signal, onPhase }) {
   );
   chmodSync(temporary, 0o700);
   try {
-    const candidate = await buildLiveDeploymentCandidate({
+    const candidates = await buildLiveDeploymentCandidates({
       workspace: temporary,
       provider,
       signal,
       onPhase,
     });
-    const executable = path.join(workspace, 'app');
-    copyFileSync(candidate.executable, executable);
-    chmodSync(executable, 0o700);
-    flushPath(executable);
+    const copied = /** @type {Record<string, any>} */ ({});
+    for (const [name, filename] of [
+      ['primary', 'app'],
+      ['next', 'app-next'],
+    ]) {
+      const candidate = candidates[/** @type {'primary'|'next'} */ (name)];
+      const executable = path.join(workspace, filename);
+      copyFileSync(candidate.executable, executable);
+      chmodSync(executable, 0o700);
+      flushPath(executable);
+      copied[name] = { ...candidate, executable };
+    }
     flushPath(workspace);
-    return { ...candidate, executable };
+    return { ...copied.primary, next: copied.next };
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
@@ -402,22 +411,46 @@ async function readJournal(state, dataRoot) {
     dataRoot,
   });
   const journal = await store.read();
-  if (journal !== null) {
-    const desired = getSingleNodeDeploymentEffectiveDesired(journal);
-    assert.equal(desired.intent.appId, state.appId);
-    assert.equal(desired.intent.deployment.id, state.deploymentId);
-    assert.equal(desired.intent.provider.kind, state.provider);
-    assert.equal(
-      desired.intent.provider[state.provider === 'aws' ? 'region' : 'location'],
-      state.placement,
-    );
-    assert.deepEqual(
-      [...desired.intent.access.allowedIpv4],
-      [state.allowedIpv4],
-    );
-    assert.equal(desired.desiredRevisionId, state.desiredRevisionId);
-  }
+  if (journal !== null) assertLiveDeploymentJournalScope(journal, state);
   return journal;
+}
+
+/**
+ * Keep original provider authority fixed while admitting only the two packaged
+ * releases across pending updates, restoration, and cleanup.
+ * @param {Record<string, any>} journal
+ * @param {Record<string, any>} state
+ */
+export function assertLiveDeploymentJournalScope(journal, state) {
+  const desired = journal.providerIntent.intent.plan.desired;
+  assert.equal(journal.deploymentInstanceId, state.deploymentInstanceId);
+  assert.equal(desired.deploymentInstanceId, state.deploymentInstanceId);
+  assert.equal(desired.intent.appId, state.appId);
+  assert.equal(desired.intent.deployment.id, state.deploymentId);
+  assert.equal(desired.intent.provider.kind, state.provider);
+  assert.equal(
+    desired.intent.provider[state.provider === 'aws' ? 'region' : 'location'],
+    state.placement,
+  );
+  assert.deepEqual([...desired.intent.access.allowedIpv4], [state.allowedIpv4]);
+  assert.equal(desired.desiredRevisionId, state.desiredRevisionId);
+  const allowed = [state, ...(state.nextRelease ? [state.nextRelease] : [])];
+  for (const release of [
+    journal.release.current,
+    journal.release.rollback,
+    journal.release.transition?.target,
+  ]) {
+    if (!release) continue;
+    assert.ok(
+      allowed.some(
+        (candidate) =>
+          release.desired.desiredRevisionId === candidate.desiredRevisionId &&
+          release.desired.artifact.artifactId === candidate.guestArtifactId &&
+          release.desired.artifact.revisionId === candidate.guestRevisionId,
+      ),
+      'Journal contains a release outside the accepted package pair.',
+    );
+  }
 }
 
 /**
@@ -573,6 +606,7 @@ async function runAcceptance(options, dependencies) {
     validatePreview: validateSingleNodeDeploymentPreview,
     validateStatus: assertHealthyStatus,
     durability: verifyLiveDeploymentDurability,
+    updates: createLiveDeploymentUpdateAcceptance,
     wait: delay,
     log: (/** @type {Record<string, any>} */ event) =>
       process.stdout.write(`${JSON.stringify(event)}\n`),
@@ -711,15 +745,21 @@ async function runAcceptance(options, dependencies) {
    * @param {number} timeoutMs
    * @param {boolean} [cleaning]
    */
-  async function command(name, args, timeoutMs, cleaning = false) {
+  async function command(
+    name,
+    args,
+    timeoutMs,
+    cleaning = false,
+    release = 'A',
+  ) {
+    assert.ok(['A', 'B'].includes(release));
     return ports.run({
-      file: executable,
+      file: release === 'A' ? executable : path.join(workspace, 'app-next'),
       args,
       cwd: workspace,
-      env:
-        name === 'local-cli'
-          ? liveDeploymentControllerEnvironment('none')
-          : environment,
+      env: name.startsWith('local-cli')
+        ? liveDeploymentControllerEnvironment('none')
+        : environment,
       timeoutMs,
       phase: name,
       signal: cleaning ? undefined : options.signal,
@@ -757,14 +797,22 @@ async function runAcceptance(options, dependencies) {
       );
       assert.equal(candidate.appId, APP_ID);
       state.artifactRecord = candidate.artifactRecord;
+      assert.equal(candidate.next.appId, APP_ID);
+      assert.notEqual(candidate.next.revisionId, candidate.revisionId);
+      state.nextRelease = { artifactRecord: candidate.next.artifactRecord };
       writeJson(runDir, 'run.json', state);
       writeJson(runDir, 'package.json', {
         packageVersion: candidate.packageVersion,
         artifactRecord: candidate.artifactRecord,
+        nextArtifactRecord: candidate.next.artifactRecord,
       });
-      await phase('verify-executable', () =>
-        ports.verifyExecutable(executable, state.artifactRecord),
-      );
+      await phase('verify-executable', async () => {
+        await ports.verifyExecutable(executable, state.artifactRecord);
+        await ports.verifyExecutable(
+          path.join(workspace, 'app-next'),
+          state.nextRelease.artifactRecord,
+        );
+      });
       await phase('local-cli', async () => {
         const inputPath = path.join(workspace, 'local-input.txt');
         writeFileSync(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES, {
@@ -773,6 +821,14 @@ async function runAcceptance(options, dependencies) {
         });
         const result = await command('local-cli', [inputPath], 60_000);
         assertLiveDeploymentFileOutput(JSON.parse(result.stdout), inputPath);
+        const next = await command(
+          'local-cli-next',
+          [inputPath],
+          60_000,
+          false,
+          'B',
+        );
+        assertLiveDeploymentNextOutput(JSON.parse(next.stdout), inputPath);
       });
       const preview = await phase('preview', async () => {
         const result = await command(
@@ -798,6 +854,38 @@ async function runAcceptance(options, dependencies) {
       state.desiredRevisionId = preview.deployment.desiredRevisionId;
       state.guestArtifactId = preview.deployment.artifact.artifactId;
       state.guestRevisionId = preview.deployment.revisionId;
+      writeJson(runDir, 'run.json', state);
+      await phase('preview-next', async () => {
+        const result = await command(
+          'preview-next',
+          ['wharfie', 'deployment', 'preview', ...placementArgs],
+          180_000,
+          false,
+          'B',
+        );
+        const next = ports.validatePreview(JSON.parse(result.stdout));
+        assert.equal(next.status, 'actionable');
+        assert.equal(next.provider, state.provider);
+        assert.equal(next.journal.state, 'absent');
+        assert.equal(next.deployment.appId, APP_ID);
+        assert.equal(next.deployment.deploymentId, state.deploymentId);
+        assert.equal(
+          next.deployment.deploymentInstanceId,
+          state.deploymentInstanceId,
+        );
+        assert.notEqual(next.deployment.revisionId, state.guestRevisionId);
+        assert.notEqual(
+          next.deployment.artifact.artifactId,
+          state.guestArtifactId,
+        );
+        Object.assign(state.nextRelease, {
+          desiredRevisionId: next.deployment.desiredRevisionId,
+          guestArtifactId: next.deployment.artifact.artifactId,
+          guestRevisionId: next.deployment.revisionId,
+        });
+        writeJson(runDir, 'run.json', state);
+        writeJson(runDir, 'preview-next.json', next);
+      });
       await phase('prepare-apply', async () => {
         // Persist the selected identity and possible cloud mutation BEFORE spawning apply.
         state.applyAttempted = true;
@@ -866,7 +954,28 @@ async function runAcceptance(options, dependencies) {
         );
         writeJson(runDir, 'fresh-controller.json', next);
       });
-      await phase('durability', () =>
+      const updates = await ports.updates({
+        state,
+        journal: first.journal,
+        dataRoot,
+        runDir,
+        workspace,
+        env: environment,
+        signal: options.signal,
+        phase,
+        command: (
+          /** @type {string} */ release,
+          /** @type {string} */ name,
+          /** @type {string[]} */ args,
+          /** @type {number} */ timeoutMs,
+        ) => command(name, args, timeoutMs, false, release),
+        readJournal: () => ports.readJournal(state, dataRoot),
+        validateStatus: ports.validateStatus,
+        verifyExecutable: ports.verifyExecutable,
+        receipt: (/** @type {string} */ name, /** @type {unknown} */ value) =>
+          writeJson(runDir, name, value),
+      });
+      const proof = await phase('durability', () =>
         ports.durability({
           state,
           journal: first.journal,
@@ -876,10 +985,12 @@ async function runAcceptance(options, dependencies) {
           signal: options.signal,
           command,
           phase,
+          onWaiting: updates.whileWaiting,
           /** @param {string} name @param {unknown} value */
           receipt: (name, value) => writeJson(runDir, name, value),
         }),
       );
+      await phase('release-updates', () => updates.afterDurability(proof));
     }
   } catch (error) {
     failure = liveDeploymentFailureDiagnostic(

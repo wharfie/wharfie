@@ -71,6 +71,16 @@ Confirm readiness with `deployment status`, then inspect the original run throug
 that run. This operation does not resolve an uncertain external effect: use its
 specific inspection and reconciliation procedure before authorizing repetition.
 
+An interrupted update controller is a separate recovery case. Losing that local
+process does not establish that the guest resident died or authorize coordinator
+takeover. With a pending update, the target executable's `deployment recover`
+continues that update; the currently committed executable's `deployment recover`
+restores the committed release and clears the pending target. Once B is settled,
+returning to A begins with A's `deployment update`. If that controller dies after
+A becomes active on the guest but before its local journal settles, a fresh A
+controller can recover the pending update. Replaying recovery after settlement
+repairs A without switching back to B.
+
 ## Reproduce the recovery proof
 
 From the pinned development checkout on macOS with Lima installed:
@@ -92,12 +102,15 @@ acceptance remain separate checks. Lima retains checksummed proof receipts and
 cleanup evidence; CI retains the bounded, explicitly selected JSON receipts.
 
 The [live deployment acceptance runner](live-deployment-acceptance.md) covers
-fresh packaging and real AWS or Hetzner provisioning. Its steady-file workflow
-captures a guest-local file fingerprint, waits on a ten-minute durable timer,
-and verifies the retained fingerprint. The submitting controller exits while
-that timer is waiting. The runner then kills the resident with `SIGKILL`, uses
-the packaged inspection/takeover/recovery procedure above, and checks exact
-takeover replay against the healthy replacement.
+fresh packaging and real AWS or Hetzner provisioning. Release A's steady-file
+workflow captures a guest-local file fingerprint, waits on a fifteen-minute durable
+timer, and verifies the retained fingerprint. The submitting controller exits
+while that timer is waiting. An attempted B update must exit with status 1 and
+leave a new `source-retained` activation outcome, a healthy ACTIVE A, and the
+same unfinished work. A's packaged recovery must return `restore` and clear the
+pending B release. The runner then kills the resident with `SIGKILL`, uses the
+packaged inspection/takeover/recovery procedure above, and checks exact takeover
+replay against the healthy replacement.
 
 The same run also crosses a provider-requested host reboot. A changed Linux boot
 ID establishes that the host rebooted; the receipt records whether ordinary
@@ -108,9 +121,20 @@ abrupt power loss or permanent disk loss.
 Fresh controller processes must observe the original run completing with its
 original timer and first committed activity intact. The proof checks one
 completed attempt and one synchronized physical marker per activity, including
-boot identities on opposite sides of the reboot. It retains bounded private
-workflow, host, and recovery receipts, then independently verifies resource
-absence after destruction. An interruption that occurs after the timer already
-finished fails the proof. Release updates and rollback remain later acceptance
-work; the runner's implementation alone is not evidence that a live candidate
-passed.
+boot identities on opposite sides of the reboot. An interruption that occurs
+after A's timer already finished fails the proof.
+
+After A completes, a normal update selects B while preserving A's completed
+history. B must produce its distinct `acceptanceRevision: "B"` CLI result and
+complete a new durable run with a one-second timer. The runner then starts an
+update back to A and pauses the owned submitting controller at its exact guest
+convergence SSH call. It verifies guest A is active while the local journal still
+records B with pending A, then kills and reaps the controller group. A fresh A
+controller must settle the update through packaged recovery, retain both run
+histories, and return `repair` on replay without changing the selected release.
+
+The runner retains bounded private workflow, host, release, and recovery
+receipts. The original A executable destroys the deployment, and an independent
+provider audit verifies resource absence using the original provider authority
+and the authorized A/B release pair. The runner's implementation alone is not
+evidence that a live candidate passed.

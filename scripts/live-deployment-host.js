@@ -17,7 +17,10 @@ import {
   getSingleNodeDeploymentEffectiveDesired,
   validateSingleNodeDeploymentJournal,
 } from '../src/core/runtime/single-node-deployment-journal.js';
-import { validateSingleNodeRemoteServiceIdentity } from '../src/core/runtime/single-node-remote-activation.js';
+import {
+  getSingleNodeRemoteArtifactPaths,
+  validateSingleNodeRemoteServiceIdentity,
+} from '../src/core/runtime/single-node-remote-activation.js';
 import { SINGLE_NODE_RUNTIME_ACCOUNT } from '../src/core/runtime/single-node-runtime-account.js';
 import { runLiveDeploymentProcess } from './live-deployment-package.js';
 import { rebootLiveDeploymentInChild } from './live-deployment-reboot-child.js';
@@ -137,6 +140,8 @@ function processIdentity(bytes, pid) {
 /**
  * Fixed operations against the exact acceptance journal and pinned SSH host.
  * Every public operation verifies the immutable bootstrap before guest access.
+ * A target selector observes uploaded in-flight bytes without granting faults
+ * or fixture writes before the controller commits that release.
  * @param {Record<string, any>} input
  * @param {Record<string, any>} [dependencies]
  */
@@ -144,9 +149,20 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
   return await guarded('host-initialize', async () => {
     const { state, dataRoot, env, signal } = input;
     const journal = validateSingleNodeDeploymentJournal(input.journal);
-    const desired = getSingleNodeDeploymentEffectiveDesired(journal);
-    const release = getSingleNodeDeploymentCurrentRelease(journal);
-    assert.ok(path.isAbsolute(dataRoot) && release && journal.sshHost);
+    const selection = input.release ?? 'current';
+    assert.ok(['current', 'target'].includes(selection));
+    const current = getSingleNodeDeploymentCurrentRelease(journal);
+    const release =
+      selection === 'target' ? journal.release.transition?.target : current;
+    assert.ok(
+      path.isAbsolute(dataRoot) && current && release && journal.sshHost,
+    );
+    if (selection === 'target')
+      assert.equal(journal.release.transition.kind, 'update');
+    const desired =
+      selection === 'target'
+        ? release.desired
+        : getSingleNodeDeploymentEffectiveDesired(journal);
     assert.equal(journal.phase, 'active');
     assert.match(state.runId, RUN_ID);
     assert.equal(state.deploymentId, `acceptance-${state.runId}`);
@@ -224,7 +240,11 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       knownHostsPath: identity.knownHostsPath,
       runProcess,
     });
-    const remotePath = release.activation.artifact.remotePath;
+    const remotePath =
+      selection === 'target'
+        ? getSingleNodeRemoteArtifactPaths(desired, journal.incarnationId)
+            .remoteArtifactPath
+        : release.activation.artifact.remotePath;
     /** @param {string[]} argv @param {Buffer|null} [stdin] @param {number} [timeoutMilliseconds] */
     const remote = async (argv, stdin = null, timeoutMilliseconds = 30_000) => {
       const result = await transport.runRemoteArgv({
@@ -253,6 +273,17 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       sameJson(actual, cloudInit.bootstrapIdentity);
     };
     const serviceStatus = async () => {
+      if (selection === 'target') {
+        const digest = await remote(['/usr/bin/sha256sum', '--', remotePath]);
+        const expectedHex = Buffer.from(
+          desired.artifact.byteDigest.value,
+          'base64url',
+        ).toString('hex');
+        assert.equal(
+          digest.toString('utf8'),
+          `${expectedHex}  ${remotePath}\n`,
+        );
+      }
       const service = json(
         await remote([remotePath, 'wharfie', 'service', 'status', '--json']),
       );
@@ -329,6 +360,11 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       /** @param {Record<string, any>} before */
       async killResident(before) {
         return await guarded('host-kill-resident', async () => {
+          assert.equal(
+            selection,
+            'current',
+            'In-flight target observations cannot authorize host faults.',
+          );
           const current = await expectedObservation(before);
           assert.ok(current.process);
           await remote([
@@ -387,6 +423,11 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       /** @param {Record<string, any>} before */
       async reboot(before) {
         return await guarded('host-reboot', async () => {
+          assert.equal(
+            selection,
+            'current',
+            'In-flight target observations cannot authorize host faults.',
+          );
           await expectedObservation(before);
           return await (dependencies.reboot ?? rebootLiveDeploymentInChild)({
             journal,
@@ -416,6 +457,11 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       /** @param {string} inputPath @param {string} bytes */
       async stageInput(inputPath, bytes) {
         return await guarded('host-stage-input', async () => {
+          assert.equal(
+            selection,
+            'current',
+            'In-flight target observations cannot authorize fixture writes.',
+          );
           assert.equal(inputPath, expectedPath);
           assert.ok(
             typeof bytes === 'string' && Buffer.byteLength(bytes) <= 4096,

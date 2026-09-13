@@ -38,7 +38,7 @@ export function assertLiveDeploymentFileOutput(value, inputPath) {
  * @param {Record<string, any>} state
  * @param {string} runId
  */
-function assertRun(view, state, runId) {
+export function assertRun(view, state, runId) {
   assert.equal(view.kind, 'wharfie.execution-ledger.run');
   assert.deepEqual(view.integrity, { verified: true });
   assert.equal(view.run.runId, runId);
@@ -55,7 +55,7 @@ function assertRun(view, state, runId) {
  * Retain only fixed identity and execution evidence from a public view.
  * @param {Record<string, any>} view
  */
-function runReceipt(view) {
+export function runReceipt(view) {
   return {
     runId: view.run.runId,
     revisionId: view.run.revisionId,
@@ -91,7 +91,7 @@ function runReceipt(view) {
  * @param {Record<string, any>} view
  * @param {string[]} expected
  */
-function assertActivities(view, expected) {
+export function assertActivities(view, expected) {
   assert.deepEqual(
     view.invocations
       .map((/** @type {Record<string, any>} */ entry) => entry.activityId)
@@ -116,7 +116,7 @@ function assertActivities(view, expected) {
  * @param {Record<string, any>} view
  * @param {Record<string, any>} [original]
  */
-function assertWaiting(view, original) {
+export function assertWaiting(view, original) {
   assert.equal(view.run.status, 'RUNNING');
   assert.equal(view.workflowCursor.disposition, 'TIMER_WAITING');
   assert.equal(view.workflowCursor.stepId, 'stability-window');
@@ -275,6 +275,18 @@ export async function verifyLiveDeploymentDurability(
   );
   assert.equal(firstMarkers[0].bootId, initialHost.bootId);
   receipt('activities-before.json', firstMarkers);
+  if (options.onWaiting) {
+    await options.onWaiting({
+      host,
+      inputPath,
+      runId: started.runId,
+      waiting,
+      firstMarkers,
+    });
+    const retained = await inspect('after-update-refusal');
+    assertWaiting(retained, waiting);
+    assert.deepEqual(await host.readMarkers(inputPath), firstMarkers);
+  }
 
   /**
    * Recheck actual unfinished work immediately around each interruption.
@@ -444,7 +456,7 @@ export async function verifyLiveDeploymentDurability(
     receipt('reboot-recovery.json', { recovery, host: healthy });
     return healthy;
   });
-  await phase('workflow-completed', async () => {
+  return await phase('workflow-completed', async () => {
     const completed = await waitFor(
       () => inspect('workflow-completed'),
       (view) => view.workflowCursor.disposition === 'COMPLETED',
@@ -516,5 +528,13 @@ export async function verifyLiveDeploymentDurability(
       initialBootId: initialHost.bootId,
       finalBootId: afterReboot.bootId,
     });
+    return {
+      runId: started.runId,
+      inputPath,
+      completed: runReceipt(completed),
+      output,
+      markers,
+      bootId: afterReboot.bootId,
+    };
   });
 }
