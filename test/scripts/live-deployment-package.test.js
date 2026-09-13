@@ -17,9 +17,11 @@ import { pathToFileURL } from 'node:url';
 import {
   assertLiveDeploymentPackageVersions,
   buildLiveDeploymentCandidate,
+  buildLiveDeploymentCandidates,
   createLiveDeploymentBuildEnvironment,
   LIVE_DEPLOYMENT_APP_ID,
   LIVE_DEPLOYMENT_INPUT_BYTES,
+  LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS,
   LIVE_DEPLOYMENT_TIMER_DELAY_MS,
   prepareLiveDeploymentFixture,
   runLiveDeploymentProcess,
@@ -132,6 +134,9 @@ describe('live deployment installed-candidate boundary', () => {
     await expect(
       buildLiveDeploymentCandidate({ workspace: REPO_ROOT, provider: 'aws' }),
     ).rejects.toThrow('outside the checkout');
+    await expect(
+      buildLiveDeploymentCandidates({ workspace: REPO_ROOT, provider: 'aws' }),
+    ).rejects.toThrow('outside the checkout');
   });
 
   test('build environment excludes ambient credentials and injection settings', () => {
@@ -190,7 +195,11 @@ describe('live deployment installed-candidate boundary', () => {
 });
 
 describe('live deployment durable installed starter', () => {
-  async function prepareFixture(timerDelayMs = LIVE_DEPLOYMENT_TIMER_DELAY_MS) {
+  /** @param {number} [timerDelayMs] @param {'A'|'B'} [revision] */
+  async function prepareFixture(
+    timerDelayMs = LIVE_DEPLOYMENT_TIMER_DELAY_MS,
+    revision = 'A',
+  ) {
     const root = await temporaryDirectory();
     const fixtureDirectory = path.join(root, 'app');
     await prepareLiveDeploymentFixture({
@@ -198,6 +207,7 @@ describe('live deployment durable installed starter', () => {
       fixtureDirectory,
       nativeTarget: NATIVE_TARGET,
       timerDelayMs,
+      revision,
     });
     return { root, fixtureDirectory };
   }
@@ -302,6 +312,77 @@ describe('live deployment durable installed starter', () => {
       current: fingerprint,
     });
     await expect(lstat(`${inputPath}.activities.jsonl`)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  test('revision B is distinguishable while durable input and output remain compatible', async () => {
+    const primary = await prepareFixture();
+    const next = await prepareFixture(LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS, 'B');
+    const inputPath = path.join(primary.root, 'input.txt');
+    await writeFile(inputPath, LIVE_DEPLOYMENT_INPUT_BYTES);
+    const outputs = [];
+    const histories = [];
+    for (const { root, fixtureDirectory } of [primary, next]) {
+      const cliUrl = pathToFileURL(path.join(fixtureDirectory, 'cli.js')).href;
+      const output = await fixtureNode(
+        root,
+        `const {main} = await import(${JSON.stringify(cliUrl)});
+         await main(['node', 'fixture', ${JSON.stringify(inputPath)}]);`,
+      );
+      outputs.push(JSON.parse(output.stdout));
+      const history = await fixtureNode(
+        root,
+        `const {toDurableInput} = await import(${JSON.stringify(cliUrl)});
+         const {capture, verify} = await import(${JSON.stringify(pathToFileURL(path.join(fixtureDirectory, 'acceptance-activities.js')).href)});
+         const {default: manifest} = await import(${JSON.stringify(pathToFileURL(path.join(fixtureDirectory, 'wharfie.app.js')).href)});
+         const input = toDurableInput([${JSON.stringify(inputPath)}]);
+         const baseline = await capture(input);
+         const output = await verify(baseline);
+         process.stdout.write(JSON.stringify({input, baseline, output, manifest}));`,
+      );
+      histories.push(JSON.parse(history.stdout));
+    }
+    expect(outputs[0].acceptanceRevision).toBeUndefined();
+    expect(outputs[1]).toEqual({ ...outputs[0], acceptanceRevision: 'B' });
+    expect(histories[1].input).toEqual(histories[0].input);
+    expect(histories[1].baseline).toEqual(histories[0].baseline);
+    expect(histories[1].output).toEqual(histories[0].output);
+    expect(histories[1].output).toEqual(outputs[0]);
+    const primarySteps = histories[0].manifest.workflows['verify-stable'].steps;
+    const nextSteps = histories[1].manifest.workflows['verify-stable'].steps;
+    expect(primarySteps[1].delayMs).toBe(LIVE_DEPLOYMENT_TIMER_DELAY_MS);
+    expect(nextSteps[1].delayMs).toBe(LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS);
+    nextSteps[1].delayMs = primarySteps[1].delayMs;
+    expect(histories[1].manifest).toEqual(histories[0].manifest);
+    expect(
+      await readFile(path.join(primary.fixtureDirectory, 'cli.js'), 'utf8'),
+    ).toBe(
+      await readFile(
+        path.join(REPO_ROOT, 'examples/steady-file/cli.js'),
+        'utf8',
+      ),
+    );
+    expect(
+      (await readFile(`${inputPath}.activities.jsonl`, 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line).activity),
+    ).toEqual(['capture', 'verify', 'capture', 'verify']);
+  });
+
+  test('rejects an unknown revision before creating the fixture', async () => {
+    const root = await temporaryDirectory();
+    const fixtureDirectory = path.join(root, 'app');
+    await expect(
+      prepareLiveDeploymentFixture({
+        installedDirectory: REPO_ROOT,
+        fixtureDirectory,
+        nativeTarget: NATIVE_TARGET,
+        revision: /** @type {'A'} */ ('C'),
+      }),
+    ).rejects.toThrow('Unknown live acceptance revision');
+    await expect(lstat(fixtureDirectory)).rejects.toMatchObject({
       code: 'ENOENT',
     });
   });

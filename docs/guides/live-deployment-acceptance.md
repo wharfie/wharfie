@@ -1,21 +1,23 @@
 # Run live deployment acceptance
 
-This opt-in checkout command packages the steady-file application, provisions a
-real AWS or Hetzner host, and follows one durable workflow through controller
-exit, a resident crash, and a host reboot. It then removes the deployment and
+This opt-in checkout command packages two releases of the steady-file application,
+provisions a real AWS or Hetzner host, and checks durable recovery, release updates,
+and restoration of the previous release. It then removes the deployment and
 independently verifies cleanup. Each invocation targets one provider. It creates
 billable cloud resources and destroys the disposable host's root-disk data during
 cleanup.
 
-The workflow captures a file fingerprint, waits on a ten-minute durable timer,
-and compares the retained fingerprint with a second observation. The runner
-creates a small input file on the guest; the workflow does not depend on a file
-remaining accessible from the controller's laptop.
+Release A captures a file fingerprint, waits on a fifteen-minute durable timer,
+and compares the retained fingerprint with a second observation. Release B has a
+one-second timer and adds `acceptanceRevision: "B"` to its ordinary CLI result.
+These differences let the runner verify which release executes new work. The
+runner creates a small input file on the guest; the workflow does not depend on a
+file remaining accessible from the controller's laptop.
 
 The host interruption uses the provider's reboot API to request a normal reboot.
 It does not deliberately simulate abrupt power loss or loss of the host's disk.
-Release updates and rollback remain separate acceptance slices. Availability of
-this runner does not establish that a particular candidate has passed a live run.
+Availability of this runner does not establish that a particular candidate has
+passed a live run.
 
 ## Prepare the controller
 
@@ -76,11 +78,12 @@ The run:
 1. Packs the current core npm candidate and installs it in a fresh workspace
    outside the checkout. AWS runs also pack and install the matching AWS
    companion; Hetzner runs use core alone.
-2. Builds a native, self-deployable steady-file controller executable through
-   that installed candidate and checks ordinary local application arguments.
-   The installed starter retains its normal CLI and logical output; acceptance
-   adapts its durable timer and adds synchronized physical activity markers.
-3. Uses the executable's `wharfie deployment preview`, `apply`, and `status`
+2. Builds native, self-deployable steady-file controller executables for releases
+   A and B through that installed candidate and checks ordinary local application
+   arguments. The installed starter retains its file comparison behavior;
+   acceptance adapts the timers, adds synchronized physical activity markers,
+   and gives B a distinct CLI result.
+3. Uses A's `wharfie deployment preview`, `apply`, and `status`
    commands against the selected provider.
 4. Starts another controller process and repeats `apply` with the same exact
    deployment authority. It checks that the existing host and resource
@@ -90,27 +93,50 @@ The run:
    packaged `deployment exec` and `wharfie start`. The submitting controller
    process exits. A fresh controller inspects the run while its original timer
    is waiting and its first activity is committed.
-6. Sends `SIGKILL` to the exact observed systemd resident, checks that it became
+6. Attempts an update to B while A's first activity is committed and its timer is
+   waiting. The update must exit with status 1. The runner verifies a new guest
+   activation outcome of `source-retained`, a healthy ACTIVE A, and the same
+   unfinished run. A failed upload alone cannot satisfy this check. A fresh A
+   controller runs `deployment recover`; its `restore` result must clear pending
+   B while preserving A and its work.
+7. Sends `SIGKILL` to the exact observed systemd resident, checks that it became
    unhealthy without a host reboot, and inspects the still-waiting run. Packaged
    coordinator `inspect`, `takeover`, and deployment `recover` replace its stale
    authority and restore readiness. Replaying the exact takeover request must
    leave the healthy replacement unchanged.
-7. Rechecks unfinished work, verifies provider ownership, and requests a reboot
+8. Rechecks unfinished work, verifies provider ownership, and requests a reboot
    of the same host. Success requires observing a different Linux boot ID over
    the pinned SSH connection. The runner records whether the service recovered
    automatically or needed explicit packaged recovery.
-8. Reconnects through fresh packaged controller processes until the original run
+9. Reconnects through fresh packaged controller processes until the original A run
    completes. The timer must retain its identity and scheduled deadline, then
    fire. Each activity must have one completed attempt and one physical marker;
    the first committed activity must be unchanged. The two markers bind the
    activities to opposite sides of the reboot, and the final file comparison
    must match the known input bytes.
-9. Calls packaged `wharfie deployment destroy`, then independently queries the
-   provider for the recorded resource IDs and the run's ownership inventory.
-   Success requires confirmed absence of the owned resources, rather than only
-   a successful destroy response.
+10. Performs a normal A-to-B update after A's work completes. It checks B's
+    selected artifact, distinct ordinary CLI result, and unchanged A run history,
+    output, and physical activity markers on the same host.
+11. Starts a new durable run under B and verifies completion with B's one-second
+    timer and one physical marker per activity.
+12. Starts an update from B back to A, then pauses that owned controller when its
+    exact guest `service status` SSH child starts after successful convergence.
+    The guest must be running A while the controller journal still records
+    current B and pending A. After independently observing both states, the
+    runner kills and reaps the owned
+    controller process group.
+13. Uses a fresh A controller's `deployment recover` to settle A. Both completed
+    run histories, outputs, and activity markers must survive. Replaying recovery
+    must return `repair` and keep A selected.
+14. Uses the original A executable's packaged `wharfie deployment destroy`, then
+    independently queries the provider for the recorded resource IDs and the
+    run's ownership inventory. Cleanup accepts the recorded A/B release pair
+    while keeping the original provider authority fixed. Success requires
+    confirmed absence of the owned resources, rather than only a successful
+    destroy response.
 
-Both interruptions must happen while the same durable timer is still waiting.
+The refused B update, resident crash, and reboot must happen while A's same durable
+timer is still waiting.
 If the run finishes too early, the proof fails rather than counting that result
 as successful recovery. The supervising acceptance runner remains alive to
 observe faults and own cleanup; the process that submitted the application work
@@ -126,6 +152,9 @@ The run directory retains bounded, redacted receipts and a private diagnostic
 report containing the phase, duration, command, and exit status or signal. It
 does not retain raw subprocess output or an environment dump. Successful cleanup
 removes the disposable workspace, build installs, and caches.
+Interruption failures also identify the fixed failing step and failure category.
+`restore-target-observation.json` overwrites the latest bounded guest observation
+result, including its attempt count and any fixed host verification failure.
 
 In addition to package, deployment, and cleanup receipts, the directory retains
 the workflow start, controller-exit and completion observations, activity markers,
@@ -134,8 +163,12 @@ controller-local coordinator inspection and exact replacement IDs before
 takeover, followed by takeover, repair, healthy-service, and exact-replay results.
 The reboot evidence includes `provider-reboot-request.json`, the changed boot
 identity, and an `automatic` or `explicit` result in `reboot-recovery.json`.
-These documents contain run, deployment, and coordinator identifiers; keep the
-directory private.
+Release receipts also retain the unfinished-work refusal, restored A, settled B,
+B's completed run, and the interrupted return to A. The interruption proof binds
+the observed guest A to a still-unsettled controller journal and records confirmed
+exit of the owned controller group before fresh recovery and replay. These
+documents contain run, deployment, and coordinator identifiers; keep the directory
+private.
 
 After cloud cleanup is confirmed, the runner saves a durable receipt before
 removing the workspace. If removal is interrupted, `--cleanup` uses that receipt

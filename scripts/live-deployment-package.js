@@ -24,7 +24,13 @@ export const LIVE_DEPLOYMENT_APP_ID = 'steady-file-demo';
 export const LIVE_DEPLOYMENT_INPUT_BYTES =
   'Wharfie live durable acceptance input.\n';
 // Both fault boundaries must fit even when SSH and packaged recovery are slow.
-export const LIVE_DEPLOYMENT_TIMER_DELAY_MS = 600_000;
+export const LIVE_DEPLOYMENT_TIMER_DELAY_MS = 900_000;
+export const LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS = 1000;
+
+/**
+ * @typedef {{workspace: string, provider: 'aws'|'hetzner', timerDelayMs?: number, signal?: AbortSignal, onPhase?: (event: Record<string, any>) => void}} LiveDeploymentBuildOptions
+ * @typedef {{executable: string, appId: string, revisionId: string, artifactId: string, artifactRecord: Record<string, any>, packageReceipt: ReturnType<typeof parseApplicationPackageReceiptOutput>, packageVersion: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, consumerDirectory: string}} LiveDeploymentCandidate
+ */
 
 /**
  * Run an acceptance subprocess with bounded output, a hard deadline, and one
@@ -296,12 +302,15 @@ export async function verifyLiveDeploymentPackageOutput(stdout, expected) {
 }
 
 /**
- * Copy the installed useful starter, adapting only target selection, the timer
- * duration, and physical activity evidence used by the live recovery proof.
- * @param {{installedDirectory: string, fixtureDirectory: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, timerDelayMs?: number}} options - Fresh installation and native package target.
+ * Copy the installed useful starter with acceptance timing and physical activity
+ * evidence. Revision B adds an ordinary CLI result field; durable input, activity
+ * behavior, and output stay compatible so history can be checked across updates.
+ * @param {{installedDirectory: string, fixtureDirectory: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, timerDelayMs?: number, revision?: 'A'|'B'}} options - Fresh installation and native package target.
  * @returns {Promise<void>} - Ready-to-package consumer-owned starter.
  */
 export async function prepareLiveDeploymentFixture(options) {
+  const revision = options.revision ?? 'A';
+  assert.ok(['A', 'B'].includes(revision), 'Unknown live acceptance revision.');
   const timerDelayMs = options.timerDelayMs ?? LIVE_DEPLOYMENT_TIMER_DELAY_MS;
   assert.ok(
     Number.isSafeInteger(timerDelayMs) &&
@@ -355,6 +364,24 @@ export async function prepareLiveDeploymentFixture(options) {
     wrapperSource.replace(activityImport, "'./activities.js'"),
     { mode: 0o600, flag: 'wx' },
   );
+  if (revision === 'B') {
+    const cliPath = path.join(options.fixtureDirectory, 'cli.js');
+    const cliSource = await readFile(cliPath, 'utf8');
+    const ordinaryResult = 'JSON.stringify(result, null, 2)';
+    assert.equal(
+      cliSource.split(ordinaryResult).length,
+      2,
+      'Installed starter must have one known ordinary result boundary.',
+    );
+    await writeFile(
+      cliPath,
+      cliSource.replace(
+        ordinaryResult,
+        "JSON.stringify({ ...result, acceptanceRevision: 'B' }, null, 2)",
+      ),
+      { mode: 0o600 },
+    );
+  }
   await writeFile(
     path.join(options.fixtureDirectory, 'wharfie.app.js'),
     `export default ${JSON.stringify(manifest, null, 2)};\n`,
@@ -363,12 +390,43 @@ export async function prepareLiveDeploymentFixture(options) {
 }
 
 /**
- * Build through a fresh installation of checkout tarballs and the public CLI.
+ * Build the existing revision A through a fresh installation and public CLI.
  * The caller owns and cleans the complete external workspace even on failure.
- * @param {{workspace: string, provider: 'aws'|'hetzner', timerDelayMs?: number, signal?: AbortSignal, onPhase?: (event: Record<string, any>) => void}} options - Build workspace and selected provider.
- * @returns {Promise<{executable: string, appId: string, revisionId: string, artifactId: string, artifactRecord: Record<string, any>, packageReceipt: ReturnType<typeof parseApplicationPackageReceiptOutput>, packageVersion: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, consumerDirectory: string}>} - Exact runnable local controller.
+ * @param {LiveDeploymentBuildOptions} options - Build workspace and selected provider.
+ * @returns {Promise<LiveDeploymentCandidate>} - Exact runnable local controller.
  */
 export async function buildLiveDeploymentCandidate(options) {
+  const build = await createLiveDeploymentCandidateBuilder(options);
+  return await build('A');
+}
+
+/**
+ * Package both visibly distinguishable revisions from one fresh installation of
+ * the exact core and provider tarballs. Every artifact is independently checked;
+ * the caller owns copying retained controllers and cleaning this workspace.
+ * @param {LiveDeploymentBuildOptions & {nextTimerDelayMs?: number}} options - Build workspace, provider, and B's shorter completion timer.
+ * @returns {Promise<{primary: LiveDeploymentCandidate, next: LiveDeploymentCandidate}>} - A and B controllers from the same installed candidate.
+ */
+export async function buildLiveDeploymentCandidates(options) {
+  const build = await createLiveDeploymentCandidateBuilder(options);
+  const primary = await build('A');
+  const next = await build(
+    'B',
+    options.nextTimerDelayMs ?? LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS,
+  );
+  assert.equal(primary.appId, next.appId);
+  assert.notEqual(primary.revisionId, next.revisionId);
+  assert.notEqual(primary.artifactId, next.artifactId);
+  return { primary, next };
+}
+
+/**
+ * Install one credential-free consumer and retain its build boundary for each
+ * requested revision. Sequential packaging bounds simultaneous builder memory.
+ * @param {LiveDeploymentBuildOptions} options - Build workspace and selected provider.
+ * @returns {Promise<(revision: 'A'|'B', timerDelayMs?: number) => Promise<LiveDeploymentCandidate>>} - Build one revision through the installed public CLI.
+ */
+async function createLiveDeploymentCandidateBuilder(options) {
   assert.ok(['aws', 'hetzner'].includes(options.provider));
   const workspace = await realpath(options.workspace);
   const repository = await realpath(REPO_ROOT);
@@ -514,36 +572,40 @@ export async function buildLiveDeploymentCandidate(options) {
     options.provider,
     packageVersion,
   );
-  const fixture = path.join(consumerDirectory, 'app');
-  await prepareLiveDeploymentFixture({
-    installedDirectory: installed,
-    fixtureDirectory: fixture,
-    nativeTarget,
-    timerDelayMs: options.timerDelayMs,
-  });
-  const outputDir = path.join(root, 'dist');
-  const output = await run(
-    'package-self-deployable-sea',
-    [
-      path.join(installed, 'bin/wharfie'),
-      'app',
-      'package',
-      fixture,
-      '--output-dir',
+  return async (revision, timerDelayMs = options.timerDelayMs) => {
+    const suffix = revision === 'A' ? '' : '-next';
+    const fixture = path.join(consumerDirectory, `app${suffix}`);
+    await prepareLiveDeploymentFixture({
+      installedDirectory: installed,
+      fixtureDirectory: fixture,
+      nativeTarget,
+      timerDelayMs,
+      revision,
+    });
+    const outputDir = path.join(root, `dist${suffix}`);
+    const output = await run(
+      `package-self-deployable-sea${suffix}`,
+      [
+        path.join(installed, 'bin/wharfie'),
+        'app',
+        'package',
+        fixture,
+        '--output-dir',
+        outputDir,
+        '--self-deployable',
+        '--target',
+        `${nativeTarget.platform}/${nativeTarget.architecture}${nativeTarget.libc ? `/${nativeTarget.libc}` : ''}`,
+        '--json',
+        '--no-pretty',
+      ],
+      consumerDirectory,
+      1_800_000,
+    );
+    const candidate = await verifyLiveDeploymentPackageOutput(output, {
       outputDir,
-      '--self-deployable',
-      '--target',
-      `${nativeTarget.platform}/${nativeTarget.architecture}${nativeTarget.libc ? `/${nativeTarget.libc}` : ''}`,
-      '--json',
-      '--no-pretty',
-    ],
-    consumerDirectory,
-    1_800_000,
-  );
-  const candidate = await verifyLiveDeploymentPackageOutput(output, {
-    outputDir,
-    packageVersion,
-    nativeTarget,
-  });
-  return { ...candidate, packageVersion, nativeTarget, consumerDirectory };
+      packageVersion,
+      nativeTarget,
+    });
+    return { ...candidate, packageVersion, nativeTarget, consumerDirectory };
+  };
 }

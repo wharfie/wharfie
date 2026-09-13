@@ -205,6 +205,7 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
   };
   const options = {
     state,
+    onWaiting: settings.onWaiting,
     runDir: '/private/acceptance',
     dataRoot: '/private/acceptance/controller',
     signal: settings.signal,
@@ -316,6 +317,46 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
 }
 
 describe('durable live acceptance', () => {
+  test('runs release refusal checks while the original work waits, then returns retained history', async () => {
+    const observed = /** @type {string[]} */ ([]);
+    const setup = fixture({
+      onWaiting: async (/** @type {Record<string, any>} */ context) => {
+        expect(context.waiting.workflowCursor.disposition).toBe(
+          'TIMER_WAITING',
+        );
+        expect(
+          context.firstMarkers.map(
+            (/** @type {Record<string, any>} */ marker) => marker.activity,
+          ),
+        ).toEqual(['capture']);
+        expect(setup.events).not.toContain('kill');
+        observed.push(context.runId);
+      },
+    });
+    const proof = await setup.run();
+    expect(observed).toEqual(['durable-run']);
+    expect(proof).toMatchObject({
+      runId: 'durable-run',
+      completed: {
+        status: 'COMPLETED',
+        timers: [{ timerId: 'original-timer', status: 'FIRED' }],
+      },
+      output: { terminal: { result: setup.output } },
+      markers: [{ activity: 'capture' }, { activity: 'verify' }],
+    });
+  });
+
+  test('a failed unfinished-work check prevents later fault injection', async () => {
+    const setup = fixture({
+      onWaiting: async () => {
+        throw new Error('refusal proof failed');
+      },
+    });
+    await expect(setup.run()).rejects.toThrow('refusal proof failed');
+    expect(setup.events).not.toContain('kill');
+    expect(setup.events).not.toContain('reboot');
+  });
+
   test('one run and timer cross controller exit, SIGKILL, exact recovery replay and a new boot', async () => {
     const setup = fixture({ rebootDisconnect: true });
     await setup.run();
