@@ -46,6 +46,10 @@ import {
   assertLiveDeploymentNextOutput,
   createLiveDeploymentUpdateAcceptance,
 } from './live-deployment-updates.js';
+import {
+  LIVE_DEPLOYMENT_UPDATE_FAULT_CODES,
+  LIVE_DEPLOYMENT_UPDATE_FAULT_STAGES,
+} from './live-deployment-update-interruption.js';
 
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const FORMAT = 'wharfie.live-deployment.run.v1';
@@ -336,6 +340,12 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
     timedOut: diagnostic.timedOut === true,
     aborted: diagnostic.aborted === true,
     outputLimitExceeded: diagnostic.outputLimitExceeded === true,
+    ...(LIVE_DEPLOYMENT_UPDATE_FAULT_STAGES.includes(diagnostic.faultStage)
+      ? { faultStage: diagnostic.faultStage }
+      : {}),
+    ...(LIVE_DEPLOYMENT_UPDATE_FAULT_CODES.includes(diagnostic.faultCode)
+      ? { faultCode: diagnostic.faultCode }
+      : {}),
   };
 }
 

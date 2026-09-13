@@ -22,6 +22,36 @@ import { runLiveDeploymentProcess } from './live-deployment-package.js';
 const PS_ENV = { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' };
 const MAX_OUTPUT_BYTES = 256 * 1024;
 const EXIT_TIMEOUT_MS = 15_000;
+export const LIVE_DEPLOYMENT_UPDATE_FAULT_STAGES = Object.freeze([
+  'validate-authority',
+  'read-identity',
+  'read-host-pin',
+  'prepare-command',
+  'spawn-controller',
+  'find-converge-child',
+  'read-child-command',
+  'pause-controller',
+  'confirm-controller-paused',
+  'verify-paused-journal',
+  'observe-target',
+  'verify-target',
+  'verify-observed-journal',
+  'publish-boundary',
+  'kill-controller-group',
+  'confirm-controller-exit',
+  'verify-interrupted-journal',
+  'confirm-process-group-exit',
+]);
+export const LIVE_DEPLOYMENT_UPDATE_FAULT_CODES = Object.freeze([
+  'assertion-failed',
+  'process-observation-failed',
+  'controller-exited',
+  'aborted',
+  'deadline',
+  'output-limit',
+  'spawn-failed',
+  'unexpected-error',
+]);
 
 /** @param {unknown} actual @param {unknown} expected */
 function sameJson(actual, expected) {
@@ -105,11 +135,14 @@ export async function interruptLiveDeploymentUpdate(
     spawnError: false,
     controllerPaused: false,
     controllerExitConfirmed: false,
+    faultStage: 'validate-authority',
+    faultCode: /** @type {string|null} */ (null),
   };
   /** @type {import('node:child_process').ChildProcess|undefined} */
   let child;
   let closed = false;
   let exited = false;
+  let unexpectedExit = false;
   let killed = false;
   let outputBytes = 0;
   let failureReason = false;
@@ -179,6 +212,7 @@ export async function interruptLiveDeploymentUpdate(
     assert.ok(pending.release.transition);
     const target = pending.release.transition.target.desired;
     sameJson(await options.readJournal(), prior);
+    diagnostic.faultStage = 'read-identity';
     const identity = await (
       dependencies.readIdentity ??
       (async () =>
@@ -194,6 +228,7 @@ export async function interruptLiveDeploymentUpdate(
       identity.publicKeyFingerprint,
       prior.release.current.activation.bootstrap.sshPublicKeyFingerprint,
     );
+    diagnostic.faultStage = 'read-host-pin';
     sameJson(
       await (dependencies.readHostKey ?? readDeploymentSshHostKey)({
         address: prior.sshHost.address,
@@ -202,13 +237,16 @@ export async function interruptLiveDeploymentUpdate(
       prior.sshHost,
     );
     // Obtain exact production SSH argv without making a connection.
+    diagnostic.faultStage = 'prepare-command';
     let expectedCommand = '';
-    const transport = createDeploymentOpenSshTransport({
+    const transport = (
+      dependencies.createTransport ?? createDeploymentOpenSshTransport
+    )({
       address: prior.sshHost.address,
       privateKeyPath: identity.privateKeyPath,
       knownHostsPath: identity.knownHostsPath,
       runProcess: {
-        async run(request) {
+        async run(/** @type {unknown} */ request) {
           const input = /** @type {Record<string, any>} */ (request);
           expectedCommand = [input.file, ...input.args].join(' ');
           return {
@@ -239,6 +277,7 @@ export async function interruptLiveDeploymentUpdate(
     assert.ok(expectedCommand.startsWith('/usr/bin/ssh '));
     if (options.signal?.aborted) abort();
     assert.ok(!failureReason);
+    diagnostic.faultStage = 'spawn-controller';
     child = (dependencies.spawn ?? spawn)(
       options.executable,
       [
@@ -266,7 +305,10 @@ export async function interruptLiveDeploymentUpdate(
         exited = true;
         diagnostic.status = status;
         diagnostic.signal = signal;
-        if (!killed) interrupt();
+        if (!killed) {
+          unexpectedExit = true;
+          interrupt();
+        }
         // Reap inherited SSH pipe holders even on unexpected early exit.
         killGroup();
       });
@@ -317,6 +359,7 @@ export async function interruptLiveDeploymentUpdate(
     /** @type {Record<string, any>|undefined} */
     let convergeChild;
     while (!convergeChild) {
+      diagnostic.faultStage = 'find-converge-child';
       checkRunning();
       for (const candidate of await processes()) {
         if (
@@ -325,8 +368,10 @@ export async function interruptLiveDeploymentUpdate(
           candidate.state.startsWith('Z')
         )
           continue;
+        diagnostic.faultStage = 'read-child-command';
         if ((await command(candidate.pid)) !== expectedCommand) continue;
         checkRunning();
+        diagnostic.faultStage = 'pause-controller';
         signalProcess(pid, 'SIGSTOP');
         diagnostic.controllerPaused = true;
         convergeChild = candidate;
@@ -335,6 +380,7 @@ export async function interruptLiveDeploymentUpdate(
       if (!convergeChild) await sleep(40);
     }
     // Observe the stop itself before trusting the journal cannot advance.
+    diagnostic.faultStage = 'confirm-controller-paused';
     for (;;) {
       checkRunning();
       const processIdentity = (await processes()).find(
@@ -344,11 +390,14 @@ export async function interruptLiveDeploymentUpdate(
       if (processIdentity.state.includes('T')) break;
       await sleep(20);
     }
+    diagnostic.faultStage = 'verify-paused-journal';
     sameJson(await options.readJournal(), pending);
+    diagnostic.faultStage = 'observe-target';
     const observation = await Promise.race([
       options.observeTarget({ signal: observationAbort.signal }),
       interrupted,
     ]);
+    diagnostic.faultStage = 'verify-target';
     checkRunning();
     assert.equal(observation.deploymentInstanceId, prior.deploymentInstanceId);
     assert.equal(observation.incarnationId, prior.incarnationId);
@@ -359,6 +408,7 @@ export async function interruptLiveDeploymentUpdate(
       Number.isSafeInteger(observation.process?.pid) &&
         observation.process.pid > 0,
     );
+    diagnostic.faultStage = 'verify-observed-journal';
     sameJson(await options.readJournal(), pending);
     const receipt = {
       schemaVersion: 1,
@@ -378,12 +428,15 @@ export async function interruptLiveDeploymentUpdate(
       guestHealthy: true,
       guestPid: observation.process.pid,
     };
+    diagnostic.faultStage = 'publish-boundary';
     await Promise.race([
       options.publish?.({ ...receipt, controllerExitConfirmed: false }),
       interrupted,
     ]);
     checkRunning();
+    diagnostic.faultStage = 'kill-controller-group';
     killGroup();
+    diagnostic.faultStage = 'confirm-controller-exit';
     /** @type {ReturnType<typeof setTimeout>|undefined} */
     let exitTimer;
     try {
@@ -401,7 +454,9 @@ export async function interruptLiveDeploymentUpdate(
     }
     assert.equal(diagnostic.signal, 'SIGKILL');
     assert.ok(!failureReason);
+    diagnostic.faultStage = 'verify-interrupted-journal';
     sameJson(await options.readJournal(), pending);
+    diagnostic.faultStage = 'confirm-process-group-exit';
     const survivors = (await processes()).filter(
       (/** @type {Record<string, any>} */ entry) =>
         entry.groupId === pid && !entry.state.startsWith('Z'),
@@ -419,7 +474,28 @@ export async function interruptLiveDeploymentUpdate(
       signal: diagnostic.signal,
       durationMs: Math.round(performance.now() - started),
     };
-  } catch {
+  } catch (error) {
+    // Snapshot the cause before cleanup's SIGKILL changes the process result.
+    const cause =
+      /** @type {{code?: unknown, diagnostic?: {phase?: unknown}}|null} */ (
+        error
+      );
+    diagnostic.faultCode = diagnostic.aborted
+      ? 'aborted'
+      : diagnostic.timedOut
+        ? 'deadline'
+        : diagnostic.outputLimitExceeded
+          ? 'output-limit'
+          : diagnostic.spawnError
+            ? 'spawn-failed'
+            : unexpectedExit
+              ? 'controller-exited'
+              : cause?.diagnostic?.phase === 'update-process-observation' ||
+                  cause?.diagnostic?.phase === 'update-child-observation'
+                ? 'process-observation-failed'
+                : cause?.code === 'ERR_ASSERTION'
+                  ? 'assertion-failed'
+                  : 'unexpected-error';
     observationAbort.abort();
     killGroup();
     if (completion && !closed) {

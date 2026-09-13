@@ -28,6 +28,8 @@ let pending;
 /** @type {ReturnType<typeof createSingleNodeDeploymentDesired>} */
 let desired;
 let expectedCommand = '';
+/** @type {string[]} */
+let expectedSshArgs = [];
 
 beforeAll(async () => {
   fixture = await createSingleNodeStatusAuthorityFixture();
@@ -67,6 +69,7 @@ beforeAll(async () => {
       async run(request) {
         const input = /** @type {Record<string, any>} */ (request);
         expectedCommand = [input.file, ...input.args].join(' ');
+        expectedSshArgs = input.args;
         return createProcessOutcome();
       },
     },
@@ -272,7 +275,12 @@ describe('live packaged update controller interruption', () => {
     await expect(
       interruptLiveDeploymentUpdate(options, dependencies),
     ).rejects.toMatchObject({
-      diagnostic: { controllerPaused: true, controllerExitConfirmed: true },
+      diagnostic: {
+        controllerPaused: true,
+        controllerExitConfirmed: true,
+        faultStage: 'verify-paused-journal',
+        faultCode: 'assertion-failed',
+      },
     });
     expect(options.observeTarget).not.toHaveBeenCalled();
     expect(options.publish).not.toHaveBeenCalled();
@@ -287,7 +295,11 @@ describe('live packaged update controller interruption', () => {
     await expect(
       interruptLiveDeploymentUpdate(options, dependencies),
     ).rejects.toMatchObject({
-      diagnostic: { controllerExitConfirmed: true },
+      diagnostic: {
+        controllerExitConfirmed: true,
+        faultStage: 'verify-observed-journal',
+        faultCode: 'assertion-failed',
+      },
     });
     expect(options.publish).not.toHaveBeenCalled();
   });
@@ -375,7 +387,12 @@ describe('live packaged update controller interruption', () => {
       dependencies,
     ).catch((error) => error);
     expect(failure).toMatchObject({
-      diagnostic: { controllerPaused: true, controllerExitConfirmed: true },
+      diagnostic: {
+        controllerPaused: true,
+        controllerExitConfirmed: true,
+        faultStage: 'observe-target',
+        faultCode: 'unexpected-error',
+      },
     });
     expect(JSON.stringify(failure)).not.toContain('private remote details');
   });
@@ -474,4 +491,86 @@ describe('live packaged update controller interruption', () => {
     });
     expect(() => process.kill(result.controllerPid, 0)).toThrow();
   }, 15_000);
+
+  it('matches a real long OpenSSH command through ps without making a network connection', async () => {
+    const { options, dependencies, state, observation } = setup();
+    const sshArgs = expectedSshArgs.map((arg) =>
+      arg === 'ProxyCommand=none' ? 'ProxyCommand=/bin/sleep 30' : arg,
+    );
+    const result = await interruptLiveDeploymentUpdate(
+      {
+        ...options,
+        cwd: process.cwd(),
+        timeoutMs: 10_000,
+        observeTarget: async () => observation,
+      },
+      {
+        readIdentity: dependencies.readIdentity,
+        readHostKey: dependencies.readHostKey,
+        createTransport: (
+          /** @type {Parameters<typeof createDeploymentOpenSshTransport>[0]} */ request,
+        ) =>
+          createDeploymentOpenSshTransport({
+            ...request,
+            runProcess: {
+              run: async (/** @type {unknown} */ input) =>
+                await request.runProcess.run({
+                  .../** @type {Record<string, any>} */ (input),
+                  args: sshArgs,
+                }),
+            },
+          }),
+        spawn: (
+          /** @type {string} */ _file,
+          /** @type {string[]} */ _args,
+          /** @type {import('node:child_process').SpawnOptions} */ spawnOptions,
+        ) => {
+          state.journal = pending;
+          return spawn(
+            process.execPath,
+            [
+              '-e',
+              `
+          require('node:child_process').spawn('/usr/bin/ssh', JSON.parse(process.argv[1]), {stdio: 'inherit'});
+          setInterval(() => {}, 1000);
+        `,
+              JSON.stringify(sshArgs),
+            ],
+            spawnOptions,
+          );
+        },
+      },
+    );
+    expect(result).toMatchObject({
+      controllerPaused: true,
+      controllerExitConfirmed: true,
+      processGroupExitConfirmed: true,
+      signal: 'SIGKILL',
+    });
+  }, 15_000);
+
+  it('retains only a fixed observation failure code and stage before cleanup sends SIGKILL', async () => {
+    const { options, dependencies } = setup();
+    dependencies.listProcesses.mockRejectedValue(
+      Object.assign(new Error('private process details'), {
+        diagnostic: {
+          phase: 'update-process-observation',
+          privateDetails: 'secret',
+        },
+      }),
+    );
+    const failure = await interruptLiveDeploymentUpdate(
+      options,
+      dependencies,
+    ).catch((error) => error);
+    expect(failure.diagnostic).toMatchObject({
+      faultStage: 'find-converge-child',
+      faultCode: 'process-observation-failed',
+      signal: 'SIGKILL',
+      controllerExitConfirmed: true,
+    });
+    expect(JSON.stringify(failure)).not.toMatch(
+      /private process details|privateDetails|secret/,
+    );
+  });
 });

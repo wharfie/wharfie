@@ -1075,6 +1075,35 @@ describe('live acceptance orchestration without cloud calls', () => {
       signal: null,
     });
   });
+
+  test('retains an interruption boundary only when it is a fixed diagnostic stage', () => {
+    const safe = liveDeploymentFailureDiagnostic(
+      'restore-update-interrupted',
+      10,
+      commandFailure({
+        faultStage: 'verify-paused-journal',
+        faultCode: 'assertion-failed',
+      }),
+    );
+    expect(safe.faultStage).toBe('verify-paused-journal');
+    expect(safe.faultCode).toBe('assertion-failed');
+    expect(JSON.stringify(safe)).not.toContain(SECRET);
+    for (const faultStage of [
+      SECRET,
+      'verify-paused-journal ' + SECRET,
+      null,
+      {},
+    ]) {
+      const unsafe = liveDeploymentFailureDiagnostic(
+        'restore-update-interrupted',
+        10,
+        commandFailure({ faultStage, faultCode: faultStage }),
+      );
+      expect(unsafe).not.toHaveProperty('faultStage');
+      expect(unsafe).not.toHaveProperty('faultCode');
+      expect(JSON.stringify(unsafe)).not.toContain(SECRET);
+    }
+  });
 });
 
 describe('controller credential selection', () => {
