@@ -123,6 +123,7 @@ describe('preview recipient acceptance boundaries', () => {
         '/usr/bin/env',
         '-i',
         'PATH=/home/wharfie-recipient/recipient/bin',
+        'TMPDIR=/home/wharfie-recipient/recipient/tmp',
         '/usr/bin/id',
         '-u',
       ]),

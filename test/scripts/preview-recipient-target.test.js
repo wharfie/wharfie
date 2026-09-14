@@ -14,6 +14,7 @@ import {
 const inputBytes = 'Wharfie preview recipient input.\n';
 const runId = '4a0d2185-cbe4-48f9-b209-c9bde2bfa192';
 const appRoot = `${target.home}/.local/share/wharfie-nodejs/applications/steady-file-demo`;
+const purgeTombstone = `${target.home}/.local/share/wharfie-nodejs/applications/.wharfie-service-purge-v1.steady-file-demo`;
 const unit = 'wharfie-steady-file-demo.service';
 const unitPath = `${target.home}/.config/systemd/user/${unit}`;
 const wantsPath = `${target.home}/.config/systemd/user/default.target.wants/${unit}`;
@@ -180,7 +181,17 @@ function fixture() {
       if (file === target.inputPath)
         return `regular file:${fingerprint.bytes}:600:${target.uid}`;
       if (file === '/proc/801') return String(target.uid);
+      if (
+        [
+          '.local',
+          '.local/share',
+          '.local/share/wharfie-nodejs',
+          '.local/share/wharfie-nodejs/applications',
+        ].some((suffix) => file === `${target.home}/${suffix}`)
+      )
+        return `directory:${target.uid}`;
     }
+    if (command === '/usr/bin/find') return `d\t700\t${target.uid}\t2\t1\t\0`;
     if (command === '/usr/bin/test')
       return {
         status: args[0] === '-e' && existing.has(args[1]) ? 0 : 1,
@@ -390,6 +401,9 @@ describe('clean Linux preview recipient lifecycle', () => {
       'cleanup',
       'complete',
     ]);
+    expect(f.calls.some((call) => call.command === '/usr/bin/find')).toBe(
+      false,
+    );
   });
 
   it.each([
@@ -778,4 +792,122 @@ describe('clean Linux preview recipient lifecycle', () => {
       'serviceError',
     );
   });
+
+  it.each(['metadata', 'entry-limit', 'unsafe-name', 'output-limit'])(
+    'retains only bounded owned purge metadata after the failed exact retry: %s',
+    async (scenario) => {
+      const f = fixture();
+      const prepared = await preparePreviewRecipientTarget(f.input, f.ports);
+      f.intercept((command, args, result) => {
+        if (command === target.executable && args[2] === 'purge') {
+          f.existing.add(purgeTombstone);
+          return {
+            status: 1,
+            stdout: '',
+            stderr: JSON.stringify({
+              schemaVersion: 1,
+              kind: 'wharfie.service.error',
+              action: 'purge',
+              code: 'systemd-user-service-purge-incomplete',
+              message:
+                'Systemd user-service purge was interrupted and is safe to retry.',
+              remediation:
+                'Retry service purge with the same --confirm-data-loss application ID.',
+            }),
+          };
+        }
+        if (command === '/usr/bin/find') {
+          if (scenario === 'output-limit')
+            throw new Error('private raw metadata overflow');
+          const rows =
+            scenario === 'entry-limit'
+              ? Array.from(
+                  { length: 260 },
+                  (_, i) => `f\t600\t${target.uid}\t1\t1\tstate/entry-${i}\0`,
+                ).join('')
+              : scenario === 'unsafe-name'
+                ? `f\t600\t${target.uid}\t1\t1\tprivate\nunsafe\0`
+                : `d\t700\t${target.uid}\t2\t1\t\0s\t600\t${target.uid}\t1\t1\tstate/control/resident.sock\0f\t644\t1000\t2\t2\tstate/control/lmdb/data.mdb\0`;
+          return { ...result, stdout: rows };
+        }
+        return result;
+      });
+      await expect(
+        cleanupPreviewRecipientTarget(
+          { ...f.input, owned: prepared.owned },
+          f.ports,
+        ),
+      ).rejects.toMatchObject({
+        diagnostic: {
+          phase: 'cleanup-purge',
+          command: {
+            executable: 'app',
+            status: 1,
+            serviceError: { code: 'systemd-user-service-purge-incomplete' },
+          },
+        },
+      });
+      expect(f.calls.filter((call) => call.args[2] === 'purge')).toHaveLength(
+        2,
+      );
+      const find = f.calls.filter((call) => call.command === '/usr/bin/find');
+      expect(find).toHaveLength(1);
+      expect(find[0].args).toEqual([
+        '-P',
+        purgeTombstone,
+        '-xdev',
+        '-printf',
+        '%y\t%m\t%U\t%n\t%D\t%P\\0',
+      ]);
+      expect(find[0].options).toMatchObject({
+        timeoutMs: 10_000,
+        maxOutputBytes: 64 * 1024,
+      });
+      const tree = f.checkpoints.at(-1)?.receipt.purgeTree;
+      expect(tree.roots[0]).toEqual({
+        root: 'application',
+        missing: true,
+        entries: [],
+      });
+      expect(tree.roots[1].missing).toBe(false);
+      if (scenario === 'metadata') {
+        expect(tree.complete).toBe(true);
+        expect(tree.roots[1].entries).toEqual([
+          {
+            type: 'd',
+            mode: '700',
+            uid: target.uid,
+            nlink: 2,
+            dev: 1,
+            relativePath: '.',
+          },
+          {
+            type: 's',
+            mode: '600',
+            uid: target.uid,
+            nlink: 1,
+            dev: 1,
+            relativePath: 'state/control/resident.sock',
+          },
+          {
+            type: 'f',
+            mode: '644',
+            uid: 1000,
+            nlink: 2,
+            dev: 2,
+            relativePath: 'state/control/lmdb/data.mdb',
+          },
+        ]);
+      } else {
+        expect(tree.complete).toBe(false);
+        expect(tree.roots[1].entries.length).toBeLessThanOrEqual(256);
+        if (scenario === 'entry-limit') expect(tree.truncated).toBe(true);
+        if (scenario === 'unsafe-name') expect(tree.rejectedNames).toBe(true);
+        if (scenario === 'output-limit')
+          expect(tree.observationFailed).toBe(true);
+      }
+      expect(JSON.stringify(tree)).not.toContain('private');
+      expect(Buffer.byteLength(JSON.stringify(tree))).toBeLessThan(64 * 1024);
+    },
+  );
 });

@@ -30,6 +30,8 @@ export const PREVIEW_RECIPIENT_TARGET = Object.freeze({
 const APP_ID = 'steady-file-demo';
 const UNIT = `wharfie-${APP_ID}.service`;
 const APP_ROOT = `${PREVIEW_RECIPIENT_TARGET.home}/.local/share/wharfie-nodejs/applications/${APP_ID}`;
+// Exact sibling derivation from createServicePurgeTombstonePath in the manager.
+const PURGE_TOMBSTONE = `${PREVIEW_RECIPIENT_TARGET.home}/.local/share/wharfie-nodejs/applications/.wharfie-service-purge-v1.${APP_ID}`;
 const UNIT_PATH = `${PREVIEW_RECIPIENT_TARGET.home}/.config/systemd/user/${UNIT}`;
 const MAX_OUTPUT_BYTES = 512 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
@@ -141,6 +143,8 @@ function context(input, ports) {
   let stage = 'validate-target';
   /** @type {{executable:string,status:number|null,signal:string|null,timedOut:boolean,serviceError?:{action:string,code:string}}|null} */
   let commandResult = null;
+  /** @type {Record<string,any>|undefined} */
+  let purgeTree;
   const binding = {
     schemaVersion: 1,
     kind: 'wharfie.preview-recipient.target-owned',
@@ -175,7 +179,7 @@ function context(input, ports) {
   /**
    * @param {string} command
    * @param {string[]} args
-   * @param {{allowFailure?:boolean,timeoutMs?:number}} [options]
+   * @param {{allowFailure?:boolean,timeoutMs?:number,maxOutputBytes?:number}} [options]
    */
   async function run(command, args, options = {}) {
     assert.ok(now() < deadline, 'Recipient phase deadline elapsed.');
@@ -188,7 +192,10 @@ function context(input, ports) {
           1,
           Math.min(options.timeoutMs ?? COMMAND_TIMEOUT_MS, deadline - now()),
         ),
-        maxOutputBytes: MAX_OUTPUT_BYTES,
+        maxOutputBytes: Math.min(
+          options.maxOutputBytes ?? MAX_OUTPUT_BYTES,
+          MAX_OUTPUT_BYTES,
+        ),
         allowFailure: true,
       });
     } catch (error) {
@@ -233,6 +240,114 @@ function context(input, ports) {
     if (!options.allowFailure)
       assert.equal(result.status, 0, 'Recipient command failed.');
     return result;
+  }
+  /** Collect bounded metadata only after the exact public purge retry fails. */
+  async function capturePurgeTree() {
+    const originalCommand = commandResult;
+    purgeTree = {
+      schemaVersion: 1,
+      kind: 'wharfie.preview-recipient.purge-tree',
+      roots: [],
+      complete: false,
+      truncated: false,
+      rejectedNames: false,
+    };
+    let remainingBytes = 64 * 1024;
+    let remainingEntries = 256;
+    try {
+      for (const suffix of [
+        '.local',
+        '.local/share',
+        '.local/share/wharfie-nodejs',
+        '.local/share/wharfie-nodejs/applications',
+      ]) {
+        const ancestor = `${PREVIEW_RECIPIENT_TARGET.home}/${suffix}`;
+        assert.equal(
+          await text('/usr/bin/stat', ['--format=%F:%u', '--', ancestor]),
+          `directory:${PREVIEW_RECIPIENT_TARGET.uid}`,
+        );
+      }
+      for (const [label, root] of [
+        ['application', APP_ROOT],
+        ['tombstone', PURGE_TOMBSTONE],
+      ]) {
+        const exists = await run('/usr/bin/test', ['-e', root], {
+          allowFailure: true,
+        });
+        const link = await run('/usr/bin/test', ['-L', root], {
+          allowFailure: true,
+        });
+        assert.ok(
+          [0, 1].includes(exists.status) && [0, 1].includes(link.status),
+        );
+        const missing = exists.status === 1 && link.status === 1;
+        const observed = {
+          root: label,
+          missing,
+          entries: /** @type {Record<string,any>[]} */ ([]),
+        };
+        purgeTree.roots.push(observed);
+        if (missing) continue;
+        if (remainingBytes <= 0 || remainingEntries <= 0) {
+          purgeTree.truncated = true;
+          continue;
+        }
+        const result = await run(
+          '/usr/bin/find',
+          ['-P', root, '-xdev', '-printf', '%y\t%m\t%U\t%n\t%D\t%P\\0'],
+          { timeoutMs: 10_000, maxOutputBytes: remainingBytes },
+        );
+        remainingBytes -=
+          Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr);
+        assert.ok(remainingBytes >= 0);
+        assert.ok(result.stdout.endsWith('\0'));
+        for (const row of result.stdout.slice(0, -1).split('\0')) {
+          if (remainingEntries === 0) {
+            purgeTree.truncated = true;
+            break;
+          }
+          const parts = row.split('\t');
+          assert.equal(parts.length, 6);
+          const [type, mode, uid, nlink, dev, relativePath] = parts;
+          assert.match(type, /^[bcdflps?]$/);
+          assert.match(mode, /^[0-7]{1,4}$/);
+          for (const number of [uid, nlink, dev])
+            assert.ok(
+              /^\d{1,20}$/.test(number) && Number.isSafeInteger(Number(number)),
+            );
+          if (
+            relativePath.length > 2048 ||
+            (relativePath !== '' &&
+              relativePath
+                .split('/')
+                .some(
+                  (part) =>
+                    !/^[A-Za-z0-9._-]{1,128}$/.test(part) ||
+                    part === '.' ||
+                    part === '..',
+                ))
+          ) {
+            purgeTree.rejectedNames = true;
+            continue;
+          }
+          observed.entries.push({
+            type,
+            mode,
+            uid: Number(uid),
+            nlink: Number(nlink),
+            dev: Number(dev),
+            relativePath: relativePath || '.',
+          });
+          remainingEntries--;
+        }
+      }
+      purgeTree.complete = !purgeTree.truncated && !purgeTree.rejectedNames;
+    } catch {
+      purgeTree.observationFailed = true;
+    } finally {
+      // Metadata collection must not replace the failed purge command evidence.
+      commandResult = originalCommand;
+    }
   }
   /**
    * @param {string} command
@@ -635,6 +750,7 @@ function context(input, ports) {
                 ? 'deadline'
                 : 'assertion',
         command: commandResult,
+        ...(purgeTree ? { purgeTree } : {}),
       };
       await checkpoint('failure', receipt);
       throw Object.assign(new Error('Preview recipient target proof failed.'), {
@@ -655,6 +771,7 @@ function context(input, ports) {
     controllerProcessId,
     checkpoint,
     run,
+    capturePurgeTree,
     text,
     app,
     appJson,
@@ -860,8 +977,17 @@ export async function cleanupPreviewRecipientTarget(input, ports) {
         remediation:
           'Retry service purge with the same --confirm-data-loss application ID.',
       });
-      result = await c.app(args, { timeoutMs: 120_000 });
+      try {
+        result = await c.app(args, { allowFailure: true, timeoutMs: 120_000 });
+      } catch (error) {
+        await c.capturePurgeTree();
+        throw error;
+      }
       purgeAttempts++;
+      if (result.status !== 0) {
+        await c.capturePurgeTree();
+        assert.equal(result.status, 0, 'Recipient purge retry failed.');
+      }
     }
     const purge = c.parse(result.stdout);
     assert.equal(purge.action, 'purge');

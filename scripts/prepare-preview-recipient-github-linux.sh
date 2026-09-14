@@ -29,6 +29,7 @@ home = Path('/home/wharfie-recipient')
 marker = Path('/var/tmp/wharfie-preview-recipient-owner.json')
 linger = Path('/var/lib/systemd/linger/wharfie-recipient')
 runtime = Path('/run/user/60707')
+socket_root = Path('/tmp/wharfie-60707')
 expected = {
     'schemaVersion': 1,
     'kind': 'wharfie.preview-recipient.account-owner',
@@ -46,6 +47,7 @@ report = {
     'homeAbsent': False,
     'userManagerInactive': False,
     'runtimeAbsent': False,
+    'socketRootAbsent': False,
     'lingerAbsent': False,
     'markerAbsent': False,
     'status': 'failed',
@@ -90,14 +92,21 @@ try:
         if not absent(home):
             assert home.is_dir() and not home.is_symlink() and home.stat().st_uid in (0, uid)
             shutil.rmtree(home)
+        if not absent(socket_root):
+            report['failedStage'] = 'remove-socket-root'
+            socket_info = socket_root.lstat()
+            assert stat.S_ISDIR(socket_info.st_mode) and socket_info.st_uid == uid
+            assert shutil.rmtree.avoids_symlink_attacks
+            shutil.rmtree(socket_root)
     report['failedStage'] = 'verify-absence'
     report['accountAbsent'] = account(name) is None and account(uid) is None
     report['homeAbsent'] = absent(home)
     report['runtimeAbsent'] = absent(runtime)
+    report['socketRootAbsent'] = absent(socket_root)
     report['lingerAbsent'] = absent(linger)
     manager = run('/usr/bin/systemctl', 'show', 'user@60707.service', '--property=ActiveState', '--value')
     report['userManagerInactive'] = manager.stdout.strip() in ('inactive', 'failed')
-    assert all(report[key] for key in ('accountAbsent', 'homeAbsent', 'runtimeAbsent', 'lingerAbsent', 'userManagerInactive'))
+    assert all(report[key] for key in ('accountAbsent', 'homeAbsent', 'runtimeAbsent', 'socketRootAbsent', 'lingerAbsent', 'userManagerInactive'))
     if owned:
         marker.unlink()
     report['markerAbsent'] = absent(marker)
@@ -120,6 +129,7 @@ fi
 
 [[ "$#" -eq 0 ]] || exit 1
 [[ ! -e /home/wharfie-recipient && ! -L /home/wharfie-recipient ]] || exit 1
+[[ ! -e /tmp/wharfie-60707 && ! -L /tmp/wharfie-60707 ]] || exit 1
 [[ ! -e /var/lib/systemd/linger/wharfie-recipient && ! -L /var/lib/systemd/linger/wharfie-recipient ]] || exit 1
 if getent passwd wharfie-recipient >/dev/null || getent passwd 60707 >/dev/null; then
   echo "The disposable recipient account or UID already exists; refusing to reuse it." >&2
@@ -176,7 +186,8 @@ sudo -n /usr/sbin/useradd --uid 60707 --create-home --shell /usr/sbin/nologin wh
 sudo -n /usr/bin/chmod 0700 /home/wharfie-recipient
 sudo -n /usr/bin/install -d -m 0700 -o wharfie-recipient -g wharfie-recipient \
   /home/wharfie-recipient/recipient \
-  /home/wharfie-recipient/recipient/bin
+  /home/wharfie-recipient/recipient/bin \
+  /home/wharfie-recipient/recipient/tmp
 for command in systemctl loginctl; do
   [[ -x "/usr/bin/${command}" ]] || exit 1
   sudo -n /usr/bin/ln -s "/usr/bin/${command}" "/home/wharfie-recipient/recipient/bin/${command}"
@@ -188,6 +199,7 @@ recipient() {
   sudo -n -u wharfie-recipient /usr/bin/env -i \
     HOME=/home/wharfie-recipient USER=wharfie-recipient LOGNAME=wharfie-recipient \
     PATH=/home/wharfie-recipient/recipient/bin \
+    TMPDIR=/home/wharfie-recipient/recipient/tmp \
     XDG_CONFIG_HOME=/home/wharfie-recipient/.config \
     XDG_CACHE_HOME=/home/wharfie-recipient/.cache \
     XDG_DATA_HOME=/home/wharfie-recipient/.local/share \
@@ -202,6 +214,7 @@ recipient() {
 recipient /usr/bin/systemctl --user set-environment \
   HOME=/home/wharfie-recipient \
   PATH=/home/wharfie-recipient/recipient/bin \
+  TMPDIR=/home/wharfie-recipient/recipient/tmp \
   XDG_CONFIG_HOME=/home/wharfie-recipient/.config \
   XDG_CACHE_HOME=/home/wharfie-recipient/.cache \
   XDG_DATA_HOME=/home/wharfie-recipient/.local/share \

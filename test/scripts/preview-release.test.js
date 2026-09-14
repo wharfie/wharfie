@@ -305,6 +305,44 @@ describe('preview release contract', () => {
     expect(ci).toContain('npm run verify:release:preview');
   });
 
+  it('owns the exact socket root and keeps native temporary files inside the recipient home', () => {
+    const preparation = readFileSync(
+      path.join(
+        process.cwd(),
+        'scripts/prepare-preview-recipient-github-linux.sh',
+      ),
+      'utf8',
+    );
+    const socketPreflight =
+      '[[ ! -e /tmp/wharfie-60707 && ! -L /tmp/wharfie-60707 ]] || exit 1';
+    expect(preparation).toContain(socketPreflight);
+    expect(preparation.indexOf(socketPreflight)).toBeLessThan(
+      preparation.indexOf('fd = os.open(marker, os.O_CREAT | os.O_EXCL'),
+    );
+    expect(preparation).toContain("socket_root = Path('/tmp/wharfie-60707')");
+    expect(preparation).toContain('socket_info = socket_root.lstat()');
+    expect(preparation).toContain(
+      'assert stat.S_ISDIR(socket_info.st_mode) and socket_info.st_uid == uid',
+    );
+    expect(preparation).toContain(
+      'assert shutil.rmtree.avoids_symlink_attacks',
+    );
+    expect(preparation).toContain('            shutil.rmtree(socket_root)');
+    expect(preparation.indexOf('shutil.rmtree(socket_root)')).toBeGreaterThan(
+      preparation.indexOf("run('/usr/sbin/userdel', '--remove', name)"),
+    );
+    expect(preparation).toContain(
+      "report['socketRootAbsent'] = absent(socket_root)",
+    );
+    expect(preparation).toContain(
+      "'runtimeAbsent', 'socketRootAbsent', 'lingerAbsent'",
+    );
+    expect(
+      preparation.match(/TMPDIR=\/home\/wharfie-recipient\/recipient\/tmp/gu),
+    ).toHaveLength(2);
+    expect(preparation).toContain('  /home/wharfie-recipient/recipient/tmp\n');
+  });
+
   it.each([
     { GITHUB_ACTIONS: 'false', RUNNER_ENVIRONMENT: 'github-hosted' },
     { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted' },

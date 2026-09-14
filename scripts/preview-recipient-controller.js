@@ -57,7 +57,7 @@ export function createPreviewRecipientTargetCommand(dependencies = {}) {
         `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${RECIPIENT_UID}/bus`,
         'LANG=C.UTF-8',
         'TZ=UTC',
-        'TMPDIR=/tmp',
+        `TMPDIR=${RECIPIENT_HOME}/recipient/tmp`,
         file,
         ...args,
       ],
