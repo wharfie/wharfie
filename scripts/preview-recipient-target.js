@@ -995,6 +995,7 @@ export async function cleanupPreviewRecipientTarget(input, ports) {
     assert.ok(['purged', 'already-purged'].includes(purge.outcome));
     c.stage('cleanup-final-absence');
     await c.absent(APP_ROOT);
+    await c.absent(PURGE_TOMBSTONE);
     await c.absent(UNIT_PATH);
     await c.absent(
       `${PREVIEW_RECIPIENT_TARGET.home}/.config/systemd/user/default.target.wants/${UNIT}`,
@@ -1018,6 +1019,7 @@ export async function cleanupPreviewRecipientTarget(input, ports) {
       purge,
       purgeAttempts,
       applicationRootAbsent: true,
+      purgeTombstoneAbsent: true,
       externalArtifactPreserved: true,
     };
   });

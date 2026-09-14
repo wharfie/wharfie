@@ -691,21 +691,29 @@ describe('clean Linux preview recipient lifecycle', () => {
     expect(f.owned()).toBeDefined();
   });
 
-  it('independently rejects wiring left behind after purge', async () => {
-    const f = fixture();
-    const prepared = await preparePreviewRecipientTarget(f.input, f.ports);
-    f.intercept((command, args, result) => {
-      if (command === target.executable && args[2] === 'purge')
-        f.existing.add(unitPath);
-      return result;
-    });
-    await expect(
-      cleanupPreviewRecipientTarget(
-        { ...f.input, owned: prepared.owned },
-        f.ports,
-      ),
-    ).rejects.toMatchObject({ diagnostic: { phase: 'cleanup-final-absence' } });
-  });
+  it.each([
+    ['wiring', unitPath],
+    ['purge tombstone', purgeTombstone],
+  ])(
+    'independently rejects %s left behind after purge',
+    async (_label, remainingPath) => {
+      const f = fixture();
+      const prepared = await preparePreviewRecipientTarget(f.input, f.ports);
+      f.intercept((command, args, result) => {
+        if (command === target.executable && args[2] === 'purge')
+          f.existing.add(remainingPath);
+        return result;
+      });
+      await expect(
+        cleanupPreviewRecipientTarget(
+          { ...f.input, owned: prepared.owned },
+          f.ports,
+        ),
+      ).rejects.toMatchObject({
+        diagnostic: { phase: 'cleanup-final-absence' },
+      });
+    },
+  );
 
   it('preserves the recognized purge refusal through nested completion cleanup without retaining its message', async () => {
     const f = fixture();
