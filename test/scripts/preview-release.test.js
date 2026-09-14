@@ -2,6 +2,7 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 import {
@@ -113,7 +114,7 @@ describe('preview release contract', () => {
       'node ./scripts/verify-preview-consumer.js',
       '--defer-finalize',
       'registry-consumer:',
-      'needs: [publish, registry-consumer]',
+      'needs: [publish, registry-consumer, draft-recipient]',
       '--finalize-only',
       '--registry-manifest',
       'wharfie-aws-${version}.tgz',
@@ -176,21 +177,30 @@ describe('preview release contract', () => {
     const attestIndex = workflow.indexOf('\n  attest:');
     const consumerIndex = workflow.indexOf('\n  consumer:');
     const registryConsumerIndex = workflow.indexOf('\n  registry-consumer:');
+    const draftRecipientIndex = workflow.indexOf('\n  draft-recipient:');
     const finalizeIndex = workflow.indexOf('\n  finalize:');
+    const publicRecipientIndex = workflow.indexOf('\n  public-recipient:');
     expect(buildIndex).toBeGreaterThan(-1);
     expect(attestIndex).toBeGreaterThan(buildIndex);
     expect(consumerIndex).toBeGreaterThan(attestIndex);
     expect(publishIndex).toBeGreaterThan(-1);
     expect(registryConsumerIndex).toBeGreaterThan(publishIndex);
-    expect(finalizeIndex).toBeGreaterThan(registryConsumerIndex);
+    expect(draftRecipientIndex).toBeGreaterThan(registryConsumerIndex);
+    expect(finalizeIndex).toBeGreaterThan(draftRecipientIndex);
+    expect(publicRecipientIndex).toBeGreaterThan(finalizeIndex);
     const buildJob = workflow.slice(buildIndex, attestIndex);
     const attestJob = workflow.slice(attestIndex, consumerIndex);
     const publishJob = workflow.slice(publishIndex, registryConsumerIndex);
     const registryConsumerJob = workflow.slice(
       registryConsumerIndex,
+      draftRecipientIndex,
+    );
+    const draftRecipientJob = workflow.slice(
+      draftRecipientIndex,
       finalizeIndex,
     );
-    const finalizeJob = workflow.slice(finalizeIndex);
+    const finalizeJob = workflow.slice(finalizeIndex, publicRecipientIndex);
+    const publicRecipientJob = workflow.slice(publicRecipientIndex);
     expect(jobPermissions(buildJob)).toEqual([]);
     expect(attestJob).toContain('needs: build');
     expect(jobPermissions(attestJob)).toEqual([
@@ -211,7 +221,16 @@ describe('preview release contract', () => {
     expect(registryConsumerJob).toContain('needs: publish');
     expect(jobPermissions(registryConsumerJob)).toEqual([]);
     expect(registryConsumerJob).not.toContain('GH_TOKEN');
-    expect(finalizeJob).toContain('needs: [publish, registry-consumer]');
+    expect(draftRecipientJob).toContain('needs: publish');
+    expect(jobPermissions(draftRecipientJob)).toEqual(['contents: read']);
+    expect(draftRecipientJob).toContain('GH_TOKEN: ${{ github.token }}');
+    expect(draftRecipientJob).toContain('--tag "$GITHUB_REF_NAME" --draft');
+    expect(draftRecipientJob).not.toContain('actions/download-artifact');
+    expect(draftRecipientJob).not.toContain('--artifact-dir');
+    expect(draftRecipientJob).not.toContain('--download-only');
+    expect(finalizeJob).toContain(
+      'needs: [publish, registry-consumer, draft-recipient]',
+    );
     expect(finalizeJob).toContain('environment: npm-preview-promotion');
     expect(finalizeJob).toContain('fetch-depth: 0');
     expect(jobPermissions(finalizeJob)).toEqual(['contents: write']);
@@ -219,6 +238,62 @@ describe('preview release contract', () => {
     expect(finalizeJob.indexOf('verify publication guard')).toBeLessThan(
       finalizeJob.indexOf('install pinned npm'),
     );
+    expect(publicRecipientJob).toContain('needs: finalize');
+    expect(jobPermissions(publicRecipientJob)).toEqual(['contents: read']);
+    expect(publicRecipientJob).toContain('env -u GH_TOKEN -u GITHUB_TOKEN');
+    expect(publicRecipientJob).toContain(
+      '--tag "$GITHUB_REF_NAME" --download-only',
+    );
+    expect(publicRecipientJob).not.toContain('${{ github.token }}');
+    expect(publicRecipientJob).not.toContain('--draft');
+    expect(publicRecipientJob).not.toContain('actions/download-artifact');
+    for (const recipientJob of [draftRecipientJob, publicRecipientJob]) {
+      expect(recipientJob).toContain(
+        'node ./scripts/verify-preview-recipient.js',
+      );
+      expect(recipientJob).toContain('--expected-commit "$GITHUB_SHA"');
+      expect(recipientJob).toContain('--report "$RUNNER_TEMP/');
+      expect(recipientJob).toContain('if: ${{ always() }}');
+      expect(recipientJob).not.toContain('publish-preview-release.js');
+      expect(recipientJob).not.toContain('id-token: write');
+      expect(recipientJob).not.toContain('contents: write');
+    }
+    const selfHostIndex = ci.indexOf('\n  preview-self-host:');
+    const recipientIndex = ci.indexOf('\n  preview-recipient:');
+    const previewConsumerIndex = ci.indexOf('\n  preview-consumer:');
+    expect(recipientIndex).toBeGreaterThan(selfHostIndex);
+    expect(previewConsumerIndex).toBeGreaterThan(recipientIndex);
+    const selfHostJob = ci.slice(selfHostIndex, recipientIndex);
+    const recipientJob = ci.slice(recipientIndex, previewConsumerIndex);
+    expect(selfHostJob).toContain('name: wharfie-preview-recipient-candidate');
+    expect(selfHostJob).toContain(
+      'path: ${{ runner.temp }}/wharfie-preview-release/',
+    );
+    expect(recipientJob).toContain('needs: preview-self-host');
+    expect(recipientJob).toContain('name: wharfie-preview-recipient-candidate');
+    expect(recipientJob).toContain(
+      '--artifact-dir "$RUNNER_TEMP/wharfie-preview-recipient-candidate"',
+    );
+    expect(recipientJob).toContain('--expected-commit "$GITHUB_SHA"');
+    expect(recipientJob).not.toContain('--download-only');
+    expect(recipientJob).not.toContain('GH_TOKEN');
+    for (const fullProofJob of [recipientJob, draftRecipientJob]) {
+      expect(fullProofJob).toContain(
+        'bash scripts/prepare-preview-recipient-github-linux.sh',
+      );
+      expect(fullProofJob).toContain(
+        'WHARFIE_PREVIEW_RECIPIENT_DISPOSABLE: github-actions',
+      );
+      expect(fullProofJob).toContain(
+        '--cleanup "$RUNNER_TEMP/wharfie-recipient-account-cleanup.json"',
+      );
+      expect(fullProofJob.indexOf('--cleanup')).toBeGreaterThan(
+        fullProofJob.indexOf('node ./scripts/verify-preview-recipient.js'),
+      );
+      expect(fullProofJob).toContain(
+        'path: |\n            ${{ runner.temp }}/wharfie-',
+      );
+    }
     expect(ci).toContain('permissions:\n  contents: read');
     expect(ci).toContain(
       'env:\n  NPM_CONFIG_REGISTRY: https://registry.npmjs.org',
@@ -229,4 +304,25 @@ describe('preview release contract', () => {
     expect(ci).toContain("node-version-file: '.nvmrc'");
     expect(ci).toContain('npm run verify:release:preview');
   });
+
+  it.each([
+    { GITHUB_ACTIONS: 'false', RUNNER_ENVIRONMENT: 'github-hosted' },
+    { GITHUB_ACTIONS: 'true', RUNNER_ENVIRONMENT: 'self-hosted' },
+  ])(
+    'refuses recipient preparation outside the disposable runner: %j',
+    (env) => {
+      const result = spawnSync(
+        '/bin/bash',
+        ['scripts/prepare-preview-recipient-github-linux.sh'],
+        {
+          cwd: process.cwd(),
+          env: { PATH: '/usr/bin:/bin', ...env },
+          encoding: 'utf8',
+        },
+      );
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('');
+    },
+  );
 });

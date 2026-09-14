@@ -89,6 +89,7 @@
     "verify:provider-boundary": "node ./scripts/verify-provider-boundary.js",
     "verify:package:sea": "node ./scripts/verify-package-sea.js",
     "verify:release:preview": "node ./scripts/build-preview-release.js --check",
+    "verify:release:recipient": "node ./scripts/verify-preview-recipient.js",
     "build:release:preview": "node ./scripts/build-preview-release.js",
     "verify:service:systemd:lima": "./scripts/run-systemd-user-service-lima.sh",
     "verify:remote-recovery:systemd:lima": "WHARFIE_SYSTEMD_PROOF_SCENARIO=remote-recovery ./scripts/run-systemd-user-service-lima.sh",

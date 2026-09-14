@@ -14,52 +14,26 @@
 
 Wharfie is a local-first TypeScript application runtime that turns an ordinary CLI into a portable executable, then lets that same application become a durable, observable service across trusted machines without an architectural rewrite.
 
-The product goal is continuity:
+Start with [build, share, and run a preview](docs/guides/recipient-preview.md):
 
-1. Write and run a normal CLI locally.
-2. Mark named operations as durable activities.
-3. Package the application as one approachable executable.
-4. Promote it to a persistent service on one machine.
-5. Add schedules, workflows, retries, and durable state.
-6. Enroll more trusted nodes when placement or resilience requires them.
-7. Inspect, intervene in, update, and roll back the application through the same executable.
+1. Install one exact candidate in a fresh project and run the starter as a CLI.
+2. Package it and share the executable for the recipient's platform.
+3. Install its persistent service on a Linux server, close the submitting
+   controller, and reconnect to inspect the same durable work.
 
-No separate service rewrite, preinstalled Node runtime, Dockerfile, Kubernetes cluster, or hosted orchestration service should be required on the target machine.
+The target application needs no preinstalled Node runtime or source checkout.
+An existing server uses the executable's `wharfie service` commands;
+[self-deployment](docs/guides/live-deployment-acceptance.md) adds AWS or Hetzner
+provisioning through the same application. Cloud root-disk loss and automatic
+multi-node failover are outside this preview's persistence promise.
 
-The shortest product moment is now versioned in
-[the hello-world starter](examples/hello-world/README.md). It begins with the
-complete `defineApp({ id, main })` application, then packages a separate
-resumable greeting, and kills its foreground durable run. Because `SIGKILL`
-leaves the resident's coordinator authority ACTIVE, the demo retains an exact
-inspection and performs the explicit confirmed takeover-and-release before it
-repeats the identical named run command. That safety step replaces authority;
-the repeated run separately proves that the committed preparation and original
-timer were retained, then a later process verifies the terminal result. The
-repository gate copies that starter and installs only Wharfie's packed npm
-tarball, then hides the copied builder before relocated execution:
-
-```bash
-npm run verify:magnetic-first-run
-```
-
-The repository gate uses the exact contributor Node 24.13.1 pin. Published
-consumers may use the declared `>=24.13.1 <25` Node range.
-
-The locally packed release-candidate gate now passes this exact flow, including
-retained coordinator inspection and explicit confirmed takeover-and-release.
-This is not a published-install claim; final acceptance still requires the same
-gate to pass against the published preview.
-The deeper [single-host developer preview](docs/guides/developer-preview.md)
-and its
-[accepted split builder/clean-target checkpoint](llm/checkpoints/2026-07-29-single-host-developer-preview.md)
-cover service installation, unfinished work across controller exit, update,
-rollback, uninstall, purge, and proof-owned cleanup. The full
-[steady-file golden path](docs/guides/golden-path.md) covers the corresponding
-application and operator boundaries. Separate
-[Darwin SEA](llm/checkpoints/2026-07-28-steady-file-native-sea-proof.md),
-[Ubuntu systemd](llm/checkpoints/2026-07-28-steady-file-systemd-walkthrough.md),
-and [service-substrate](llm/checkpoints/2026-07-28-systemd-lifecycle-proof.md)
-proofs retain the deeper native, crash, and reboot evidence.
+Use the [minimal hello-world starter](examples/hello-world/README.md) to learn
+`defineApp({ id, main })`, or the [steady-file guide](docs/guides/golden-path.md)
+for the complete application and operator model. Preview release downloads must
+include `preview-release.json`; older releases belong to the retired product.
+The [release workflow](docs/guides/preview-release.md) distinguishes locally
+tested candidates, authenticated draft downloads, and publicly obtainable bytes.
+Candidate CI alone is not proof that a preview has been published.
 
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service
