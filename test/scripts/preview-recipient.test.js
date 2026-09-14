@@ -380,6 +380,64 @@ describe('recipient runner retirement and bounded failure reports', () => {
     });
   });
 
+  it('retains the original target failure before cleanup replaces the shared checkpoint', async () => {
+    const { options, dependencies, observed } = await fixture();
+    const original = dependencies.controller.getMockImplementation();
+    assert.ok(original);
+    const failedCheckpoint = {
+      phase: 'failure',
+      receipt: {
+        schemaVersion: 1,
+        kind: 'wharfie.preview-recipient.target-failure',
+        phase: 'observe-waiting',
+        durationMs: 2300,
+        code: 'command-failed',
+        command: {
+          executable: 'app',
+          status: 1,
+          signal: null,
+          timedOut: false,
+        },
+      },
+    };
+    const cleanupCheckpoint = {
+      phase: 'cleanup',
+      receipt: {
+        schemaVersion: 1,
+        kind: 'wharfie.preview-recipient.target-cleanup',
+        applicationRootAbsent: true,
+        externalArtifactPreserved: true,
+      },
+    };
+    dependencies.controller.mockImplementation(async (...args) => {
+      const result = await original(...args);
+      await writeFile(
+        path.join(args[2], 'checkpoint.json'),
+        JSON.stringify(
+          args[0] === 'prepare' ? failedCheckpoint : cleanupCheckpoint,
+        ),
+      );
+      if (args[0] === 'prepare')
+        throw new Error('raw target failure must stay private');
+      return result;
+    });
+    const report = await verifyPreviewRecipient(options, dependencies);
+    expect(report).toMatchObject({
+      status: 'failed',
+      failure: { phase: 'prepare' },
+      targetFailureCheckpoint: failedCheckpoint,
+      targetCheckpoint: cleanupCheckpoint,
+      cleanup: { applicationCleaned: true, workspaceRemoved: true },
+    });
+    const retained = JSON.parse(await readFile(options.report, 'utf8'));
+    expect(retained.targetFailureCheckpoint).toEqual(failedCheckpoint);
+    expect(retained.targetCheckpoint).toEqual(cleanupCheckpoint);
+    expect(JSON.stringify(retained)).not.toContain('raw target failure');
+    await expect(lstat(observed.workspace)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('anonymous download-only mode never starts a builder or target', async () => {
     const { options, dependencies } = await fixture();
     const download = jest.fn(async (/** @type {unknown} */ _input) => ({

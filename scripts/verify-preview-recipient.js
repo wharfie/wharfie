@@ -471,6 +471,13 @@ export async function verifyPreviewRecipient(options, dependencies = {}) {
   } finally {
     if (targetStarted && !targetFinished && workspace && authority) {
       try {
+        report.targetFailureCheckpoint = await readReceipt(
+          path.join(workspace, 'checkpoint.json'),
+        );
+      } catch {
+        /* A controller can fail before writing its first checkpoint. */
+      }
+      try {
         authority.owned = await readReceipt(
           path.join(workspace, 'authority-owned.json'),
         );

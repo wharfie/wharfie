@@ -56,6 +56,8 @@ From that directory, create transfer checksums:
 sha256sum steady-file steady-file.artifact.json > SHA256SUMS
 ```
 
+On macOS, use `shasum -a 256 steady-file steady-file.artifact.json > SHA256SUMS`.
+
 Transfer those three files to the recipient. Application input is separate:
 create `input.txt` on the recipient or explicitly transfer the file being
 checked. A path on the author's laptop does not automatically exist on a server.
