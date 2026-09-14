@@ -156,6 +156,10 @@ and runs the [author-to-recipient service proof](recipient-preview.md).
 GitHub requires push access to list drafts, so this job has `contents: write`;
 the download token is scoped to the verifier step and stripped from child
 build and execution environments.
+Draft assets are fetched only through their exact canonical GitHub API asset
+URLs. GitHub can assign temporary `untagged-...` browser URLs to a draft; those
+URLs are not download authority. Anonymous public downloads still require the
+exact versioned browser URL for every asset.
 The core and matching AWS companion are installed together in a private builder;
 only the resulting application handoff reaches the isolated recipient. Neither
 the build nor the target receives the GitHub download credential. Finalization
