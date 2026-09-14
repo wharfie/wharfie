@@ -222,6 +222,7 @@ describe('preview release contract', () => {
     expect(jobPermissions(registryConsumerJob)).toEqual([]);
     expect(registryConsumerJob).not.toContain('GH_TOKEN');
     expect(draftRecipientJob).toContain('needs: publish');
+    expect(draftRecipientJob).toContain('timeout-minutes: 120');
     expect(jobPermissions(draftRecipientJob)).toEqual(['contents: read']);
     expect(draftRecipientJob).toContain('GH_TOKEN: ${{ github.token }}');
     expect(draftRecipientJob).toContain('--tag "$GITHUB_REF_NAME" --draft');
@@ -239,6 +240,7 @@ describe('preview release contract', () => {
       finalizeJob.indexOf('install pinned npm'),
     );
     expect(publicRecipientJob).toContain('needs: finalize');
+    expect(publicRecipientJob).toContain('timeout-minutes: 30');
     expect(jobPermissions(publicRecipientJob)).toEqual(['contents: read']);
     expect(publicRecipientJob).toContain('env -u GH_TOKEN -u GITHUB_TOKEN');
     expect(publicRecipientJob).toContain(
@@ -270,6 +272,7 @@ describe('preview release contract', () => {
       'path: ${{ runner.temp }}/wharfie-preview-release/',
     );
     expect(recipientJob).toContain('needs: preview-self-host');
+    expect(recipientJob).toContain('timeout-minutes: 105');
     expect(recipientJob).toContain('name: wharfie-preview-recipient-candidate');
     expect(recipientJob).toContain(
       '--artifact-dir "$RUNNER_TEMP/wharfie-preview-recipient-candidate"',

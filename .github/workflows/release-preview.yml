@@ -229,7 +229,8 @@ jobs:
     if: github.repository == 'wharfie/wharfie'
     needs: publish
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Include the bounded 15-minute download before the full candidate proof.
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -321,7 +322,8 @@ jobs:
     if: github.repository == 'wharfie/wharfie'
     needs: finalize
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Download permits 15 minutes; retain time for smoke checks and the report.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
