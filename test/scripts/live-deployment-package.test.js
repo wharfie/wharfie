@@ -2,17 +2,21 @@ import { afterEach, describe, expect, test } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import {
   chmod,
+  copyFile,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
   rm,
+  readdir,
   symlink,
   writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { gzipSync } from 'node:zlib';
 
 import {
   assertLiveDeploymentPackageVersions,
@@ -25,6 +29,7 @@ import {
   LIVE_DEPLOYMENT_TIMER_DELAY_MS,
   prepareLiveDeploymentFixture,
   runLiveDeploymentProcess,
+  stageLiveDeploymentReleasePackages,
   verifyLiveDeploymentPackageOutput,
 } from '../../scripts/live-deployment-package.js';
 import {
@@ -33,10 +38,13 @@ import {
 } from '../../scripts/live-deployment-fixture-activities.js';
 import { getBuildTargetId } from '../../src/core/runtime/build-target.js';
 import { REPO_ROOT } from '../../scripts/package-verification.js';
+import packageMetadata from '../../package.json' with { type: 'json' };
+import awsMetadata from '../../packages/aws/package.json' with { type: 'json' };
 
 /** @type {string[]} */
 const directories = [];
 const VERSION = '0.0.15';
+const RELEASE_COMMIT = 'a'.repeat(40);
 const NATIVE_TARGET = Object.freeze({
   platform: 'darwin',
   architecture: 'arm64',
@@ -128,6 +136,342 @@ async function artifactFixture() {
     },
   };
 }
+
+/** @param {Record<string, any>} metadata - Candidate package metadata. */
+function metadataTarball(metadata) {
+  const contents = Buffer.from(JSON.stringify(metadata));
+  const header = Buffer.alloc(512);
+  header.write('package/package.json');
+  for (const [offset, length, value] of [
+    [100, 8, 0o644],
+    [108, 8, 0],
+    [116, 8, 0],
+    [124, 12, contents.length],
+    [136, 12, 0],
+  ]) {
+    header.write(
+      `${value.toString(8).padStart(length - 1, '0')}\0`,
+      offset,
+      length,
+      'ascii',
+    );
+  }
+  header.fill(0x20, 148, 156);
+  header[156] = 48;
+  header.write('ustar\0', 257, 6, 'ascii');
+  header.write('00', 263, 2, 'ascii');
+  const checksum = header.reduce((sum, byte) => sum + byte, 0);
+  header.write(checksum.toString(8).padStart(6, '0'), 148, 6, 'ascii');
+  header[154] = 0;
+  header[155] = 0x20;
+  return gzipSync(
+    Buffer.concat([
+      header,
+      contents,
+      Buffer.alloc((512 - (contents.length % 512)) % 512),
+      Buffer.alloc(1024),
+    ]),
+  );
+}
+
+async function releaseFixture() {
+  const root = await temporaryDirectory();
+  const artifactDir = path.join(root, 'release');
+  await mkdir(artifactDir, { mode: 0o700 });
+  const standalone = Buffer.from(
+    'unexecutable live deployment release fixture',
+  );
+  const byteDigest = createHash('sha256')
+    .update(standalone)
+    .digest('base64url');
+  const artifactId = `waf1_${byteDigest}`;
+  const revisionId = `wrv1_${byteDigest}`;
+  const target = {
+    nodeVersion: '24.13.1',
+    platform: 'linux',
+    architecture: 'x64',
+    libc: 'glibc',
+  };
+  const record = {
+    schemaVersion: 1,
+    kind: 'artifactRecord',
+    appId: 'wharfie',
+    artifactId,
+    revisionId,
+    byteDigest: { algorithm: 'sha256', value: byteDigest },
+    size: standalone.length,
+    target,
+    targetId: 'node-v24.13.1-linux-x64-glibc',
+    format: { kind: 'node-sea', version: 1 },
+    provenance: { fixture: 'live-deployment-package' },
+  };
+  const files = new Map([
+    [`wharfie-wharfie-${VERSION}.tgz`, metadataTarball(packageMetadata)],
+    [`wharfie-aws-${VERSION}.tgz`, metadataTarball(awsMetadata)],
+    [`wharfie-v${VERSION}-linux-x64`, standalone],
+    [
+      `wharfie-v${VERSION}-linux-x64.artifact.json`,
+      Buffer.from(JSON.stringify(record)),
+    ],
+  ]);
+  /** @type {Record<string, any>[]} */
+  const artifacts = [...files].map(([fileName, bytes], index) => ({
+    fileName,
+    kind: [
+      'npm-package',
+      'npm-companion-package',
+      'standalone-cli',
+      'artifact-record',
+    ][index],
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    size: bytes.length,
+    ...(index < 2
+      ? {
+          package: index === 0 ? '@wharfie/wharfie' : '@wharfie/aws',
+          publication: index === 0 ? 'npm-preview' : 'github-release-only',
+          version: VERSION,
+          integrity: `sha512-${createHash('sha512').update(bytes).digest('base64')}`,
+          npmShasum: createHash('sha1').update(bytes).digest('hex'),
+        }
+      : { artifactId }),
+    ...(index === 2 ? { target, revisionId } : {}),
+  }));
+  const manifest = {
+    schemaVersion: 1,
+    kind: 'wharfie.preview-release',
+    package: '@wharfie/wharfie',
+    version: VERSION,
+    tag: `v${VERSION}`,
+    source: {
+      repository: 'https://github.com/wharfie/wharfie',
+      commit: RELEASE_COMMIT,
+    },
+    artifacts,
+  };
+  files.set('preview-release.json', Buffer.from(JSON.stringify(manifest)));
+  files.set(
+    'SHA256SUMS',
+    Buffer.from(
+      [...files]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(
+          ([fileName, bytes]) =>
+            `${createHash('sha256').update(bytes).digest('hex')}  ${fileName}\n`,
+        )
+        .join(''),
+    ),
+  );
+  for (const [fileName, bytes] of files) {
+    await writeFile(path.join(artifactDir, fileName), bytes, { mode: 0o600 });
+  }
+  return {
+    root,
+    artifactDir,
+    directory: path.join(root, 'staged'),
+    expectedCommit: RELEASE_COMMIT,
+    artifacts,
+  };
+}
+
+describe('live deployment verified release input', () => {
+  test.each([
+    { artifactDir: '/release' },
+    { expectedCommit: RELEASE_COMMIT },
+    { artifactDir: 'relative', expectedCommit: RELEASE_COMMIT },
+    { artifactDir: '/release', expectedCommit: RELEASE_COMMIT.toUpperCase() },
+    { artifactDir: '/release', expectedCommit: RELEASE_COMMIT.slice(0, 8) },
+  ])(
+    'rejects incomplete or ambiguous release selection before build state %#',
+    async (selection) => {
+      const workspace = await temporaryDirectory();
+      await expect(
+        buildLiveDeploymentCandidate({
+          workspace,
+          provider: 'aws',
+          ...selection,
+        }),
+      ).rejects.toThrow();
+      expect(await readdir(workspace)).toEqual([]);
+    },
+  );
+
+  test.each(['aws', 'hetzner'])(
+    'isolates exact %s package bytes and retains source identities',
+    async (provider) => {
+      const fixture = await releaseFixture();
+      const selectedProvider = /** @type {'aws'|'hetzner'} */ (provider);
+      const staged = await stageLiveDeploymentReleasePackages({
+        ...fixture,
+        provider: selectedProvider,
+      });
+      const selected = fixture.artifacts.slice(0, provider === 'aws' ? 2 : 1);
+      expect(staged.packageSource).toEqual({
+        kind: 'verified-release-assets',
+        version: VERSION,
+        tag: `v${VERSION}`,
+        sourceCommit: RELEASE_COMMIT,
+        packages: selected.map((artifact) => ({
+          name: artifact.package,
+          version: artifact.version,
+          fileName: artifact.fileName,
+          sha256: artifact.sha256,
+          integrity: artifact.integrity,
+          npmShasum: artifact.npmShasum,
+          size: artifact.size,
+        })),
+      });
+      expect(staged.packages).toEqual(
+        selected.map((artifact) =>
+          path.join(fixture.directory, artifact.fileName),
+        ),
+      );
+      expect((await lstat(fixture.directory)).mode & 0o777).toBe(0o700);
+      for (const [index, destination] of staged.packages.entries()) {
+        const source = path.join(fixture.artifactDir, selected[index].fileName);
+        const verifiedBytes = await readFile(source);
+        expect(await readFile(destination)).toEqual(verifiedBytes);
+        expect((await lstat(destination)).mode & 0o777).toBe(0o600);
+        await writeFile(source, 'changed after staging');
+        expect(await readFile(destination)).toEqual(verifiedBytes);
+      }
+    },
+  );
+
+  test('rejects another source commit before creating the staging directory', async () => {
+    const fixture = await releaseFixture();
+    await expect(
+      stageLiveDeploymentReleasePackages({
+        ...fixture,
+        provider: 'aws',
+        expectedCommit: 'b'.repeat(40),
+      }),
+    ).rejects.toThrow();
+    await expect(lstat(fixture.directory)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  test('the public builder stages release bytes and reaches only the fresh installer', async () => {
+    const fixture = await releaseFixture();
+    const controller = new AbortController();
+    controller.abort();
+    /** @type {Record<string, any>[]} */
+    const phases = [];
+    await expect(
+      buildLiveDeploymentCandidate({
+        workspace: fixture.root,
+        provider: 'aws',
+        artifactDir: fixture.artifactDir,
+        expectedCommit: RELEASE_COMMIT,
+        signal: controller.signal,
+        onPhase: (event) => phases.push(event),
+      }),
+    ).rejects.toMatchObject({
+      diagnostic: { phase: 'package-fresh-install', aborted: true },
+    });
+    expect(phases).toEqual([
+      { phase: 'package-verify-release-assets', state: 'started' },
+      { phase: 'package-verify-release-assets', state: 'completed' },
+      { phase: 'package-fresh-install', state: 'started' },
+    ]);
+    const tarballs = path.join(fixture.root, 'package/tarballs');
+    expect((await readdir(tarballs)).sort()).toEqual(
+      fixture.artifacts
+        .slice(0, 2)
+        .map((artifact) => artifact.fileName)
+        .sort(),
+    );
+  });
+
+  test('default checkout input retains the original npm pack boundary', async () => {
+    const workspace = await temporaryDirectory();
+    const controller = new AbortController();
+    controller.abort();
+    /** @type {Record<string, any>[]} */
+    const phases = [];
+    await expect(
+      buildLiveDeploymentCandidate({
+        workspace,
+        provider: 'hetzner',
+        signal: controller.signal,
+        onPhase: (event) => phases.push(event),
+      }),
+    ).rejects.toMatchObject({
+      diagnostic: { phase: 'package-core-tarball', aborted: true },
+    });
+    expect(phases).toEqual([
+      { phase: 'package-core-tarball', state: 'started' },
+    ]);
+  });
+
+  test.each(['missing-companion', 'changed-tarball', 'symlink', 'extra-file'])(
+    'rejects invalid complete release input: %s',
+    async (change) => {
+      const fixture = await releaseFixture();
+      const core = path.join(
+        fixture.artifactDir,
+        fixture.artifacts[0].fileName,
+      );
+      if (change === 'missing-companion') {
+        await rm(path.join(fixture.artifactDir, fixture.artifacts[1].fileName));
+      } else if (change === 'changed-tarball') {
+        await writeFile(core, Buffer.alloc(fixture.artifacts[0].size));
+      } else if (change === 'symlink') {
+        const outside = path.join(fixture.root, 'outside.tgz');
+        await copyFile(core, outside);
+        await rm(core);
+        await symlink(outside, core);
+      } else {
+        await writeFile(
+          path.join(fixture.artifactDir, 'unexpected.txt'),
+          'extra',
+        );
+      }
+      await expect(
+        stageLiveDeploymentReleasePackages({ ...fixture, provider: 'hetzner' }),
+      ).rejects.toThrow();
+      await expect(lstat(fixture.directory)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+  );
+
+  test.each(['same-size', 'larger'])(
+    'rejects %s replacement between release verification and installation',
+    async (replacement) => {
+      const fixture = await releaseFixture();
+      await expect(
+        stageLiveDeploymentReleasePackages(
+          { ...fixture, provider: 'aws' },
+          {
+            copyFile: async (source, destination, mode) => {
+              const size = (await lstat(source)).size;
+              await writeFile(
+                source,
+                Buffer.alloc(size + (replacement === 'larger' ? 1 : 0)),
+              );
+              await copyFile(source, destination, mode);
+            },
+          },
+        ),
+      ).rejects.toThrow();
+    },
+  );
+
+  test('refuses an existing staging directory and preserves unrelated contents', async () => {
+    const fixture = await releaseFixture();
+    await mkdir(fixture.directory);
+    const ownedElsewhere = path.join(
+      fixture.directory,
+      fixture.artifacts[0].fileName,
+    );
+    await writeFile(ownedElsewhere, 'preserve');
+    await expect(
+      stageLiveDeploymentReleasePackages({ ...fixture, provider: 'aws' }),
+    ).rejects.toMatchObject({ code: 'EEXIST' });
+    expect(await readFile(ownedElsewhere, 'utf8')).toBe('preserve');
+  });
+});
 
 describe('live deployment installed-candidate boundary', () => {
   test('requires an external workspace before any build mutation', async () => {

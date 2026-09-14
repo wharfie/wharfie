@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { constants as fsConstants, createReadStream } from 'node:fs';
 import {
+  chmod,
+  copyFile,
   cp,
   lstat,
   mkdir,
@@ -17,6 +19,7 @@ import { parseApplicationPackageReceiptOutput } from '../src/cli/app/package-com
 import { getBuildTargetId } from '../src/core/runtime/build-target.js';
 import { getHostBuildTarget } from '../src/core/runtime/host-build-target.js';
 import { assertPackageContents, REPO_ROOT } from './package-verification.js';
+import { verifyPreviewRecipientCandidate } from './preview-recipient-download.js';
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
@@ -28,9 +31,113 @@ export const LIVE_DEPLOYMENT_TIMER_DELAY_MS = 900_000;
 export const LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS = 1000;
 
 /**
- * @typedef {{workspace: string, provider: 'aws'|'hetzner', timerDelayMs?: number, signal?: AbortSignal, onPhase?: (event: Record<string, any>) => void}} LiveDeploymentBuildOptions
- * @typedef {{executable: string, appId: string, revisionId: string, artifactId: string, artifactRecord: Record<string, any>, packageReceipt: ReturnType<typeof parseApplicationPackageReceiptOutput>, packageVersion: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, consumerDirectory: string}} LiveDeploymentCandidate
+ * @typedef {{workspace: string, provider: 'aws'|'hetzner', artifactDir?: string, expectedCommit?: string, timerDelayMs?: number, signal?: AbortSignal, onPhase?: (event: Record<string, any>) => void}} LiveDeploymentBuildOptions
+ * @typedef {{name: string, version: string, fileName: string, sha256: string, integrity: string, npmShasum: string, size: number}} LiveDeploymentSourcePackage
+ * @typedef {{kind: 'verified-release-assets', version: string, tag: string, sourceCommit: string, packages: LiveDeploymentSourcePackage[]}} LiveDeploymentPackageSource
+ * @typedef {{executable: string, appId: string, revisionId: string, artifactId: string, artifactRecord: Record<string, any>, packageReceipt: ReturnType<typeof parseApplicationPackageReceiptOutput>, packageVersion: string, nativeTarget: ReturnType<typeof getHostBuildTarget>, consumerDirectory: string, packageSource?: LiveDeploymentPackageSource}} LiveDeploymentCandidate
  */
+
+/**
+ * Require the complete pinned release selector before creating build state.
+ * @param {{artifactDir?: string, expectedCommit?: string}} options - Optional release input.
+ * @returns {void} - Throws on incomplete or ambiguous release authority.
+ */
+function assertLiveDeploymentReleaseSelection(options) {
+  assert.equal(
+    options.artifactDir !== undefined,
+    options.expectedCommit !== undefined,
+    'Release artifacts require both artifactDir and expectedCommit.',
+  );
+  if (options.artifactDir !== undefined) {
+    assert.ok(
+      typeof options.artifactDir === 'string' &&
+        path.isAbsolute(options.artifactDir),
+      'Release artifactDir must be an absolute directory.',
+    );
+    assert.ok(
+      typeof options.expectedCommit === 'string' &&
+        /^[a-f0-9]{40}$/u.test(options.expectedCommit),
+      'Release expectedCommit must be a full lowercase Git commit ID.',
+    );
+  }
+}
+
+/**
+ * Authenticate a complete release, then isolate the selected package bytes from
+ * later changes to its download directory before the installer can read them.
+ * @param {{artifactDir: string, expectedCommit: string, provider: 'aws'|'hetzner', directory: string}} options - Exact release and new private tarball directory.
+ * @param {{copyFile?: typeof copyFile}} [dependencies] - File-copy boundary for race verification.
+ * @returns {Promise<{packages: string[], packageSource: LiveDeploymentPackageSource}>} - Owned tarballs and their verified release identities.
+ */
+export async function stageLiveDeploymentReleasePackages(
+  options,
+  dependencies = {},
+) {
+  assertLiveDeploymentReleaseSelection(options);
+  assert.ok(['aws', 'hetzner'].includes(options.provider));
+  assert.ok(path.isAbsolute(options.directory));
+  const candidate = await verifyPreviewRecipientCandidate(options.artifactDir, {
+    expectedCommit: options.expectedCommit,
+  });
+  await mkdir(options.directory, { mode: 0o700 });
+  await chmod(options.directory, 0o700);
+  const kinds = ['npm-package'];
+  if (options.provider === 'aws') kinds.push('npm-companion-package');
+  const packages = [];
+  /** @type {LiveDeploymentSourcePackage[]} */
+  const sourcePackages = [];
+  for (const kind of kinds) {
+    const artifact = candidate.manifest.artifacts.find(
+      (/** @type {Record<string, any>} */ entry) => entry.kind === kind,
+    );
+    assert.ok(artifact);
+    const destination = path.join(options.directory, artifact.fileName);
+    await (dependencies.copyFile ?? copyFile)(
+      path.join(candidate.artifactDir, artifact.fileName),
+      destination,
+      fsConstants.COPYFILE_EXCL,
+    );
+    await chmod(destination, 0o600);
+    const stats = await lstat(destination);
+    assert.ok(stats.isFile() && !stats.isSymbolicLink());
+    assert.equal(stats.size, artifact.size);
+    const sha256 = createHash('sha256');
+    const sha512 = createHash('sha512');
+    const sha1 = createHash('sha1');
+    let size = 0;
+    for await (const chunk of createReadStream(destination)) {
+      size += chunk.length;
+      assert.ok(size <= artifact.size);
+      sha256.update(chunk);
+      sha512.update(chunk);
+      sha1.update(chunk);
+    }
+    assert.equal(size, artifact.size);
+    assert.equal(sha256.digest('hex'), artifact.sha256);
+    assert.equal(`sha512-${sha512.digest('base64')}`, artifact.integrity);
+    assert.equal(sha1.digest('hex'), artifact.npmShasum);
+    packages.push(destination);
+    sourcePackages.push({
+      name: artifact.package,
+      version: artifact.version,
+      fileName: artifact.fileName,
+      sha256: artifact.sha256,
+      integrity: artifact.integrity,
+      npmShasum: artifact.npmShasum,
+      size: artifact.size,
+    });
+  }
+  return {
+    packages,
+    packageSource: {
+      kind: 'verified-release-assets',
+      version: candidate.manifest.version,
+      tag: candidate.manifest.tag,
+      sourceCommit: candidate.manifest.source.commit,
+      packages: sourcePackages,
+    },
+  };
+}
 
 /**
  * Run an acceptance subprocess with bounded output, a hard deadline, and one
@@ -428,6 +535,7 @@ export async function buildLiveDeploymentCandidates(options) {
  */
 async function createLiveDeploymentCandidateBuilder(options) {
   assert.ok(['aws', 'hetzner'].includes(options.provider));
+  assertLiveDeploymentReleaseSelection(options);
   const workspace = await realpath(options.workspace);
   const repository = await realpath(REPO_ROOT);
   const relative = path.relative(repository, workspace);
@@ -456,7 +564,6 @@ async function createLiveDeploymentCandidateBuilder(options) {
   }
   const tarballs = path.join(root, 'tarballs');
   const consumerDirectory = path.join(root, 'consumer');
-  await mkdir(tarballs, { mode: 0o700 });
   await mkdir(consumerDirectory, { mode: 0o700 });
   const npm = await realpath(path.join(path.dirname(process.execPath), 'npm'));
   const coreMetadata = JSON.parse(
@@ -520,8 +627,33 @@ async function createLiveDeploymentCandidateBuilder(options) {
     assert.ok((await lstat(tarball)).isFile());
     return tarball;
   };
-  const packages = [await pack(false)];
-  if (options.provider === 'aws') packages.push(await pack(true));
+  /** @type {string[]} */
+  let packages;
+  /** @type {LiveDeploymentPackageSource|undefined} */
+  let packageSource;
+  if (options.artifactDir !== undefined) {
+    options.onPhase?.({
+      phase: 'package-verify-release-assets',
+      state: 'started',
+    });
+    const staged = await stageLiveDeploymentReleasePackages({
+      artifactDir: options.artifactDir,
+      expectedCommit: /** @type {string} */ (options.expectedCommit),
+      provider: options.provider,
+      directory: tarballs,
+    });
+    packages = staged.packages;
+    packageSource = staged.packageSource;
+    assert.equal(packageSource.version, packageVersion);
+    options.onPhase?.({
+      phase: 'package-verify-release-assets',
+      state: 'completed',
+    });
+  } else {
+    await mkdir(tarballs, { mode: 0o700 });
+    packages = [await pack(false)];
+    if (options.provider === 'aws') packages.push(await pack(true));
+  }
   await writeFile(
     path.join(consumerDirectory, 'package.json'),
     `${JSON.stringify({
@@ -606,6 +738,12 @@ async function createLiveDeploymentCandidateBuilder(options) {
       packageVersion,
       nativeTarget,
     });
-    return { ...candidate, packageVersion, nativeTarget, consumerDirectory };
+    return {
+      ...candidate,
+      packageVersion,
+      nativeTarget,
+      consumerDirectory,
+      ...(packageSource ? { packageSource } : {}),
+    };
   };
 }

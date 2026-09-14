@@ -22,6 +22,10 @@ import {
   validateSingleNodeRemoteServiceIdentity,
 } from '../src/core/runtime/single-node-remote-activation.js';
 import { SINGLE_NODE_RUNTIME_ACCOUNT } from '../src/core/runtime/single-node-runtime-account.js';
+import {
+  createLocalAppStorageLayout,
+  resolveStableLocalAppDataRoot,
+} from '../src/core/runtime/local-app-storage.js';
 import { runLiveDeploymentProcess } from './live-deployment-package.js';
 import { rebootLiveDeploymentInChild } from './live-deployment-reboot-child.js';
 
@@ -59,6 +63,54 @@ const BOOT_PATH = '/proc/sys/kernel/random/boot_id';
 const STAGE = 'set -eu; umask 077; set -C; /usr/bin/cat > "$1"';
 const MARKERS =
   'set -eu; test ! -L "$1"; if test -f "$1"; then /usr/bin/cat -- "$1"; else test ! -e "$1"; fi';
+const STAGE_SOAK = `set -eu
+umask 077
+test ! -L "$1"
+if test -e "$1"; then
+  test -f "$1"
+  test "$(/usr/bin/stat -c %u "$1")" = "$(/usr/bin/id -u)"
+else
+  set -C
+  /usr/bin/cat > "$1"
+fi
+/usr/bin/cat -- "$1"
+`;
+const SOAK_MARKER_AUDIT = `set -eu
+index=1
+while test "$index" -le "$2"; do
+  file="$1$(printf '%04d' "$index").txt.activities.jsonl"
+  test ! -L "$file"
+  test -f "$file"
+  test "$(/usr/bin/stat -c %u "$file")" = "$3"
+  test "$(/usr/bin/stat -c %s "$file")" -le 16384
+  /usr/bin/sha256sum -- "$file"
+  index=$((index + 1))
+done
+`;
+// One summary per fixed account-owned tree; du neither follows links nor crosses
+// filesystems. The transport deadline bounds traversal even on a damaged host.
+const RESOURCES = `set -eu
+export LC_ALL=C
+test "$(/usr/bin/cat /proc/sys/kernel/random/boot_id)" = "$1"
+test "$(/usr/bin/stat -c %u /proc/"$2")" = "$4"
+/usr/bin/cat /proc/"$2"/stat
+/usr/bin/getconf PAGESIZE
+/usr/bin/getconf CLK_TCK
+for root in /home /home/wharfie /home/wharfie/.local /home/wharfie/.local/share /home/wharfie/.local/share/wharfie-nodejs /home/wharfie/.local/share/wharfie-nodejs/applications "$5" "$6" "$6/control" "$7"; do
+  test ! -L "$root"
+  test -d "$root"
+done
+for root in /home/wharfie "$5" "$6" "$7"; do
+  /usr/bin/du -sx -B1 -- "$root"
+done
+/usr/bin/df -B1 --output=size,avail -- /home/wharfie
+LC_ALL=C /usr/bin/journalctl --user --disk-usage --no-pager
+test "$(/usr/bin/cat /proc/sys/kernel/random/boot_id)" = "$1"
+stat=$(/usr/bin/cat /proc/"$2"/stat)
+fields=\${stat##*) }
+set -- "$3" $fields
+test "\${21}" = "$1"
+`;
 const PROCESS = `set -eu
 if owner=$(/usr/bin/stat -c %u /proc/"$1" 2>/dev/null) && stat=$(/usr/bin/cat /proc/"$1"/stat 2>/dev/null); then
   printf '%s\\n%s\\n' "$owner" "$stat"
@@ -247,6 +299,16 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
     assert.equal(desired.artifact.revisionId, state.guestRevisionId);
     assert.deepEqual(release.desired, desired);
     const expectedPath = `/home/wharfie/live-acceptance-${state.runId}.txt`;
+    /** @param {string} inputPath */
+    const assertSoakPath = (inputPath) => {
+      assert.equal(selection, 'current');
+      const prefix = `/home/wharfie/live-acceptance-${state.runId}-soak-`;
+      assert.ok(typeof inputPath === 'string' && inputPath.startsWith(prefix));
+      const suffix = inputPath.slice(prefix.length);
+      assert.match(suffix, /^[0-9]{4}\.txt$/);
+      const sequence = Number(suffix.slice(0, 4));
+      assert.ok(sequence >= 1 && sequence <= 300);
+    };
     const run = dependencies.run ?? runLiveDeploymentProcess;
     const runProcess = {
       /** @param {Record<string, any>} request */
@@ -450,6 +512,178 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
     };
     return Object.freeze({
       observe,
+      /** Sample numeric resource use without retaining process or journal text. */
+      async observeResources() {
+        return await guarded('host-observe-resources', async () => {
+          assert.equal(selection, 'current');
+          const before = await observe();
+          assert.equal(before.service.health, 'healthy');
+          assert.ok(before.process);
+          const layout = createLocalAppStorageLayout({
+            appId: state.appId,
+            dataRoot: resolveStableLocalAppDataRoot({
+              platform: 'linux',
+              homeDirectory: '/home/wharfie',
+            }),
+          });
+          const lines = (
+            await remote([
+              '/bin/sh',
+              '-c',
+              RESOURCES,
+              'wharfie-live-soak-resources',
+              before.bootId,
+              String(before.process.pid),
+              before.process.startTicks,
+              String(before.uid),
+              layout.appRoot,
+              layout.stateRoot,
+              layout.payloadPath,
+            ])
+          )
+            .toString('utf8')
+            .trim()
+            .split('\n');
+          assert.equal(lines.length, 10);
+          const process = processIdentity(
+            Buffer.from(`${before.uid}\n${lines[0]}\n`),
+            before.process.pid,
+          );
+          assert.equal(process?.startTicks, before.process.startTicks);
+          const fields = lines[0]
+            .slice(lines[0].lastIndexOf(') ') + 2)
+            .trim()
+            .split(/\s+/);
+          /** @param {string} value */
+          const number = (value) => {
+            assert.match(value, /^[0-9]{1,16}$/);
+            const result = Number(value);
+            assert.ok(Number.isSafeInteger(result) && result >= 0);
+            return result;
+          };
+          const pageBytes = number(lines[1]);
+          const clockTicksPerSecond = number(lines[2]);
+          assert.ok(pageBytes > 0 && clockTicksPerSecond > 0);
+          const trees = [
+            '/home/wharfie',
+            layout.appRoot,
+            layout.stateRoot,
+            layout.payloadPath,
+          ].map((root, index) => {
+            const line = lines[index + 3].split('\t');
+            assert.equal(line.length, 2);
+            assert.equal(line[1], root);
+            return number(line[0]);
+          });
+          assert.equal(
+            lines[7].trim().split(/\s+/).join(' '),
+            '1B-blocks Avail',
+          );
+          const disk = lines[8].trim().split(/\s+/);
+          assert.equal(disk.length, 2);
+          const journal =
+            /^Archived and active journals take up ([0-9]+(?:\.[0-9]+)?)([BKMGT]) in the file system\.$/.exec(
+              lines[9],
+            );
+          assert.ok(journal);
+          const userJournalBytesApprox = Math.round(
+            Number(journal[1]) * 1024 ** 'BKMGT'.indexOf(journal[2]),
+          );
+          const result = {
+            schemaVersion: 1,
+            kind: 'wharfie.live-deployment.resources',
+            bootId: before.bootId,
+            pid: before.process.pid,
+            startTicks: before.process.startTicks,
+            residentRssBytes: number(fields[21]) * pageBytes,
+            residentCpuTicks: number(fields[11]) + number(fields[12]),
+            clockTicksPerSecond,
+            homeBytes: trees[0],
+            appBytes: trees[1],
+            stateBytes: trees[2],
+            payloadBytes: trees[3],
+            diskTotalBytes: number(disk[0]),
+            diskAvailableBytes: number(disk[1]),
+            userJournalBytesApprox,
+          };
+          for (const value of Object.values(result)) {
+            if (typeof value === 'number')
+              assert.ok(Number.isSafeInteger(value) && value >= 0);
+          }
+          assert.ok(result.diskAvailableBytes <= result.diskTotalBytes);
+          await expectedObservation(before);
+          return result;
+        });
+      },
+      /** @param {string} inputPath @param {string} bytes */
+      async stageSoakInput(inputPath, bytes) {
+        return await guarded('host-stage-soak-input', async () => {
+          assertSoakPath(inputPath);
+          assert.ok(
+            typeof bytes === 'string' && Buffer.byteLength(bytes) <= 4096,
+          );
+          await bootstrap();
+          const actual = await remote(
+            ['/bin/sh', '-c', STAGE_SOAK, 'wharfie-live-soak-input', inputPath],
+            Buffer.from(bytes),
+          );
+          assert.equal(actual.toString('utf8'), bytes);
+          return { staged: true, bytes: Buffer.byteLength(bytes) };
+        });
+      },
+      /** @param {string} inputPath */
+      async readSoakMarkers(inputPath) {
+        return await guarded('host-read-soak-markers', async () => {
+          assertSoakPath(inputPath);
+          await bootstrap();
+          const bytes = await remote([
+            '/bin/sh',
+            '-c',
+            MARKERS,
+            'wharfie-live-soak-markers',
+            `${inputPath}.activities.jsonl`,
+          ]);
+          assert.ok(bytes.length <= 16 * 1024);
+          if (bytes.length === 0) return [];
+          const lines = bytes.toString('utf8').trim().split('\n');
+          assert.ok(lines.length <= 16);
+          return lines.map((line) => json(Buffer.from(line)));
+        });
+      },
+      /**
+       * Independently audit every physical activity marker at the final boundary.
+       * @param {number} count
+       */
+      async readSoakMarkerAudit(count) {
+        return await guarded('host-audit-soak-markers', async () => {
+          assert.equal(selection, 'current');
+          assert.ok(Number.isSafeInteger(count) && count >= 1 && count <= 299);
+          const prefix = `/home/wharfie/live-acceptance-${state.runId}-soak-`;
+          await bootstrap();
+          const lines = (
+            await remote([
+              '/bin/sh',
+              '-c',
+              SOAK_MARKER_AUDIT,
+              'wharfie-live-soak-marker-audit',
+              prefix,
+              String(count),
+              String(SINGLE_NODE_RUNTIME_ACCOUNT.uid),
+            ])
+          )
+            .toString('utf8')
+            .trim()
+            .split('\n');
+          assert.equal(lines.length, count);
+          return lines.map((line, index) => {
+            const selected = `${prefix}${String(index + 1).padStart(4, '0')}.txt.activities.jsonl`;
+            assert.equal(line.slice(64), `  ${selected}`);
+            const digest = line.slice(0, 64);
+            assert.match(digest, /^[0-9a-f]{64}$/);
+            return { sequence: index + 1, digest };
+          });
+        });
+      },
       /** @param {Record<string, any>} before */
       async killResident(before) {
         return await guarded('host-kill-resident', async () => {
