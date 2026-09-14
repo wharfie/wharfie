@@ -130,7 +130,12 @@ trusted publish. npm receives the immutable version under the deliberately
 unsupported `preview-candidate` dist-tag; the automated publisher never moves
 `preview`. A recovery read must match the manifest's integrity, shasum, and
 attestation metadata exactly. This phase deliberately leaves the GitHub release
-as a draft.
+as a draft. After creating a draft, the helper waits up to one minute for it to
+appear in GitHub's release listing. After npm accepts a publish, it waits up to
+15 minutes for the version to become readable, including npm's publication
+scanning delay. These waits repeat reads only. Malformed responses, conflicting
+metadata, and authorization errors fail immediately; a timeout leaves the
+candidate available for a later reviewed rerun.
 
 While the release is still a draft, a minimum/current Node 24 matrix packs the
 exact version back from the canonical public npm registry, checks its integrity
@@ -145,9 +150,12 @@ runs the complete magnetic demo. This is the registry-byte-and-provenance
 proof, while the earlier matrix remains the prepublication candidate-byte
 proof.
 
-Alongside the registry checks, a read-only recipient job downloads the actual
+Alongside the registry checks, a recipient job downloads the actual
 GitHub draft assets, verifies their complete manifest/checksum/record contracts,
 and runs the [author-to-recipient service proof](recipient-preview.md).
+GitHub requires push access to list drafts, so this job has `contents: write`;
+the download token is scoped to the verifier step and stripped from child
+build and execution environments.
 The core and matching AWS companion are installed together in a private builder;
 only the resulting application handoff reaches the isolated recipient. Neither
 the build nor the target receives the GitHub download credential. Finalization
@@ -187,8 +195,43 @@ closure proof rather than a permanent shrinkwrap guarantee.
 
 Configure the npm trusted publisher for `@wharfie/wharfie` as GitHub Actions
 organization/user `wharfie`, repository `wharfie`, workflow filename
-`release-preview.yml`, and environment `npm-preview`. That identity is used
+`release-preview.yml`, and environment `npm-preview`, with direct publishing
+enabled. That identity is used
 only by the phase-one `npm publish`; do not provision a workflow token or
 separate automation with `npm dist-tag` authority. Disabling the repository
 variable leaves tag builds as attested, downloadable workflow artifacts
 without changing npm or GitHub Releases.
+
+## Recover an existing candidate after a workflow repair
+
+An immutable release tag keeps its original workflow. When that workflow needs
+a repair after publishing `preview-candidate`, merge and review the repair on
+`master`, then use `recover-preview-release.yml` to finish the existing release.
+The candidate version must still match `package.json` at the selected `master`
+commit. A different package version needs a new release cycle. Never move the
+existing tag or rebuild its assets to repair publication.
+
+Keep the required reviewer and existing `v*` tag policy on the
+`npm-preview-promotion` environment, and add only the exact `master` branch
+policy for recovery. The `npm-preview` publishing environment does not need a
+branch policy change. Dispatch recovery from `master` with the existing tag and
+the full source commit recorded in its release manifest:
+
+```bash
+gh workflow run recover-preview-release.yml --repo wharfie/wharfie \
+  --ref master -f tag=v0.0.15 -f source_commit='<full-manifest-source-commit>'
+```
+
+The recovery workflow checks out the exact dispatch commit. A job with draft
+download access validates the six existing release assets without executing
+them, then retains those bytes under an artifact identity tied to the producing
+run and attempt. The full recipient proof and both registry consumers use that
+same artifact; the recipient job has read access and no download token. A
+download receipt and independent recipient cleanup report accompany the proof.
+
+After all three checks pass, promote the exact npm version to `preview` using
+the interactive command above, then approve `npm-preview-promotion`. Recovery
+can only finalize an existing candidate. It cannot publish npm bytes, create a
+release, upload assets, or move a dist-tag. Its finalizer repeats the original
+byte, provenance, tag, source ancestry, and promotion checks before exposing the
+GitHub prerelease. The last job verifies anonymous public downloads.

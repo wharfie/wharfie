@@ -2,6 +2,7 @@ import { execFile as nodeExecFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { gunzip as nodeGunzip } from 'node:zlib';
 
@@ -16,6 +17,9 @@ const RELEASE_MANIFEST_NAME = 'preview-release.json';
 const CHECKSUMS_NAME = 'SHA256SUMS';
 const MAX_COMMAND_OUTPUT = 20 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
+const VISIBILITY_COMMAND_TIMEOUT_MS = 30_000;
+export const PREVIEW_GITHUB_VISIBILITY_TIMEOUT_MS = 60_000;
+export const PREVIEW_NPM_VISIBILITY_TIMEOUT_MS = 15 * 60 * 1000;
 const MAX_PACKAGE_ARCHIVE_BYTES = 128 * 1024 * 1024;
 const MAX_PACKAGE_TAR_BYTES = 512 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
@@ -86,7 +90,7 @@ const REPO_ROOT = path.resolve(
  */
 
 /**
- * @typedef {(command: string, args: string[], options?: {cwd?: string, env?: NodeJS.ProcessEnv}) => Promise<CommandResult>} CommandRunner
+ * @typedef {(command: string, args: string[], options?: {cwd?: string, env?: NodeJS.ProcessEnv, timeoutMs?: number}) => Promise<CommandResult>} CommandRunner
  */
 
 /**
@@ -94,6 +98,8 @@ const REPO_ROOT = path.resolve(
  * @property {CommandRunner} [runCommand] - Injected command boundary.
  * @property {(candidate: PreviewReleaseCandidate) => void | Promise<void>} [authorize] - Publication authorization boundary.
  * @property {string} [expectedCommit] - Expected workflow source commit.
+ * @property {() => number} [visibilityNow] - Monotonic clock for post-mutation visibility waits.
+ * @property {(milliseconds: number) => Promise<void>} [visibilityWait] - Bounded visibility polling delay.
  */
 
 /**
@@ -117,7 +123,7 @@ const REPO_ROOT = path.resolve(
 /**
  * @param {string} command - Executable name.
  * @param {string[]} args - Exact command arguments.
- * @param {{cwd?: string, env?: NodeJS.ProcessEnv}} [options] - Process options.
+ * @param {{cwd?: string, env?: NodeJS.ProcessEnv, timeoutMs?: number}} [options] - Process options.
  * @returns {Promise<CommandResult>} Captured command output.
  */
 function runCommand(command, args, options = {}) {
@@ -130,7 +136,7 @@ function runCommand(command, args, options = {}) {
         env: options.env || process.env,
         encoding: 'utf8',
         maxBuffer: MAX_COMMAND_OUTPUT,
-        timeout: COMMAND_TIMEOUT_MS,
+        timeout: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
         killSignal: 'SIGKILL',
       },
       (error, stdout, stderr) => {
@@ -154,6 +160,51 @@ function runCommand(command, args, options = {}) {
       },
     );
   });
+}
+
+/**
+ * Poll only a valid absent observation after one mutation attempt. Every read
+ * shares the same monotonic deadline, including its child-process timeout;
+ * malformed data and command failures are never converted into visibility lag.
+ * @template T
+ * @param {(command: CommandRunner) => Promise<T | null>} observe - Validated read-only snapshot.
+ * @param {CommandRunner} command - Process boundary.
+ * @param {{now: () => number, wait: (milliseconds: number) => Promise<void>}} clock - Monotonic clock and sleeper.
+ * @param {number} timeoutMs - Total post-mutation observation budget.
+ * @param {number} intervalMs - Maximum delay between valid absent responses.
+ * @param {() => unknown} failure - Original mutation error or bounded visibility error.
+ * @returns {Promise<T>} First valid visible snapshot.
+ */
+async function waitForPublicationVisibility(
+  observe,
+  command,
+  clock,
+  timeoutMs,
+  intervalMs,
+  failure,
+) {
+  const deadline = clock.now() + timeoutMs;
+  const remaining = () => {
+    const value = Math.floor(deadline - clock.now());
+    if (!Number.isSafeInteger(value) || value <= 0) throw failure();
+    return value;
+  };
+  /** @type {CommandRunner} */
+  const boundedCommand = async (name, args, options = {}) => {
+    const result = await command(name, args, {
+      ...options,
+      timeoutMs: Math.min(VISIBILITY_COMMAND_TIMEOUT_MS, remaining()),
+    });
+    remaining();
+    return result;
+  };
+  for (;;) {
+    remaining();
+    const value = await observe(boundedCommand);
+    remaining();
+    if (value !== null) return value;
+    await clock.wait(Math.min(intervalMs, remaining()));
+  }
 }
 
 /**
@@ -768,6 +819,15 @@ function digest(contents, algorithm, encoding) {
 function isNpmVersionNotFound(error) {
   if (!error || typeof error !== 'object') return false;
   const failure = /** @type {Record<string, any>} */ (error);
+  // Partial npm JSON cannot turn a timed-out or signalled observation into an
+  // ordinary absent version, including when the child emitted E404 first.
+  if (
+    failure.timedOut === true ||
+    failure.signal ||
+    failure.cause?.killed === true ||
+    failure.cause?.signal
+  )
+    return false;
   if (failure.code === 'E404') return true;
   for (const output of [failure.stdout, failure.stderr]) {
     if (typeof output !== 'string' || output.trim() === '') continue;
@@ -1492,9 +1552,10 @@ function inspectGithubAssets(release, candidate, complete) {
  * @param {PreviewReleaseCandidate} candidate - Local release candidate.
  * @param {CommandRunner} command - Command boundary.
  * @param {() => Promise<void>} beforeMutation - Fresh remote tag guard.
+ * @param {{now: () => number, wait: (milliseconds: number) => Promise<void>}} clock - Visibility observation clock.
  * @returns {Promise<Record<string, any>>} Existing or newly created release.
  */
-async function ensureGithubRelease(candidate, command, beforeMutation) {
+async function ensureGithubRelease(candidate, command, beforeMutation, clock) {
   let release = await readGithubRelease(candidate, command);
   if (release) {
     assertGithubReleaseMetadata(release, candidate);
@@ -1523,13 +1584,18 @@ async function ensureGithubRelease(candidate, command, beforeMutation) {
   } catch (error) {
     createFailure = error;
   }
-  release = await readGithubRelease(candidate, command);
-  if (!release) {
-    if (createFailure) throw createFailure;
-    throw new Error(
-      `GitHub did not expose the draft release ${candidate.manifest.tag}.`,
-    );
-  }
+  release = await waitForPublicationVisibility(
+    (boundedCommand) => readGithubRelease(candidate, boundedCommand),
+    command,
+    clock,
+    PREVIEW_GITHUB_VISIBILITY_TIMEOUT_MS,
+    5000,
+    () =>
+      createFailure ??
+      new Error(
+        `GitHub did not expose the draft release ${candidate.manifest.tag} within the visibility deadline.`,
+      ),
+  );
   assertGithubReleaseMetadata(release, candidate);
   return release;
 }
@@ -1825,10 +1891,17 @@ async function assertNpmPublicationPreflight(candidate, command, mode) {
  * @param {Record<string, any>} release - Current GitHub release.
  * @param {CommandRunner} command - Command boundary.
  * @param {() => Promise<void>} beforeMutation - Fresh remote tag guard.
+ * @param {{now: () => number, wait: (milliseconds: number) => Promise<void>}} clock - Visibility observation clock.
  * @returns {Promise<void>}
  */
-async function reconcileNpm(candidate, release, command, beforeMutation) {
-  let registry = await assertNpmPublicationPreflight(
+async function reconcileNpm(
+  candidate,
+  release,
+  command,
+  beforeMutation,
+  clock,
+) {
+  const registry = await assertNpmPublicationPreflight(
     candidate,
     command,
     'phase-one',
@@ -1878,17 +1951,25 @@ async function reconcileNpm(candidate, release, command, beforeMutation) {
     publishFailure = error;
   }
 
-  registry = await assertNpmPublicationPreflight(
-    candidate,
+  await waitForPublicationVisibility(
+    async (boundedCommand) => {
+      const observed = await assertNpmPublicationPreflight(
+        candidate,
+        boundedCommand,
+        'phase-one',
+      );
+      return observed.version ? observed : null;
+    },
     command,
-    'phase-one',
+    clock,
+    PREVIEW_NPM_VISIBILITY_TIMEOUT_MS,
+    10000,
+    () =>
+      publishFailure ??
+      new Error(
+        `npm publish returned success but ${candidate.manifest.package}@${candidate.manifest.version} is absent after the visibility deadline.`,
+      ),
   );
-  if (!registry.version) {
-    if (publishFailure) throw publishFailure;
-    throw new Error(
-      `npm publish returned success but ${candidate.manifest.package}@${candidate.manifest.version} is absent.`,
-    );
-  }
 }
 
 /**
@@ -1960,6 +2041,12 @@ export async function publishPreviewRelease(options = {}, dependencies = {}) {
     dependencies.authorize || (() => assertPreviewPublishEnvironment());
   await authorize(candidate);
   const command = dependencies.runCommand || runCommand;
+  /** @type {{now: () => number, wait: (milliseconds: number) => Promise<void>}} */
+  const visibilityClock = {
+    now: dependencies.visibilityNow ?? (() => performance.now()),
+    wait:
+      dependencies.visibilityWait ?? ((milliseconds) => delay(milliseconds)),
+  };
   const beforeRemoteMutation = async () =>
     await assertCanonicalSourceAuthority(candidate, command);
 
@@ -2017,6 +2104,7 @@ export async function publishPreviewRelease(options = {}, dependencies = {}) {
       candidate,
       command,
       beforeRemoteMutation,
+      visibilityClock,
     );
     release = await reconcileGithubAssets(
       candidate,
@@ -2024,7 +2112,13 @@ export async function publishPreviewRelease(options = {}, dependencies = {}) {
       command,
       beforeRemoteMutation,
     );
-    await reconcileNpm(candidate, release, command, beforeRemoteMutation);
+    await reconcileNpm(
+      candidate,
+      release,
+      command,
+      beforeRemoteMutation,
+      visibilityClock,
+    );
     await assertCanonicalSourceAuthority(candidate, command);
     const observed = await readGithubRelease(candidate, command);
     if (!observed) {
