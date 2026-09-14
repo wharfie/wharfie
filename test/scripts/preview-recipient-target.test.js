@@ -692,4 +692,90 @@ describe('clean Linux preview recipient lifecycle', () => {
       ),
     ).rejects.toMatchObject({ diagnostic: { phase: 'cleanup-final-absence' } });
   });
+
+  it('preserves the recognized purge refusal through nested completion cleanup without retaining its message', async () => {
+    const f = fixture();
+    const prepared = await preparePreviewRecipientTarget(f.input, f.ports);
+    f.reconnect();
+    f.intercept((command, args, result) => {
+      if (command === target.executable && args[2] === 'purge')
+        return {
+          status: 1,
+          stdout: '',
+          stderr: JSON.stringify({
+            schemaVersion: 1,
+            kind: 'wharfie.service.error',
+            action: 'purge',
+            code: 'systemd-user-service-purge-not-quiescent',
+            message: 'private application value',
+            remediation: 'private path',
+            arbitrary: { token: 'private token' },
+          }),
+        };
+      return result;
+    });
+    await expect(
+      finishPreviewRecipientTarget({ ...f.input, prepared }, f.ports),
+    ).rejects.toMatchObject({
+      diagnostic: {
+        phase: 'cleanup-purge',
+        command: {
+          executable: 'app',
+          status: 1,
+          serviceError: {
+            action: 'purge',
+            code: 'systemd-user-service-purge-not-quiescent',
+          },
+        },
+      },
+    });
+    expect(f.checkpoints.at(-1)?.receipt).toMatchObject({
+      phase: 'cleanup-purge',
+      command: {
+        serviceError: {
+          action: 'purge',
+          code: 'systemd-user-service-purge-not-quiescent',
+        },
+      },
+    });
+    expect(JSON.stringify(f.checkpoints)).not.toMatch(
+      /private application|private path|private token/,
+    );
+    expect(f.calls.filter((call) => call.args[2] === 'purge')).toHaveLength(1);
+  });
+
+  it.each([
+    { schemaVersion: 2 },
+    { kind: 'another.kind' },
+    { action: 'uninstall' },
+    { code: 'secret /private/path' },
+    { code: 'a'.repeat(97) },
+  ])('drops unsupported service diagnostics %j', async (override) => {
+    const f = fixture();
+    const prepared = await preparePreviewRecipientTarget(f.input, f.ports);
+    f.intercept((command, args, result) =>
+      command === target.executable && args[2] === 'purge'
+        ? {
+            status: 1,
+            stdout: JSON.stringify({
+              schemaVersion: 1,
+              kind: 'wharfie.service.error',
+              action: 'purge',
+              code: 'systemd-user-service-purge-state-conflict',
+              ...override,
+            }),
+            stderr: '',
+          }
+        : result,
+    );
+    await expect(
+      cleanupPreviewRecipientTarget(
+        { ...f.input, owned: prepared.owned },
+        f.ports,
+      ),
+    ).rejects.toThrow('Preview recipient target proof failed.');
+    expect(f.checkpoints.at(-1)?.receipt.command).not.toHaveProperty(
+      'serviceError',
+    );
+  });
 });

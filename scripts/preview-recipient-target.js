@@ -35,6 +35,20 @@ const MAX_OUTPUT_BYTES = 512 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
 const PHASE_TIMEOUT_MS = 180_000;
 const TIMER_MS = 60_000;
+const SERVICE_ACTIONS = new Set([
+  'install',
+  'converge',
+  'update',
+  'rollback',
+  'recover',
+  'prune',
+  'purge',
+  'start',
+  'stop',
+  'restart',
+  'status',
+  'uninstall',
+]);
 
 /** @typedef {{status:number, stdout:string, stderr:string, signal?:string|null}} TargetResult */
 /** @typedef {{runId:string, artifactRecord:Record<string, any>, inputBytes:string}} TargetInput */
@@ -55,6 +69,35 @@ function sha256(bytes) {
 function object(value) {
   assert.ok(value && typeof value === 'object' && !Array.isArray(value));
   return /** @type {Record<string,any>} */ (value);
+}
+
+/**
+ * Preserve only a recognized public service error's fixed action and code.
+ * Messages, remediation, raw output, and unrelated JSON never enter receipts.
+ * @param {TargetResult} result
+ * @param {string} action
+ * @returns {{action:string,code:string}|undefined}
+ */
+function serviceError(result, action) {
+  if (result.status === 0 || !SERVICE_ACTIONS.has(action)) return undefined;
+  for (const output of [result.stderr, result.stdout]) {
+    const line = output.trim().split('\n').filter(Boolean).at(-1);
+    if (!line || Buffer.byteLength(line) > 16 * 1024) continue;
+    try {
+      const value = JSON.parse(line);
+      if (
+        value?.schemaVersion === 1 &&
+        value.kind === 'wharfie.service.error' &&
+        value.action === action &&
+        typeof value.code === 'string' &&
+        /^[a-z][a-z0-9-]{0,95}$/.test(value.code)
+      )
+        return { action, code: value.code };
+    } catch {
+      // The command still fails; only recognized structured diagnostics survive.
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -96,7 +139,7 @@ function context(input, ports) {
   const startedAt = now();
   const deadline = startedAt + PHASE_TIMEOUT_MS;
   let stage = 'validate-target';
-  /** @type {{executable:string,status:number|null,signal:string|null,timedOut:boolean}|null} */
+  /** @type {{executable:string,status:number|null,signal:string|null,timedOut:boolean,serviceError?:{action:string,code:string}}|null} */
   let commandResult = null;
   const binding = {
     schemaVersion: 1,
@@ -179,6 +222,14 @@ function context(input, ports) {
       Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr) <=
         MAX_OUTPUT_BYTES,
     );
+    if (
+      command === PREVIEW_RECIPIENT_TARGET.executable &&
+      args[0] === 'wharfie' &&
+      args[1] === 'service'
+    ) {
+      const recognized = serviceError(result, args[2]);
+      if (recognized) commandResult.serviceError = recognized;
+    }
     if (!options.allowFailure)
       assert.equal(result.status, 0, 'Recipient command failed.');
     return result;
@@ -564,6 +615,12 @@ function context(input, ports) {
       assert.ok(now() < deadline, 'Recipient phase deadline elapsed.');
       return receipt;
     } catch (error) {
+      if (
+        stage === 'complete-cleanup' &&
+        /** @type {{diagnostic?:{kind?:unknown}}|null} */ (error)?.diagnostic
+          ?.kind === 'wharfie.preview-recipient.target-failure'
+      )
+        throw error;
       const receipt = {
         schemaVersion: 1,
         kind: 'wharfie.preview-recipient.target-failure',
