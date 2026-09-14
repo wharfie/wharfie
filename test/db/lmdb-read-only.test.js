@@ -39,7 +39,7 @@ function runFreshNativeModeProbe(directory, readOnly) {
   ).href;
   const script = `
     import assert from 'node:assert/strict';
-    import {statSync} from 'node:fs';
+    import {existsSync,statSync} from 'node:fs';
     import {join} from 'node:path';
     process.umask(0o002);
     const {default:createLMDB} = await import(${JSON.stringify(adapter)});
@@ -51,7 +51,7 @@ function runFreshNativeModeProbe(directory, readOnly) {
       if (!readOnly) await db.put({tableName:'probe',keyName:'id',record:{id:'one',value:true}});
       assert.deepEqual(await db.get({tableName:'probe',keyName:'id',keyValue:'one'}), {id:'one',value:true});
     } finally { await db.close(); }
-    process.stdout.write(JSON.stringify(['data.mdb','lock.mdb'].map(name=>statSync(join(path,'lmdb',name)).mode & 0o777)));
+    process.stdout.write(JSON.stringify(['data.mdb','lock.mdb'].map(name=>existsSync(join(path,'lmdb',name)) ? statSync(join(path,'lmdb',name)).mode & 0o777 : null)));
   `;
   return JSON.parse(
     execFileSync(
@@ -149,6 +149,29 @@ describe('LMDB read-only observer mode', () => {
     expect([statSync(dataPath).ino, statSync(lockPath).ino]).toEqual(inodes);
     expect(readFileSync(dataPath)).toEqual(data);
   });
+
+  (process.platform !== 'win32' && process.getuid?.() !== 0 ? it : it.skip)(
+    'preserves native read-only inspection when a non-writable volume cannot create a lock file',
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'wharfie-lmdb-no-write-reader-'));
+      temporaryDirectories.push(root);
+      expect(runFreshNativeModeProbe(root, false)).toEqual([0o600, 0o600]);
+      const volume = join(root, 'lmdb');
+      const dataPath = join(volume, 'data.mdb');
+      const data = readFileSync(dataPath);
+      const inode = statSync(dataPath).ino;
+      unlinkSync(join(volume, 'lock.mdb'));
+      chmodSync(volume, 0o500);
+      try {
+        expect(runFreshNativeModeProbe(root, true)).toEqual([0o600, null]);
+        expect(existsSync(join(volume, 'lock.mdb'))).toBe(false);
+        expect(readFileSync(dataPath)).toEqual(data);
+        expect(statSync(dataPath).ino).toBe(inode);
+      } finally {
+        chmodSync(volume, 0o700);
+      }
+    },
+  );
 
   it.each(['data.mdb', 'lock.mdb'])(
     'refuses an existing writable %s symlink without changing its target',

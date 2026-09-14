@@ -120,7 +120,20 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
       // Read-only observers may recreate a missing native lock file, but must
       // not create a data file or turn an empty directory into a local volume.
       if (!readOnly) createPrivateLmdbFile(join(dbRoot, 'data.mdb'));
-      createPrivateLmdbFile(join(dbRoot, 'lock.mdb'));
+      try {
+        createPrivateLmdbFile(join(dbRoot, 'lock.mdb'));
+      } catch (error) {
+        // Native LMDB permits a read-only environment without a lock file on
+        // a non-writable directory/filesystem. Preserve that exact fallback;
+        // native open still decides whether the existing volume is readable.
+        if (
+          !readOnly ||
+          !['EACCES', 'EROFS'].includes(
+            /** @type {NodeJS.ErrnoException} */ (error).code || '',
+          )
+        )
+          throw error;
+      }
     }
     env = lmdb.open({
       path: dbRoot,
