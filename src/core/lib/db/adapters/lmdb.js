@@ -1,4 +1,10 @@
-import { lstatSync, mkdirSync } from 'node:fs';
+import {
+  closeSync,
+  constants as fsConstants,
+  lstatSync,
+  mkdirSync,
+  openSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 import paths from '../../paths.js';
 import { getLmdbModule } from '../../lmdb-module.js';
@@ -47,6 +53,39 @@ export class LMDBReadOnlyStoreNotFoundError extends Error {
 }
 
 /**
+ * LMDB requests native files with mode 0664. A parent default ACL can preserve
+ * those group permissions despite umask 077, so create missing files with an
+ * explicit 0600 request before native open. Existing files are never truncated
+ * or have their modes changed; symbolic links are refused rather than followed.
+ * @param {string} file - Exact data.mdb or lock.mdb path below the local volume.
+ * @returns {void} - A regular file exists, privately created when missing.
+ */
+function createPrivateLmdbFile(file) {
+  let descriptor;
+  try {
+    descriptor = openSync(
+      file,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+      throw error;
+    const stats = lstatSync(file);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      throw new Error(
+        'LMDB native files must be non-symbolic-link regular files.',
+      );
+    }
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+/**
  * Acquire this process's sole compatible root environment for one canonical
  * LMDB volume.
  * @param {string} dbRoot - Canonical local LMDB directory.
@@ -72,14 +111,31 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
 
   // Disable event-turn batching to reduce the chance of background commit
   // scheduling keeping Jest or a short-lived operator process alive.
+  const lmdb = getLmdbModule();
   const previousUmask =
-    !readOnly && process.platform !== 'win32' ? process.umask(0o077) : null;
+    process.platform !== 'win32' ? process.umask(0o077) : null;
   let env;
   try {
-    // LMDB creates data.mdb and lock.mdb synchronously with a fixed 0664
-    // request. Narrow the process umask around only that native open so the
-    // durable files are private even under a group-writable login umask.
-    env = getLmdbModule().open({
+    if (process.platform !== 'win32') {
+      // Read-only observers may recreate a missing native lock file, but must
+      // not create a data file or turn an empty directory into a local volume.
+      if (!readOnly) createPrivateLmdbFile(join(dbRoot, 'data.mdb'));
+      try {
+        createPrivateLmdbFile(join(dbRoot, 'lock.mdb'));
+      } catch (error) {
+        // Native LMDB permits a read-only environment without a lock file on
+        // a non-writable directory/filesystem. Preserve that exact fallback;
+        // native open still decides whether the existing volume is readable.
+        if (
+          !readOnly ||
+          !['EACCES', 'EROFS'].includes(
+            /** @type {NodeJS.ErrnoException} */ (error).code || '',
+          )
+        )
+          throw error;
+      }
+    }
+    env = lmdb.open({
       path: dbRoot,
       readOnly,
       eventTurnBatching: false,
@@ -169,6 +225,21 @@ export default function createLMDB(options = {}) {
     if (stats.isSymbolicLink() || !stats.isDirectory()) {
       throw new Error(
         `LMDB read-only local volume must be a non-symbolic-link directory: '${dbRoot}'.`,
+      );
+    }
+    let data;
+    try {
+      data = lstatSync(join(dbRoot, 'data.mdb'));
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
+        throw error;
+      throw new LMDBReadOnlyStoreNotFoundError(
+        'LMDB read-only local volume does not contain an existing data file.',
+      );
+    }
+    if (!data.isFile() || data.isSymbolicLink() || data.size === 0) {
+      throw new LMDBReadOnlyStoreNotFoundError(
+        'LMDB read-only local volume requires a nonempty regular data file.',
       );
     }
   } else {

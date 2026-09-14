@@ -225,12 +225,60 @@ jobs:
           --registry-manifest
           "$GITHUB_WORKSPACE/dist/preview-release/preview-release.json"
 
+  draft-recipient:
+    if: github.repository == 'wharfie/wharfie'
+    needs: publish
+    runs-on: ubuntu-latest
+    # Include the bounded 15-minute download before the full candidate proof.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup exact recipient builder Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned controller npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: prepare the isolated recipient account
+        run: bash scripts/prepare-preview-recipient-github-linux.sh
+      - name: prove downloaded draft assets as a fresh recipient
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHARFIE_PREVIEW_RECIPIENT_DISPOSABLE: github-actions
+        run: >-
+          node ./scripts/verify-preview-recipient.js
+          --tag "$GITHUB_REF_NAME" --draft
+          --expected-commit "$GITHUB_SHA"
+          --report "$RUNNER_TEMP/wharfie-draft-recipient.json"
+      - name: remove and independently verify the owned recipient account
+        if: ${{ always() }}
+        run: >-
+          bash scripts/prepare-preview-recipient-github-linux.sh
+          --cleanup "$RUNNER_TEMP/wharfie-recipient-account-cleanup.json"
+      - name: retain the bounded draft recipient proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-${{ github.ref_name }}-draft-recipient
+          path: |
+            ${{ runner.temp }}/wharfie-draft-recipient.json
+            ${{ runner.temp }}/wharfie-recipient-account-cleanup.json
+          if-no-files-found: warn
+          retention-days: 14
+
   finalize:
     if: >-
       github.repository == 'wharfie/wharfie' &&
       github.ref_type == 'tag' &&
       vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
-    needs: [publish, registry-consumer]
+    needs: [publish, registry-consumer, draft-recipient]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-preview-promotion
@@ -269,3 +317,40 @@ jobs:
           node ./scripts/publish-preview-release.js
           --artifact-dir "$GITHUB_WORKSPACE/dist/preview-release"
           --finalize-only
+
+  public-recipient:
+    if: github.repository == 'wharfie/wharfie'
+    needs: finalize
+    runs-on: ubuntu-latest
+    # Download permits 15 minutes; retain time for smoke checks and the report.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: setup exact recipient smoke Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned controller npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: verify anonymous downloads of the finalized release
+        run: >-
+          env -u GH_TOKEN -u GITHUB_TOKEN
+          node ./scripts/verify-preview-recipient.js
+          --tag "$GITHUB_REF_NAME" --download-only
+          --expected-commit "$GITHUB_SHA"
+          --report "$RUNNER_TEMP/wharfie-public-recipient.json"
+      - name: retain the bounded public download proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-${{ github.ref_name }}-public-recipient
+          path: ${{ runner.temp }}/wharfie-public-recipient.json
+          if-no-files-found: warn
+          retention-days: 14

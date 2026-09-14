@@ -82,8 +82,8 @@ npm run build:release:preview -- \
 The builder packs Wharfie and the required AWS handoff once, installs only the
 core tarball into a clean consumer, invokes the self-package seam from the
 installed package with an explicit provider-free policy, and smoke-tests the
-result with an empty `PATH`. The smoke includes an AWS command that must fail
-with the exact sealed not-embedded error before creating state. Before granting
+result with an empty `PATH`. The smoke also rejects the removed
+source-deployment command before creating state. Before granting
 the installed self-host seam its
 narrow runtime-graph authority, it hashes and independently extracts the
 candidate tarball and compares the installed package's complete regular-file
@@ -145,7 +145,15 @@ runs the complete magnetic demo. This is the registry-byte-and-provenance
 proof, while the earlier matrix remains the prepublication candidate-byte
 proof.
 
-After both registry jobs pass, a maintainer with an interactive, short-lived
+Alongside the registry checks, a read-only recipient job downloads the actual
+GitHub draft assets, verifies their complete manifest/checksum/record contracts,
+and runs the [author-to-recipient service proof](recipient-preview.md).
+The core and matching AWS companion are installed together in a private builder;
+only the resulting application handoff reaches the isolated recipient. Neither
+the build nor the target receives the GitHub download credential. Finalization
+waits for both registry jobs and this recipient proof.
+
+After those checks pass, a maintainer with an interactive, short-lived
 npm session promotes only that immutable version:
 
 ```bash
@@ -161,7 +169,10 @@ the local artifact set, exact npm bytes and provenance metadata, `preview`
 dist-tag, current source authority, and complete matching draft before its sole
 permitted mutation: changing that draft to a prerelease with `--latest=false`.
 Without the reviewed npm promotion it fails closed and the GitHub release stays
-a draft.
+a draft. After finalization, an anonymous recipient check downloads the public
+assets again and exercises the standalone binary with an empty `PATH`. That
+check can report a public-distribution failure, but it does not undo publication
+or move an npm dist-tag.
 
 A rerun resumes a matching draft, accepts a matching npm publication when an
 earlier command response was lost, and treats an already finalized exact
