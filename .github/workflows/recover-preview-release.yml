@@ -1,0 +1,270 @@
+name: Recover Wharfie preview release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable preview tag, matching the reviewed package version
+        required: true
+        type: string
+      source_commit:
+        description: Full source commit recorded in the existing release manifest
+        required: true
+        type: string
+
+concurrency:
+  group: wharfie-preview-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  RECOVERY_TAG: ${{ inputs.tag }}
+  RECOVERY_COMMIT: ${{ inputs.source_commit }}
+
+jobs:
+  download:
+    if: >-
+      github.repository == 'wharfie/wharfie' &&
+      github.ref == 'refs/heads/master' &&
+      vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      assets_name: ${{ steps.identity.outputs.assets_name }}
+    # GitHub hides draft listings from tokens without push access. This job
+    # only verifies bytes; downloaded packages and executables never run here.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: setup exact download verifier Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: bind immutable artifact identity to this producing attempt
+        id: identity
+        run: echo "assets_name=wharfie-recovery-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-assets" >> "$GITHUB_OUTPUT"
+      - name: download and verify the exact existing draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFile } from 'node:fs/promises';
+          import path from 'node:path';
+          import { downloadPreviewRecipientRelease } from './scripts/preview-recipient-download.js';
+          const report = path.join(process.env.RUNNER_TEMP, 'wharfie-recovery-download.json');
+          try {
+            const { receipt } = await downloadPreviewRecipientRelease({
+              tag: process.env.RECOVERY_TAG,
+              expectedCommit: process.env.RECOVERY_COMMIT,
+              directory: path.join(process.env.RUNNER_TEMP, 'wharfie-recovery-assets'),
+              draft: true,
+              token: process.env.GH_TOKEN,
+            });
+            await writeFile(report, JSON.stringify(receipt) + '\n', { mode: 0o600, flag: 'wx' });
+          } catch (error) {
+            // The downloader exposes a bounded, credential-free failure record.
+            await writeFile(report, JSON.stringify({
+              schemaVersion: 1,
+              kind: 'wharfie.preview.recipient-download-failure',
+              diagnostic: error.diagnostic ?? null,
+            }) + '\n', { mode: 0o600, flag: 'wx' });
+            throw error;
+          }
+          NODE
+      - name: retain exactly the verified candidate for every recovery gate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ steps.identity.outputs.assets_name }}
+          path: ${{ runner.temp }}/wharfie-recovery-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: retain bounded draft download evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: ${{ steps.identity.outputs.assets_name }}-download-proof
+          path: ${{ runner.temp }}/wharfie-recovery-download.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  registry-consumer:
+    if: github.repository == 'wharfie/wharfie'
+    needs: download
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24.13.1', '24.x']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: setup supported registry consumer Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          package-manager-cache: false
+      - name: install pinned npm for signature verification
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: download authoritative release manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.download.outputs.assets_name }}
+          path: dist/preview-release
+      - name: install from npm, verify the generated lock, and run the magnetic demo
+        run: >-
+          node ./scripts/verify-preview-consumer.js
+          --registry-manifest
+          "$GITHUB_WORKSPACE/dist/preview-release/preview-release.json"
+
+  draft-recipient:
+    if: github.repository == 'wharfie/wharfie'
+    needs: download
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: setup exact recipient builder Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned controller npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: download the exact verified draft candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.download.outputs.assets_name }}
+          path: ${{ runner.temp }}/wharfie-recovery-assets
+      - name: make the candidate directory private
+        run: chmod 0700 "$RUNNER_TEMP/wharfie-recovery-assets"
+      - name: prepare the isolated recipient account
+        run: bash scripts/prepare-preview-recipient-github-linux.sh
+      - name: prove downloaded draft assets as a fresh recipient
+        env:
+          WHARFIE_PREVIEW_RECIPIENT_DISPOSABLE: github-actions
+        run: >-
+          node ./scripts/verify-preview-recipient.js
+          --artifact-dir "$RUNNER_TEMP/wharfie-recovery-assets"
+          --expected-commit "$RECOVERY_COMMIT"
+          --report "$RUNNER_TEMP/wharfie-draft-recipient.json"
+      - name: remove and independently verify the owned recipient account
+        if: ${{ always() }}
+        run: >-
+          bash scripts/prepare-preview-recipient-github-linux.sh
+          --cleanup "$RUNNER_TEMP/wharfie-recipient-account-cleanup.json"
+      - name: retain the bounded draft recipient proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-recovery-${{ github.run_id }}-${{ github.run_attempt }}-draft-recipient
+          path: |
+            ${{ runner.temp }}/wharfie-draft-recipient.json
+            ${{ runner.temp }}/wharfie-recipient-account-cleanup.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  finalize:
+    if: >-
+      github.repository == 'wharfie/wharfie' &&
+      github.ref == 'refs/heads/master' &&
+      vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
+    needs: [download, registry-consumer, draft-recipient]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-preview-promotion
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: setup Node.js for final verification
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: verify publication guard
+        env:
+          WHARFIE_PREVIEW_PUBLISH: '1'
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: ${{ vars.WHARFIE_PREVIEW_PUBLISH_ENABLED }}
+        run: >-
+          node --input-type=module -e
+          'import { assertPreviewRecoveryEnvironment } from "./scripts/recover-preview-release.js"; assertPreviewRecoveryEnvironment();'
+      - name: install pinned npm for registry verification
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - name: download authoritative release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.download.outputs.assets_name }}
+          path: dist/preview-release
+      - name: verify reviewed npm promotion and finalize the GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+          WHARFIE_PREVIEW_PUBLISH: '1'
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: ${{ vars.WHARFIE_PREVIEW_PUBLISH_ENABLED }}
+        run: >-
+          node ./scripts/recover-preview-release.js
+          --artifact-dir "$GITHUB_WORKSPACE/dist/preview-release"
+          --tag "$RECOVERY_TAG"
+          --expected-commit "$RECOVERY_COMMIT"
+
+  public-recipient:
+    if: github.repository == 'wharfie/wharfie'
+    needs: finalize
+    runs-on: ubuntu-latest
+    # Download permits 15 minutes; retain time for smoke checks and the report.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: setup exact recipient smoke Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: '.nvmrc'
+          package-manager-cache: false
+      - name: install pinned controller npm
+        working-directory: ${{ runner.temp }}
+        run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
+      - run: npm ci
+      - name: verify anonymous downloads of the finalized release
+        run: >-
+          env -u GH_TOKEN -u GITHUB_TOKEN
+          node ./scripts/verify-preview-recipient.js
+          --tag "$RECOVERY_TAG" --download-only
+          --expected-commit "$RECOVERY_COMMIT"
+          --report "$RUNNER_TEMP/wharfie-public-recipient.json"
+      - name: retain the bounded public download proof
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: wharfie-recovery-${{ github.run_id }}-${{ github.run_attempt }}-public-recipient
+          path: ${{ runner.temp }}/wharfie-public-recipient.json
+          if-no-files-found: warn
+          retention-days: 14

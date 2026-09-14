@@ -19,6 +19,8 @@ import {
   loadPreviewReleaseCandidate,
   parsePreviewPublicationArgs,
   publishPreviewRelease,
+  PREVIEW_GITHUB_VISIBILITY_TIMEOUT_MS,
+  PREVIEW_NPM_VISIBILITY_TIMEOUT_MS,
 } from '../../scripts/publish-preview-release.js';
 
 const COMMIT = 'a'.repeat(40);
@@ -497,6 +499,77 @@ function mutationCalls(state) {
       (command === 'npm' && args[0] === 'publish') ||
       (command === 'gh' && args[0] === 'release'),
   );
+}
+
+function delayedVisibilityDependencies(fake, settings = {}) {
+  let clock = 0;
+  let createdAt = null;
+  let publishedAt = null;
+  const observations = [];
+  const waits = [];
+  return {
+    observations,
+    waits,
+    get clock() {
+      return clock;
+    },
+    authorize: async () => {},
+    expectedCommit: COMMIT,
+    visibilityNow: () => clock,
+    visibilityWait: async (milliseconds) => {
+      waits.push({ milliseconds, at: clock, createdAt, publishedAt });
+      clock += milliseconds;
+    },
+    runCommand: async (command, args, options = {}) => {
+      const create = command === 'gh' && args[1] === 'create';
+      const publish = command === 'npm' && args[0] === 'publish';
+      let result;
+      try {
+        result = await fake.runCommand(command, args);
+      } finally {
+        if (create) createdAt = clock;
+        if (publish) publishedAt = clock;
+      }
+      if (options.timeoutMs !== undefined) {
+        observations.push({
+          command,
+          args,
+          timeoutMs: options.timeoutMs,
+          at: clock,
+        });
+        if (settings.commandElapsedMs) {
+          clock += Math.min(settings.commandElapsedMs, options.timeoutMs);
+          if (settings.commandElapsedMs >= options.timeoutMs)
+            throw makeCommandFailure('visibility command timed out');
+        }
+      }
+      if (
+        command === 'gh' &&
+        args[0] === 'api' &&
+        createdAt !== null &&
+        clock - createdAt < (settings.githubDelayMs ?? 0)
+      )
+        return { stdout: '[[]]', stderr: '' };
+      if (
+        command === 'npm' &&
+        args[0] === 'view' &&
+        publishedAt !== null &&
+        clock - publishedAt < (settings.npmDelayMs ?? 0)
+      ) {
+        if (args[2] === 'versions')
+          return {
+            stdout: JSON.stringify(
+              fake.state.versions.filter((value) => value !== VERSION),
+            ),
+            stderr: '',
+          };
+        if (args[2] === 'dist-tags.preview-candidate')
+          return { stdout: 'null', stderr: '' };
+        if (!args[2]?.startsWith('dist-tags.')) throw makeNpmNotFoundFailure();
+      }
+      return result;
+    },
+  };
 }
 
 describe('preview publication reconciliation', () => {
@@ -1069,6 +1142,236 @@ describe('preview publication reconciliation', () => {
       ),
     ).toHaveLength(1);
   });
+
+  it.each([false, true])(
+    'waits for delayed GitHub and npm visibility after exactly one mutation, response lost=%s',
+    async (lostResponse) => {
+      const { artifactDir, candidate } = await fixture();
+      const fake = createFakeCommands(candidate, {
+        failCreateAfterMutation: lostResponse,
+        failPublishAfterMutation: lostResponse,
+      });
+      const dependencies = delayedVisibilityDependencies(fake, {
+        githubDelayMs: 15_000,
+        npmDelayMs: 5 * 60_000,
+      });
+      await expect(
+        publishPreviewRelease(
+          { artifactDir, deferFinalize: true },
+          dependencies,
+        ),
+      ).resolves.toMatchObject({ published: true, finalized: false });
+      expect(dependencies.clock).toBe(315_000);
+      expect(dependencies.waits.every((wait) => wait.createdAt !== null)).toBe(
+        true,
+      );
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[1] === 'create'),
+      ).toHaveLength(1);
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[1] === 'upload'),
+      ).toHaveLength(candidate.assets.length);
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[0] === 'publish'),
+      ).toHaveLength(1);
+      expect(
+        dependencies.observations.every(
+          (entry) => entry.timeoutMs > 0 && entry.timeoutMs <= 30_000,
+        ),
+      ).toBe(true);
+      expect(fake.state.release.draft).toBe(true);
+    },
+  );
+
+  it('does not wait on an absent initial registry or release preflight', async () => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate);
+    const dependencies = delayedVisibilityDependencies(fake);
+    await publishPreviewRelease(
+      { artifactDir, deferFinalize: true },
+      dependencies,
+    );
+    expect(dependencies.waits).toEqual([]);
+    expect(dependencies.observations).toHaveLength(5);
+  });
+
+  it.each(['github', 'npm'])(
+    'bounds a permanently absent %s observation without another mutation',
+    async (provider) => {
+      const { artifactDir, candidate } = await fixture();
+      const fake = createFakeCommands(candidate);
+      const dependencies = delayedVisibilityDependencies(fake, {
+        [`${provider}DelayMs`]: Infinity,
+      });
+      await expect(
+        publishPreviewRelease(
+          { artifactDir, deferFinalize: true },
+          dependencies,
+        ),
+      ).rejects.toThrow(/visibility deadline/u);
+      const budget =
+        provider === 'github'
+          ? PREVIEW_GITHUB_VISIBILITY_TIMEOUT_MS
+          : PREVIEW_NPM_VISIBILITY_TIMEOUT_MS;
+      expect(dependencies.clock).toBe(budget);
+      const selected = dependencies.observations.filter(
+        (entry) => entry.command === (provider === 'github' ? 'gh' : 'npm'),
+      );
+      expect(selected.length).toBeGreaterThan(1);
+      expect(
+        selected.every((entry) => entry.timeoutMs <= budget - entry.at),
+      ).toBe(true);
+      expect(selected.at(-1).timeoutMs).toBeLessThan(30_000);
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[1] === 'create'),
+      ).toHaveLength(1);
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[0] === 'publish'),
+      ).toHaveLength(provider === 'npm' ? 1 : 0);
+    },
+  );
+
+  it.each(['github', 'npm'])(
+    'retains the original lost %s response after its visibility budget expires',
+    async (provider) => {
+      const { artifactDir, candidate } = await fixture();
+      const fake = createFakeCommands(candidate, {
+        failCreateAfterMutation: provider === 'github',
+        failPublishAfterMutation: provider === 'npm',
+      });
+      const dependencies = delayedVisibilityDependencies(fake, {
+        [`${provider}DelayMs`]: Infinity,
+      });
+      await expect(
+        publishPreviewRelease(
+          { artifactDir, deferFinalize: true },
+          dependencies,
+        ),
+      ).rejects.toThrow(
+        provider === 'github'
+          ? 'create response lost'
+          : 'publish response lost',
+      );
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[0] === 'publish'),
+      ).toHaveLength(provider === 'npm' ? 1 : 0);
+    },
+  );
+
+  it('counts subprocess observation time against the shared deadline', async () => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate);
+    const dependencies = delayedVisibilityDependencies(fake, {
+      githubDelayMs: Infinity,
+      commandElapsedMs: 20_000,
+    });
+    await expect(
+      publishPreviewRelease({ artifactDir, deferFinalize: true }, dependencies),
+    ).rejects.toThrow('visibility command timed out');
+    expect(dependencies.clock).toBe(60_000);
+    expect(dependencies.observations.map((entry) => entry.timeoutMs)).toEqual([
+      30_000, 30_000, 10_000,
+    ]);
+    expect(dependencies.waits.map((entry) => entry.milliseconds)).toEqual([
+      5000, 5000,
+    ]);
+    expect(mutationCalls(fake.state)).toHaveLength(1);
+  });
+
+  it.each(['malformed', 'duplicate', 'mismatch', 'network'])(
+    'fails closed on %s GitHub evidence during visibility polling',
+    async (fault) => {
+      const { artifactDir, candidate } = await fixture();
+      const fake = createFakeCommands(candidate);
+      const dependencies = delayedVisibilityDependencies(fake, {
+        githubDelayMs: 5000,
+      });
+      const run = dependencies.runCommand;
+      dependencies.runCommand = async (command, args, options) => {
+        const value = await run(command, args, options);
+        if (options?.timeoutMs && command === 'gh') {
+          if (fault === 'network')
+            throw makeCommandFailure('network unavailable');
+          if (fault === 'malformed') return { stdout: '{invalid', stderr: '' };
+          if (fault === 'duplicate')
+            return {
+              stdout: JSON.stringify([
+                [fake.state.release, fake.state.release],
+              ]),
+              stderr: '',
+            };
+          return {
+            stdout: JSON.stringify([
+              [{ ...fake.state.release, name: 'unexpected release' }],
+            ]),
+            stderr: '',
+          };
+        }
+        return value;
+      };
+      await expect(
+        publishPreviewRelease(
+          { artifactDir, deferFinalize: true },
+          dependencies,
+        ),
+      ).rejects.toThrow();
+      expect(dependencies.waits).toEqual([]);
+      expect(mutationCalls(fake.state)).toHaveLength(1);
+    },
+  );
+
+  it.each([
+    'malformed',
+    'mismatch',
+    'duplicate-versions',
+    'network',
+    'timed-out-e404',
+  ])(
+    'fails closed on %s npm evidence after its single publish attempt',
+    async (fault) => {
+      const { artifactDir, candidate } = await fixture();
+      const fake = createFakeCommands(candidate);
+      const dependencies = delayedVisibilityDependencies(fake);
+      const run = dependencies.runCommand;
+      dependencies.runCommand = async (command, args, options) => {
+        const value = await run(command, args, options);
+        if (options?.timeoutMs && command === 'npm') {
+          if (fault === 'duplicate-versions' && args[2] === 'versions')
+            return { stdout: JSON.stringify([VERSION, VERSION]), stderr: '' };
+          if (args[1] === `@wharfie/wharfie@${VERSION}`) {
+            if (fault === 'timed-out-e404') {
+              const failure = makeNpmNotFoundFailure();
+              failure.cause = { killed: true, signal: 'SIGKILL' };
+              throw failure;
+            }
+            if (fault === 'network')
+              throw makeCommandFailure('network unavailable');
+            if (fault === 'malformed') return { stdout: '[]', stderr: '' };
+            if (fault === 'mismatch')
+              return {
+                stdout: JSON.stringify({
+                  ...fake.state.npmVersion,
+                  name: 'another package',
+                }),
+                stderr: '',
+              };
+          }
+        }
+        return value;
+      };
+      await expect(
+        publishPreviewRelease(
+          { artifactDir, deferFinalize: true },
+          dependencies,
+        ),
+      ).rejects.toThrow();
+      expect(dependencies.waits).toEqual([]);
+      expect(
+        mutationCalls(fake.state).filter(({ args }) => args[0] === 'publish'),
+      ).toHaveLength(1);
+      expect(fake.state.release.draft).toBe(true);
+    },
+  );
 
   it('does not mistake a failed authority precondition for response loss', async () => {
     const { artifactDir, candidate } = await fixture();
