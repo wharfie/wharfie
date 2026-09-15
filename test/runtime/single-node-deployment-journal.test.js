@@ -37,6 +37,7 @@ import {
 import {
   SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_DOMAIN,
   SINGLE_NODE_DEPLOYMENT_JOURNAL_ID_PREFIX,
+  SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
   SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_RECORDS,
   SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE,
   SingleNodeDeploymentJournalConflictError,
@@ -823,6 +824,88 @@ describe('single-node deployment journal contract', () => {
     );
     expect(JSON.stringify(journal)).not.toMatch(
       /credential|authorization|private.key|access.token/iu,
+    );
+  });
+
+  it('keeps every part of a validated document immutable across reuse', () => {
+    const journal = validateSingleNodeDeploymentJournal(clone(createInitial()));
+    const encoded = JSON.stringify(journal);
+    const objects = [journal];
+    for (const value of objects) {
+      expect(Object.isFrozen(value)).toBe(true);
+      objects.push(
+        ...Object.values(value).filter(
+          (child) => child !== null && typeof child === 'object',
+        ),
+      );
+    }
+    expect(
+      Reflect.set(
+        journal.providerIntent.intent.plan.desired.intent.deployment,
+        'id',
+        'changed',
+      ),
+    ).toBe(false);
+    expect(() => journal.resources.push({ role: 'server' })).toThrow(TypeError);
+    expect(JSON.stringify(validateSingleNodeDeploymentJournal(journal))).toBe(
+      encoded,
+    );
+  });
+
+  it('does not trust or retain mutable caller input after validation', () => {
+    const input = /** @type {Record<string, any>} */ (clone(createInitial()));
+    const journal = validateSingleNodeDeploymentJournal(input);
+    const encoded = JSON.stringify(journal);
+    input.phase = 'destroying';
+
+    expect(JSON.stringify(validateSingleNodeDeploymentJournal(journal))).toBe(
+      encoded,
+    );
+    expect(() => validateSingleNodeDeploymentJournal(input)).toThrow(
+      /journalId does not match/iu,
+    );
+    const next = advanceSingleNodeDeploymentJournal(journal, 'provisioning');
+    expect(validateSingleNodeDeploymentJournalSuccessor(journal, next)).toEqual(
+      next,
+    );
+  });
+
+  it('fully validates a forged frozen copy of an already validated document', () => {
+    const journal = validateSingleNodeDeploymentJournal(createInitial());
+    const forged = /** @type {Readonly<Record<string, any>>} */ (
+      Object.freeze({ ...journal, phase: 'destroying' })
+    );
+
+    expect(Object.isFrozen(forged.providerIntent)).toBe(true);
+    expect(() => validateSingleNodeDeploymentJournal(forged)).toThrow(
+      /journalId does not match/iu,
+    );
+  });
+
+  it('bounds the complete document including journalId before revalidating an edited copy', () => {
+    const journal = validateSingleNodeDeploymentJournal(createInitial());
+    const payload = /** @type {Record<string, any>} */ (clone(journal));
+    delete payload.journalId;
+    const paddingBytes =
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES -
+      Buffer.byteLength(JSON.stringify(payload));
+    payload.providerIntent.intent.plan.desired.intent.deployment.id +=
+      'x'.repeat(paddingBytes);
+    const document = Object.freeze({
+      ...payload,
+      journalId: journal.journalId,
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBe(
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
+    );
+    expect(Buffer.byteLength(JSON.stringify(document))).toBeGreaterThan(
+      SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
+    );
+    expect(() => validateSingleNodeDeploymentJournal(document)).toThrow(
+      new RangeError(
+        `singleNodeDeploymentJournal encoded JSON must not exceed ${SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES} bytes.`,
+      ),
     );
   });
 
@@ -1805,6 +1888,47 @@ describe('single-node deployment journal persistence', () => {
     expect(JSON.parse(encoded)).toEqual(committed);
     expect(await store.initialize(authority)).toEqual(committed);
   });
+
+  it.each(['read', 'commit'])(
+    'rechecks changed on-disk history during %s after a successful read',
+    async (operation) => {
+      const { store } = await makeStore();
+      const initial = await store.initialize(authority);
+      await store.commit(
+        commitRequest(
+          initial,
+          advanceSingleNodeDeploymentJournal(initial, 'provisioning'),
+        ),
+      );
+      const current = await store.read();
+      const next = advanceSingleNodeDeploymentJournal(current, 'destroying');
+      const currentPath = join(
+        store.paths.journalRoot,
+        'journal-0000000000000001.json',
+      );
+      const currentBytes = await readFile(currentPath, 'utf8');
+      const changedInitial = resealJournal({ ...initial, phase: 'destroying' });
+      expect(validateSingleNodeDeploymentJournal(changedInitial)).toEqual(
+        changedInitial,
+      );
+      await writeFile(
+        join(store.paths.journalRoot, 'journal-0000000000000000.json'),
+        `${JSON.stringify(changedInitial)}\n`,
+        { mode: 0o600 },
+      );
+
+      await expect(
+        operation === 'read'
+          ? store.read()
+          : store.commit(commitRequest(current, next)),
+      ).rejects.toBeInstanceOf(SingleNodeDeploymentJournalInvalidError);
+      expect(await readFile(currentPath, 'utf8')).toBe(currentBytes);
+      expect(await readdir(store.paths.journalRoot)).toEqual([
+        'journal-0000000000000000.json',
+        'journal-0000000000000001.json',
+      ]);
+    },
+  );
 
   it('retains an unresolved pre-POST fence across restart', async () => {
     const { store, dataRoot } = await makeStore();
