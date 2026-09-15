@@ -1,29 +1,43 @@
 # Preview releases
 
-Wharfie preview releases are experimental, intentionally outside npm's
+The published [v0.0.15 preview](https://github.com/wharfie/wharfie/releases/tag/v0.0.15)
+is available on npm's `preview` channel. Its manifest records source commit
+[`aae74e0de018fe340564c08c0c820ff590de1894`](https://github.com/wharfie/wharfie/commit/aae74e0de018fe340564c08c0c820ff590de1894).
+Use the [recipient handoff](recipient-preview.md) to build, share, keep work
+running on Linux, reconnect, and clean up with that exact release.
+
+Wharfie previews are experimental, intentionally outside npm's
 `latest` channel, and supported only for evaluation. The npm package requires
 Node `>=24.13.1 <25`. A provider-free, Node-free standalone CLI is produced for
 Linux x64 glibc; other standalone targets remain application-build targets,
 not Wharfie CLI release downloads.
 
-After the first preview completes reviewed promotion, install the Node-hosted
-CLI with:
+Install the exact Node-hosted preview version with:
 
 ```bash
-npm install --save-dev @wharfie/wharfie@preview
-npx wharfie --help
+npm install --save-dev @wharfie/wharfie@0.0.15
+./node_modules/.bin/wharfie --help
 ```
 
-Do not omit `@preview`: no preview workflow publishes to `latest`. For a
-Node-free Linux x64 glibc installation, download the versioned binary, its
+Use `@wharfie/wharfie@preview` to follow the moving evaluation channel instead.
+Do not omit a version or channel: preview publication does not move `latest`.
+For a Node-free Linux x64 glibc installation, download the versioned binary, its
 artifact record, `preview-release.json`, and `SHA256SUMS` from the matching
-GitHub prerelease. Verify the checksums before running the binary:
+[v0.0.15 prerelease](https://github.com/wharfie/wharfie/releases/tag/v0.0.15).
+Verify the checksums before running the binary:
 
 ```bash
 sha256sum --ignore-missing --check SHA256SUMS
 chmod +x wharfie-v0.0.15-linux-x64
 ./wharfie-v0.0.15-linux-x64 --version
 ```
+
+Expect version `0.0.15`. The recipient of a generated application likewise needs
+no separate Node installation, while the Node-hosted author/build recipe uses
+Node 24.13.1 and npm 11.12.0. Long-duration soak and unfamiliar-tester results
+remain pending; see the [versioned evidence table](recipient-preview.md#release-evidence).
+Later runtime changes on `master` require a new release and new evidence;
+the journal performance change in PR168 is not included in v0.0.15.
 
 GitHub also records build-provenance attestations for every release asset.
 With a current GitHub CLI, verify a downloaded asset against this repository:
