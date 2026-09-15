@@ -36,6 +36,7 @@ import {
   buildLiveDeploymentCandidates,
   LIVE_DEPLOYMENT_APP_ID,
   LIVE_DEPLOYMENT_INPUT_BYTES,
+  LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES,
   runLiveDeploymentProcess,
 } from './live-deployment-package.js';
 import {
@@ -51,6 +52,19 @@ import {
   LIVE_DEPLOYMENT_UPDATE_FAULT_STAGES,
 } from './live-deployment-update-interruption.js';
 
+import {
+  LIVE_DEPLOYMENT_SOAK_FAULT_STAGES,
+  LIVE_DEPLOYMENT_SOAK_FAULT_CODES,
+  advanceLiveDeploymentSoak,
+  createLiveDeploymentSoakCheckpoint,
+  validateLiveDeploymentSoakCheckpoint,
+} from './live-deployment-soak.js';
+
+import {
+  LIVE_DEPLOYMENT_HOST_FAULT_STAGES,
+  LIVE_DEPLOYMENT_HOST_FAULT_CODES,
+} from './live-deployment-host.js';
+
 const REPO = fileURLToPath(new URL('../', import.meta.url));
 const FORMAT = 'wharfie.live-deployment.run.v1';
 const RETIREMENT_FORMAT = 'wharfie.live-deployment.retirement.v1';
@@ -59,11 +73,15 @@ const MAX_RECEIPT_BYTES = 256 * 1024;
 const HELP = `Usage:
   npm run verify:deployment:live -- --provider hetzner --location fsn1 --allow-ssh-from <IPv4/32> [--output-dir <new-directory>]
   npm run verify:deployment:live -- --provider aws --region us-east-2 --allow-ssh-from <IPv4/32> [--output-dir <new-directory>]
+  npm run verify:deployment:live -- --provider <aws|hetzner> ... --soak-hours <0.25|48|72> [--step]
+  npm run verify:deployment:live -- --resume <run-directory> [--step]
   npm run verify:deployment:live -- --cleanup <run-directory>
 
-Builds a fresh installed candidate and provisions one real host. Verifies durable
-work across controller exit, resident crash and host reboot, then destroys its
-resources and independently verifies their absence.
+Builds a fresh installed candidate and provisions one real host. The default run
+verifies crashes, reboots and release updates. --soak-hours instead measures
+periodic durable work and resource growth. Both modes destroy and independently
+verify cleanup; --step retains a running soak for a later --resume.
+Optional candidate input: --artifact-dir <private-assets> --expected-commit <SHA>.
 Credentials: ambient AWS credential chain or HCLOUD_TOKEN. One provider per run.
 Unconfirmed cleanup retains the executable and controller state for --cleanup.
 `;
@@ -83,16 +101,28 @@ export function parseLiveDeploymentArguments(args) {
     '--allow-ssh-from',
     '--output-dir',
     '--cleanup',
+    '--resume',
+    '--soak-hours',
+    '--artifact-dir',
+    '--expected-commit',
+    '--step',
   ]);
-  for (let i = 0; i < args.length; i += 2) {
+  for (let i = 0; i < args.length; ) {
     const key = args[i];
     assert.ok(allowed.has(key), 'Unknown acceptance option.');
+    assert.ok(!Object.hasOwn(options, key), 'Duplicate acceptance option.');
+    if (key === '--step') {
+      options[key] = 'true';
+      i++;
+      continue;
+    }
     assert.ok(
       typeof args[i + 1] === 'string' && !args[i + 1].startsWith('--'),
       'Option requires a value.',
     );
     assert.ok(!Object.hasOwn(options, key), 'Duplicate acceptance option.');
     options[key] = args[i + 1];
+    i += 2;
   }
   if (Object.hasOwn(options, '--cleanup')) {
     assert.equal(
@@ -102,6 +132,36 @@ export function parseLiveDeploymentArguments(args) {
     );
     return { cleanup: path.resolve(options['--cleanup']) };
   }
+  if (Object.hasOwn(options, '--resume')) {
+    assert.ok(
+      Object.keys(options).every((key) => ['--resume', '--step'].includes(key)),
+      'Resume uses retained deployment selectors.',
+    );
+    return {
+      resume: path.resolve(options['--resume']),
+      ...(options['--step'] ? { step: true } : {}),
+    };
+  }
+  assert.equal(
+    options['--artifact-dir'] === undefined,
+    options['--expected-commit'] === undefined,
+    'Release assets require an exact source commit.',
+  );
+  if (options['--expected-commit'])
+    assert.match(options['--expected-commit'], /^[0-9a-f]{40}$/);
+  const soakHours =
+    options['--soak-hours'] === undefined
+      ? undefined
+      : Number(options['--soak-hours']);
+  if (soakHours !== undefined)
+    assert.ok(
+      ['0.25', '48', '72'].includes(options['--soak-hours']),
+      'Soak duration must be 0.25, 48 or 72 hours.',
+    );
+  assert.ok(
+    !options['--step'] || soakHours !== undefined,
+    '--step requires a soak or resume.',
+  );
   const provider = options['--provider'];
   assert.ok(
     ['aws', 'hetzner'].includes(provider),
@@ -130,6 +190,14 @@ export function parseLiveDeploymentArguments(args) {
     provider,
     placement,
     allowedIpv4,
+    ...(soakHours !== undefined ? { soakHours } : {}),
+    ...(options['--artifact-dir']
+      ? {
+          artifactDir: path.resolve(options['--artifact-dir']),
+          expectedCommit: options['--expected-commit'],
+        }
+      : {}),
+    ...(options['--step'] ? { step: true } : {}),
     ...(options['--output-dir']
       ? { outputDir: path.resolve(options['--output-dir']) }
       : {}),
@@ -169,7 +237,7 @@ export function publishLiveDeploymentReceipt(directory, name, value, io = {}) {
     renameSync,
     ...io,
   };
-  const bytes = `${JSON.stringify(value, null, 2)}\n`;
+  const bytes = `${JSON.stringify(value, null, io.compact ? undefined : 2)}\n`;
   assert.ok(
     Buffer.byteLength(bytes) <= MAX_RECEIPT_BYTES,
     'Acceptance receipt exceeds its bound.',
@@ -340,6 +408,31 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
     timedOut: diagnostic.timedOut === true,
     aborted: diagnostic.aborted === true,
     outputLimitExceeded: diagnostic.outputLimitExceeded === true,
+    ...(LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES.includes(
+      diagnostic.activationFaultCode,
+    )
+      ? { activationFaultCode: diagnostic.activationFaultCode }
+      : {}),
+    ...(LIVE_DEPLOYMENT_SOAK_FAULT_STAGES.includes(diagnostic.soakFaultStage)
+      ? { soakFaultStage: diagnostic.soakFaultStage }
+      : {}),
+    ...(LIVE_DEPLOYMENT_SOAK_FAULT_CODES.includes(diagnostic.soakFaultCode)
+      ? { soakFaultCode: diagnostic.soakFaultCode }
+      : {}),
+    ...Object.fromEntries(
+      ['soakObservedMs', 'soakLimitMs', 'soakObservedBytes', 'soakLimitBytes']
+        .filter(
+          (field) =>
+            Number.isSafeInteger(diagnostic[field]) && diagnostic[field] >= 0,
+        )
+        .map((field) => [field, diagnostic[field]]),
+    ),
+    ...(LIVE_DEPLOYMENT_HOST_FAULT_STAGES.includes(diagnostic.hostFaultStage)
+      ? { hostFaultStage: diagnostic.hostFaultStage }
+      : {}),
+    ...(LIVE_DEPLOYMENT_HOST_FAULT_CODES.includes(diagnostic.hostFaultCode)
+      ? { hostFaultCode: diagnostic.hostFaultCode }
+      : {}),
     ...(LIVE_DEPLOYMENT_UPDATE_FAULT_STAGES.includes(diagnostic.faultStage)
       ? { faultStage: diagnostic.faultStage }
       : {}),
@@ -353,7 +446,15 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
  * Package outside the checkout, retaining only the verified executable.
  * @param {Parameters<typeof buildLiveDeploymentCandidates>[0]} options
  */
-async function buildCandidate({ workspace, provider, signal, onPhase }) {
+async function buildCandidate({
+  workspace,
+  provider,
+  signal,
+  onPhase,
+  timerDelayMs,
+  artifactDir,
+  expectedCommit,
+}) {
   const temporary = mkdtempSync(
     path.join(realpathSync(os.tmpdir()), 'wharfie-live-build-'),
   );
@@ -361,6 +462,9 @@ async function buildCandidate({ workspace, provider, signal, onPhase }) {
   try {
     const candidates = await buildLiveDeploymentCandidates({
       workspace: temporary,
+      timerDelayMs,
+      artifactDir,
+      expectedCommit,
       provider,
       signal,
       onPhase,
@@ -555,12 +659,56 @@ function applyReceipt(value, state) {
 }
 
 /**
+ * Wait for the next observation under wall-clock and monotonic bounds.
+ * @param {number} nextAt
+ * @param {Record<string, any>} [dependencies]
+ */
+export async function waitForLiveDeploymentSoakObservation(
+  nextAt,
+  dependencies = {},
+) {
+  const ports = /** @type {Record<string, any>} */ ({
+    wallNow: Date.now,
+    now: () => performance.now(),
+    wait: delay,
+    signal: undefined,
+    ...dependencies,
+  });
+  assert.ok(Number.isSafeInteger(nextAt));
+  let previous = ports.wallNow();
+  const remaining = Math.max(0, nextAt - previous);
+  assert.ok(remaining <= 900000, 'Soak wait exceeds one sampling interval.');
+  const deadline = ports.now() + remaining + 30000;
+  for (;;) {
+    ports.signal?.throwIfAborted();
+    const current = ports.wallNow();
+    assert.ok(
+      current >= previous,
+      'Soak observer clock moved backwards during its wait.',
+    );
+    previous = current;
+    if (current >= nextAt) return;
+    const monotonicRemaining = deadline - ports.now();
+    assert.ok(
+      monotonicRemaining > 0,
+      'Soak observation wait exceeded its monotonic deadline.',
+    );
+    await ports.wait(
+      Math.min(30000, nextAt - current, monotonicRemaining),
+      undefined,
+      { signal: ports.signal },
+    );
+  }
+}
+
+/**
  * Build, exercise, and clean up exactly one new provider deployment.
  * @param {Record<string, any>} options
  * @param {Record<string, any>} [dependencies]
  */
 export async function runLiveDeploymentAcceptance(options, dependencies = {}) {
-  if (!options.cleanup) {
+  assert.ok(!(options.cleanup && options.resume), 'Choose resume or cleanup.');
+  if (!options.cleanup && !options.resume) {
     parseLiveDeploymentArguments([
       '--provider',
       options.provider,
@@ -568,20 +716,31 @@ export async function runLiveDeploymentAcceptance(options, dependencies = {}) {
       options.placement,
       '--allow-ssh-from',
       options.allowedIpv4,
+      ...(options.soakHours === undefined
+        ? []
+        : ['--soak-hours', String(options.soakHours)]),
+      ...(options.step ? ['--step'] : []),
+      ...(options.artifactDir ? ['--artifact-dir', options.artifactDir] : []),
+      ...(options.expectedCommit
+        ? ['--expected-commit', options.expectedCommit]
+        : []),
     ]);
   }
   const requested = path.resolve(
     options.cleanup ??
+      options.resume ??
       options.outputDir ??
       path.join(REPO, '.wharfie/live-deployment', randomUUID()),
   );
-  if (!options.cleanup) ensureParentDirectories(path.dirname(requested));
-  const selected = options.cleanup
-    ? realpathSync(requested)
-    : path.join(
-        realpathSync(path.dirname(requested)),
-        path.basename(requested),
-      );
+  if (!options.cleanup && !options.resume)
+    ensureParentDirectories(path.dirname(requested));
+  const selected =
+    options.cleanup || options.resume
+      ? realpathSync(requested)
+      : path.join(
+          realpathSync(path.dirname(requested)),
+          path.basename(requested),
+        );
   // A distinct kernel lock prevents --cleanup racing a still-running acceptance
   // controller. It supplies exclusion only, never provider or journal authority.
   const lockId = `wsnd1_${createHash('sha256').update(`wharfie:live-deployment-run-lock:v1:${selected}`).digest('base64url')}`;
@@ -592,7 +751,11 @@ export async function runLiveDeploymentAcceptance(options, dependencies = {}) {
     return await runAcceptance(
       {
         ...options,
-        ...(options.cleanup ? { cleanup: selected } : { outputDir: selected }),
+        ...(options.cleanup
+          ? { cleanup: selected }
+          : options.resume
+            ? { resume: selected }
+            : { outputDir: selected }),
       },
       dependencies,
     );
@@ -617,6 +780,11 @@ async function runAcceptance(options, dependencies) {
     validateStatus: assertHealthyStatus,
     durability: verifyLiveDeploymentDurability,
     updates: createLiveDeploymentUpdateAcceptance,
+    soak: advanceLiveDeploymentSoak,
+    createSoak: createLiveDeploymentSoakCheckpoint,
+    validateSoak: validateLiveDeploymentSoakCheckpoint,
+    wallNow: Date.now,
+    now: () => performance.now(),
     wait: delay,
     log: (/** @type {Record<string, any>} */ event) =>
       process.stdout.write(`${JSON.stringify(event)}\n`),
@@ -626,8 +794,8 @@ async function runAcceptance(options, dependencies) {
   let state = /** @type {Record<string, any>} */ ({});
   let retirement = /** @type {Record<string, any>|null} */ (null);
   let runDir = '';
-  if (options.cleanup) {
-    runDir = realpathSync(options.cleanup);
+  if (options.cleanup || options.resume) {
+    runDir = realpathSync(options.cleanup ?? options.resume);
     assertPrivateDirectory(runDir);
     state = readJson(runDir, 'run.json');
     assert.equal(state.format, FORMAT);
@@ -645,6 +813,25 @@ async function runAcceptance(options, dependencies) {
     assert.ok(/^acceptance-[0-9a-f-]{36}$/.test(state.deploymentId));
     assert.equal(typeof state.applyAttempted, 'boolean');
     retirement = readRetirement(runDir, state);
+    if (options.resume) {
+      assert.ok(
+        state.soak && state.soak.startedAt !== null,
+        'Only an initialized soak can resume; use --cleanup for interrupted setup.',
+      );
+      assert.equal(retirement, null, 'This run is already retired.');
+      assert.ok(
+        !existsSync(path.join(runDir, 'failure.json')),
+        'A failed soak can only resume cleanup.',
+      );
+      assert.ok([900000, 172800000, 259200000].includes(state.soak.durationMs));
+      assert.equal(
+        state.soak.intervalMs,
+        state.soak.durationMs === 900000 ? 240000 : 900000,
+      );
+      assert.ok(
+        Number.isSafeInteger(state.soak.startedAt) && state.soak.startedAt > 0,
+      );
+    }
     if (
       retirement === null &&
       lstatSync(path.join(runDir, 'workspace'), { throwIfNoEntry: false }) ===
@@ -669,6 +856,14 @@ async function runAcceptance(options, dependencies) {
       options.placement,
       '--allow-ssh-from',
       options.allowedIpv4,
+      ...(options.soakHours === undefined
+        ? []
+        : ['--soak-hours', String(options.soakHours)]),
+      ...(options.step ? ['--step'] : []),
+      ...(options.artifactDir ? ['--artifact-dir', options.artifactDir] : []),
+      ...(options.expectedCommit
+        ? ['--expected-commit', options.expectedCommit]
+        : []),
     ]);
     const runId = randomUUID();
     const requested =
@@ -693,6 +888,15 @@ async function runAcceptance(options, dependencies) {
       guestRevisionId: null,
       artifactRecord: null,
       applyAttempted: false,
+      ...(options.soakHours === undefined
+        ? {}
+        : {
+            soak: {
+              durationMs: options.soakHours * 3600000,
+              intervalMs: options.soakHours === 0.25 ? 240000 : 900000,
+              startedAt: null,
+            },
+          }),
     };
     writeJson(runDir, 'run.json', state);
   }
@@ -716,6 +920,7 @@ async function runAcceptance(options, dependencies) {
     }
   );
   let workspaceRemoved = false;
+  let pendingSoak = false;
   let currentPhase = 'preflight';
   let phaseStarted = started;
   /**
@@ -730,6 +935,7 @@ async function runAcceptance(options, dependencies) {
     ports.log({ phase: name, state: 'started', runDir });
     try {
       const result = await action();
+      if (phases.length >= 128) phases.shift();
       phases.push({
         phase: name,
         durationMs: Math.round(performance.now() - startedAt),
@@ -737,6 +943,7 @@ async function runAcceptance(options, dependencies) {
       });
       return result;
     } catch (error) {
+      if (phases.length >= 128) phases.shift();
       phases.push({
         ...liveDeploymentFailureDiagnostic(
           name,
@@ -795,10 +1002,13 @@ async function runAcceptance(options, dependencies) {
     dataRoot,
   ];
   try {
-    if (!options.cleanup) {
+    if (!options.cleanup && !options.resume) {
       const candidate = await phase('package', () =>
         ports.build({
           workspace,
+          ...(state.soak ? { timerDelayMs: 1000 } : {}),
+          artifactDir: options.artifactDir,
+          expectedCommit: options.expectedCommit,
           provider: state.provider,
           signal: options.signal,
           onPhase: (/** @type {Record<string, any>} */ event) =>
@@ -807,12 +1017,17 @@ async function runAcceptance(options, dependencies) {
       );
       assert.equal(candidate.appId, APP_ID);
       state.artifactRecord = candidate.artifactRecord;
+      if (candidate.packageSource)
+        state.packageSource = candidate.packageSource;
       assert.equal(candidate.next.appId, APP_ID);
       assert.notEqual(candidate.next.revisionId, candidate.revisionId);
       state.nextRelease = { artifactRecord: candidate.next.artifactRecord };
       writeJson(runDir, 'run.json', state);
       writeJson(runDir, 'package.json', {
         packageVersion: candidate.packageVersion,
+        ...(candidate.packageSource
+          ? { packageSource: candidate.packageSource }
+          : {}),
         artifactRecord: candidate.artifactRecord,
         nextArtifactRecord: candidate.next.artifactRecord,
       });
@@ -898,6 +1113,7 @@ async function runAcceptance(options, dependencies) {
       });
       await phase('prepare-apply', async () => {
         // Persist the selected identity and possible cloud mutation BEFORE spawning apply.
+        if (state.soak) state.soak.provisionAttemptAt = ports.wallNow();
         state.applyAttempted = true;
         cleanup = { status: 'unknown' };
         writeJson(runDir, 'run.json', state);
@@ -964,43 +1180,107 @@ async function runAcceptance(options, dependencies) {
         );
         writeJson(runDir, 'fresh-controller.json', next);
       });
-      const updates = await ports.updates({
-        state,
-        journal: first.journal,
-        dataRoot,
-        runDir,
-        workspace,
-        env: environment,
-        signal: options.signal,
-        phase,
-        command: (
-          /** @type {string} */ release,
-          /** @type {string} */ name,
-          /** @type {string[]} */ args,
-          /** @type {number} */ timeoutMs,
-        ) => command(name, args, timeoutMs, false, release),
-        readJournal: () => ports.readJournal(state, dataRoot),
-        validateStatus: ports.validateStatus,
-        verifyExecutable: ports.verifyExecutable,
-        receipt: (/** @type {string} */ name, /** @type {unknown} */ value) =>
-          writeJson(runDir, name, value),
-      });
-      const proof = await phase('durability', () =>
-        ports.durability({
+      if (state.soak) {
+        state.soak.startedAt = ports.wallNow();
+        writeJson(runDir, 'run.json', state);
+        writeJson(
+          runDir,
+          'soak.json',
+          ports.createSoak({ state, ...state.soak, timerDelayMs: 1000 }),
+          { compact: true },
+        );
+      } else {
+        const updates = await ports.updates({
           state,
           journal: first.journal,
           dataRoot,
           runDir,
+          workspace,
           env: environment,
           signal: options.signal,
-          command,
           phase,
-          onWaiting: updates.whileWaiting,
-          /** @param {string} name @param {unknown} value */
-          receipt: (name, value) => writeJson(runDir, name, value),
-        }),
-      );
-      await phase('release-updates', () => updates.afterDurability(proof));
+          command: (
+            /** @type {string} */ release,
+            /** @type {string} */ name,
+            /** @type {string[]} */ args,
+            /** @type {number} */ timeoutMs,
+          ) => command(name, args, timeoutMs, false, release),
+          readJournal: () => ports.readJournal(state, dataRoot),
+          validateStatus: ports.validateStatus,
+          verifyExecutable: ports.verifyExecutable,
+          receipt: (/** @type {string} */ name, /** @type {unknown} */ value) =>
+            writeJson(runDir, name, value),
+        });
+        const proof = await phase('durability', () =>
+          ports.durability({
+            state,
+            journal: first.journal,
+            dataRoot,
+            runDir,
+            env: environment,
+            signal: options.signal,
+            command,
+            phase,
+            onWaiting: updates.whileWaiting,
+            /** @param {string} name @param {unknown} value */
+            receipt: (
+              /** @type {string} */ name,
+              /** @type {unknown} */ value,
+            ) => writeJson(runDir, name, value),
+          }),
+        );
+        await phase('release-updates', () => updates.afterDurability(proof));
+      }
+    }
+    if (state.soak && !options.cleanup) {
+      await phase('soak-authority', async () => {
+        await ports.verifyExecutable(executable, state.artifactRecord);
+        const checkpoint = readJson(runDir, 'soak.json');
+        ports.validateSoak(checkpoint, state);
+        assert.equal(checkpoint.startedAt, state.soak.startedAt);
+        assert.equal(checkpoint.intervalMs, state.soak.intervalMs);
+        assert.equal(checkpoint.timerDelayMs, 1000);
+        assert.equal(
+          checkpoint.endAt,
+          state.soak.startedAt + state.soak.durationMs,
+        );
+      });
+      do {
+        options.signal?.throwIfAborted();
+        const result = await phase('soak-observation', async () =>
+          ports.soak({
+            state,
+            journal: await ports.readJournal(state, dataRoot),
+            dataRoot,
+            env: environment,
+            signal: options.signal,
+            command,
+            phase,
+            checkpoint: readJson(runDir, 'soak.json'),
+            saveCheckpoint: (/** @type {Record<string, any>} */ checkpoint) =>
+              writeJson(runDir, 'soak.json', checkpoint, { compact: true }),
+            receipt: (
+              /** @type {string} */ name,
+              /** @type {unknown} */ value,
+            ) => writeJson(runDir, name, value),
+          }),
+        );
+        options.signal?.throwIfAborted();
+        writeJson(runDir, 'soak.json', result.checkpoint, { compact: true });
+        if (result.complete) break;
+        if (options.step) {
+          pendingSoak = true;
+          break;
+        }
+        await phase('soak-wait', () =>
+          waitForLiveDeploymentSoakObservation(result.nextAt, {
+            wallNow: ports.wallNow,
+            now: ports.now,
+            wait: ports.wait,
+            signal: options.signal,
+          }),
+        );
+      } while (true);
     }
   } catch (error) {
     failure = liveDeploymentFailureDiagnostic(
@@ -1008,6 +1288,42 @@ async function runAcceptance(options, dependencies) {
       performance.now() - phaseStarted,
       error,
     );
+  }
+  if (pendingSoak && failure === null) {
+    try {
+      options.signal?.throwIfAborted();
+      const report = {
+        format: FORMAT,
+        mode: 'soak',
+        provider: state.provider,
+        status: 'running',
+        durationMs: Math.round(performance.now() - started),
+        failure: null,
+        cleanup,
+        workspaceRemoved: false,
+        phases,
+      };
+      writeJson(runDir, 'report.json', report);
+      ports.log({
+        status: 'running',
+        runDir,
+        endAt: state.soak.startedAt + state.soak.durationMs,
+      });
+      return { runDir, ...report };
+    } catch (error) {
+      failure = liveDeploymentFailureDiagnostic(
+        'soak-checkpoint-report',
+        performance.now() - started,
+        error,
+      );
+    }
+  }
+  if (failure !== null && state.soak) {
+    try {
+      writeJson(runDir, 'failure.json', failure);
+    } catch {
+      /* Cleanup still runs when diagnostic storage is unavailable. */
+    }
   }
   // Always run journal-directed destruction, including a lost/failed apply response.
   try {
@@ -1098,7 +1414,7 @@ async function runAcceptance(options, dependencies) {
   }
   const report = {
     format: FORMAT,
-    mode: options.cleanup ? 'cleanup' : 'acceptance',
+    mode: options.cleanup ? 'cleanup' : state.soak ? 'soak' : 'acceptance',
     provider: state.provider,
     status: failure === null && workspaceRemoved ? 'passed' : 'failed',
     durationMs: Math.round(performance.now() - started),
@@ -1133,7 +1449,8 @@ if (
           ...options,
           signal: controller.signal,
         });
-        if (result.status !== 'passed') process.exitCode = 1;
+        if (!['passed', 'running'].includes(result.status))
+          process.exitCode = 1;
       } finally {
         process.removeListener('SIGINT', stop);
         process.removeListener('SIGTERM', stop);

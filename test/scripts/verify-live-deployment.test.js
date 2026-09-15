@@ -24,6 +24,7 @@ import {
   liveDeploymentFailureDiagnostic,
   parseLiveDeploymentArguments,
   runLiveDeploymentAcceptance,
+  waitForLiveDeploymentSoakObservation,
 } from '../../scripts/verify-live-deployment.js';
 
 /** @type {string[]} */
@@ -387,6 +388,7 @@ function fixture(settings = {}) {
     validatePreview: (value) => value,
     /** @param {Record<string, any>} value */
     validateStatus: (value) => value,
+    ...(settings.soakPorts ?? {}),
     wait: async () => {
       events.push('wait');
     },
@@ -1131,4 +1133,421 @@ describe('controller credential selection', () => {
       },
     );
   });
+});
+
+describe('resumable bounded soak orchestration', () => {
+  /** @param {Record<string, any>} [changes] */
+  function soakFixture(changes = {}) {
+    let complete = false;
+    const ticks = /** @type {Record<string, any>[]} */ ([]);
+    const setup = fixture({
+      options: { soakHours: 0.25, step: true },
+      soakPorts: {
+        wallNow: () => 1800000000000,
+        createSoak: (
+          /** @type {Record<string, any>} */ { startedAt, durationMs },
+        ) => ({
+          startedAt,
+          endAt: startedAt + durationMs,
+          sequence: 0,
+          intervalMs: 240000,
+          timerDelayMs: 1000,
+        }),
+        validateSoak: (/** @type {Record<string, any>} */ checkpoint) => {
+          expect(checkpoint.sequence).toBeGreaterThanOrEqual(0);
+        },
+        soak: async (/** @type {Record<string, any>} */ request) => {
+          ticks.push(structuredClone(request.checkpoint));
+          if (changes.failSoak) throw commandFailure();
+          const checkpoint = {
+            ...request.checkpoint,
+            sequence: request.checkpoint.sequence + 1,
+          };
+          request.saveCheckpoint(checkpoint);
+          changes.abortAfterTick?.abort();
+          return {
+            checkpoint,
+            complete,
+            nextAt: checkpoint.startedAt + 240000,
+          };
+        },
+      },
+      ...changes,
+    });
+    return {
+      ...setup,
+      ticks,
+      complete: () => {
+        complete = true;
+      },
+    };
+  }
+
+  test('step retains exact authority, resume skips provisioning, final completion destroys and audits', async () => {
+    const setup = soakFixture();
+    expect(await setup.run()).toMatchObject({
+      mode: 'soak',
+      status: 'running',
+      workspaceRemoved: false,
+    });
+    const state = JSON.parse(
+      readFileSync(path.join(setup.runDir, 'run.json'), 'utf8'),
+    );
+    expect(state.soak).toEqual({
+      durationMs: 900000,
+      intervalMs: 240000,
+      startedAt: 1800000000000,
+      provisionAttemptAt: 1800000000000,
+    });
+    expect(setup.events).not.toContain('durability');
+    expect(setup.events).not.toContain('updates-prepared');
+    expect(
+      setup.commands.filter((call) => call.phase === 'destroy'),
+    ).toHaveLength(0);
+    const before = setup.commands.length;
+    setup.complete();
+    expect(
+      await runLiveDeploymentAcceptance({ resume: setup.runDir }, setup.ports),
+    ).toMatchObject({
+      mode: 'soak',
+      status: 'passed',
+      workspaceRemoved: true,
+      cleanup: { status: 'absent' },
+    });
+    expect(setup.buildCount()).toBe(1);
+    expect(setup.commands.slice(before).map((call) => call.phase)).toEqual([
+      'destroy',
+    ]);
+    expect(setup.ticks.map((tick) => tick.sequence)).toEqual([0, 1]);
+    expect(setup.ticks[1].startedAt).toBe(setup.ticks[0].startedAt);
+    expect(setup.releasedWorkspaceExists).toEqual([true, false]);
+    expect(setup.lockIds[0]).toBe(setup.lockIds[1]);
+  });
+
+  test('cancellation during checkpoint save destroys instead of returning a retained host', async () => {
+    const abortAfterTick = new AbortController();
+    const setup = soakFixture({ abortAfterTick });
+    const result = await runLiveDeploymentAcceptance(
+      { ...setup.options, signal: abortAfterTick.signal },
+      setup.ports,
+    );
+    expect(result).toMatchObject({
+      status: 'failed',
+      workspaceRemoved: true,
+      cleanup: { status: 'absent' },
+    });
+    expect(setup.events).toContain('audit');
+  });
+
+  test('a failed pending progress report cannot skip host cleanup', async () => {
+    const setup = soakFixture();
+    const log = setup.ports.log;
+    setup.ports.log = (/** @type {Record<string, any>} */ event) => {
+      if (event.status === 'running') throw commandFailure();
+      log(event);
+    };
+    expect(await setup.run()).toMatchObject({
+      status: 'failed',
+      workspaceRemoved: true,
+      failure: { phase: 'soak-checkpoint-report' },
+      cleanup: { status: 'absent' },
+    });
+    expect(setup.events).toContain('audit');
+  });
+
+  test('a missing checkpoint after initialized authority still cleans up', async () => {
+    const setup = soakFixture();
+    await setup.run();
+    rmSync(path.join(setup.runDir, 'soak.json'));
+    expect(
+      await runLiveDeploymentAcceptance({ resume: setup.runDir }, setup.ports),
+    ).toMatchObject({
+      status: 'failed',
+      workspaceRemoved: true,
+      cleanup: { status: 'absent' },
+    });
+    expect(setup.ticks).toHaveLength(1);
+  });
+
+  test.each(['intervalMs', 'timerDelayMs'])(
+    'a changed %s cannot weaken the resumed methodology',
+    async (field) => {
+      const setup = soakFixture();
+      await setup.run();
+      const file = path.join(setup.runDir, 'soak.json');
+      const checkpoint = JSON.parse(readFileSync(file, 'utf8'));
+      checkpoint[field]++;
+      writeFileSync(file, JSON.stringify(checkpoint));
+      expect(
+        await runLiveDeploymentAcceptance(
+          { resume: setup.runDir },
+          setup.ports,
+        ),
+      ).toMatchObject({
+        status: 'failed',
+        workspaceRemoved: true,
+        failure: { phase: 'soak-authority' },
+      });
+      expect(setup.ticks).toHaveLength(1);
+    },
+  );
+
+  test('an older rehearsal refuses new observations but retains cleanup authority', async () => {
+    const setup = soakFixture();
+    await setup.run();
+    for (const name of ['run.json', 'soak.json']) {
+      const file = path.join(setup.runDir, name);
+      const retained = JSON.parse(readFileSync(file, 'utf8'));
+      (name === 'run.json' ? retained.soak : retained).intervalMs = 120000;
+      writeFileSync(file, JSON.stringify(retained));
+    }
+    await expect(
+      runLiveDeploymentAcceptance({ resume: setup.runDir }, setup.ports),
+    ).rejects.toThrow();
+    expect(setup.ticks).toHaveLength(1);
+    expect(existsSync(path.join(setup.runDir, 'workspace'))).toBe(true);
+    expect(
+      await runLiveDeploymentAcceptance({ cleanup: setup.runDir }, setup.ports),
+    ).toMatchObject({
+      status: 'passed',
+      workspaceRemoved: true,
+      cleanup: { status: 'absent' },
+    });
+    expect(setup.ticks).toHaveLength(1);
+    expect(setup.buildCount()).toBe(1);
+  });
+
+  test('a failure retains diagnostic and still independently cleans the host', async () => {
+    const setup = soakFixture({ failSoak: true });
+    expect(await setup.run()).toMatchObject({
+      status: 'failed',
+      workspaceRemoved: true,
+      cleanup: { status: 'absent' },
+    });
+    expect(existsSync(path.join(setup.runDir, 'failure.json'))).toBe(true);
+    const failure = readFileSync(
+      path.join(setup.runDir, 'failure.json'),
+      'utf8',
+    );
+    expect(failure).not.toContain(SECRET);
+    expect(setup.events).toContain('audit');
+  });
+
+  test('a changed deadline fails before another tick and triggers owned cleanup', async () => {
+    const setup = soakFixture();
+    await setup.run();
+    const checkpointFile = path.join(setup.runDir, 'soak.json');
+    const checkpoint = JSON.parse(readFileSync(checkpointFile, 'utf8'));
+    checkpoint.endAt++;
+    writeFileSync(checkpointFile, JSON.stringify(checkpoint));
+    const report = await runLiveDeploymentAcceptance(
+      { resume: setup.runDir },
+      setup.ports,
+    );
+    expect(report).toMatchObject({
+      status: 'failed',
+      workspaceRemoved: true,
+      failure: { phase: 'soak-authority' },
+    });
+    expect(setup.ticks).toHaveLength(1);
+  });
+
+  test('explicit cleanup after a step skips the workload and retires the workspace', async () => {
+    const setup = soakFixture();
+    await setup.run();
+    expect(
+      await runLiveDeploymentAcceptance({ cleanup: setup.runDir }, setup.ports),
+    ).toMatchObject({
+      status: 'passed',
+      mode: 'cleanup',
+      workspaceRemoved: true,
+    });
+    expect(setup.ticks).toHaveLength(1);
+  });
+
+  test('resume refuses a recorded failure and preserves cleanup authority', async () => {
+    const setup = soakFixture();
+    await setup.run();
+    writeFileSync(path.join(setup.runDir, 'failure.json'), '{}');
+    await expect(
+      runLiveDeploymentAcceptance({ resume: setup.runDir }, setup.ports),
+    ).rejects.toThrow('failed soak');
+    expect(existsSync(setup.workspace)).toBe(true);
+    expect(setup.ticks).toHaveLength(1);
+  });
+
+  test.each(['NaN', '0', '-1', '96', '72.0', '0.5'])(
+    'rejects invalid duration %s before creating resources',
+    (hours) => {
+      expect(() =>
+        parseLiveDeploymentArguments([
+          '--provider',
+          'hetzner',
+          '--location',
+          'fsn1',
+          '--allow-ssh-from',
+          '203.0.113.42/32',
+          '--soak-hours',
+          hours,
+        ]),
+      ).toThrow();
+    },
+  );
+
+  test.each([
+    ['--resume', './run', '--provider', 'aws'],
+    ['--cleanup', './run', '--step'],
+    ['--resume', './run', '--soak-hours', '72'],
+    ['--resume', './run', '--step', '--step'],
+  ])('refuses selectors conflicting with retained authority %j', (...args) => {
+    expect(() => parseLiveDeploymentArguments(args)).toThrow();
+  });
+
+  test('accepts explicit resume-step and pinned release assets', () => {
+    expect(
+      parseLiveDeploymentArguments(['--resume', './run', '--step']),
+    ).toEqual({ resume: path.resolve('./run'), step: true });
+    expect(
+      parseLiveDeploymentArguments([
+        '--provider',
+        'aws',
+        '--region',
+        'us-east-2',
+        '--allow-ssh-from',
+        '203.0.113.42/32',
+        '--soak-hours',
+        '72',
+        '--artifact-dir',
+        '/tmp/assets',
+        '--expected-commit',
+        'a'.repeat(40),
+      ]),
+    ).toMatchObject({
+      soakHours: 72,
+      artifactDir: '/tmp/assets',
+      expectedCommit: 'a'.repeat(40),
+    });
+  });
+});
+
+test.each(['artifact-upload-failed', 'service-convergence-failed'])(
+  'activation diagnostics retain the fixed %s category without raw output',
+  (activationFaultCode) => {
+    const diagnostic = liveDeploymentFailureDiagnostic('apply', 662498, {
+      diagnostic: {
+        command: '/private/app',
+        status: 1,
+        activationFaultCode,
+        stdout: SECRET,
+        stderr: SECRET,
+      },
+    });
+    expect(diagnostic).toMatchObject({
+      phase: 'apply',
+      command: 'packaged-app',
+      status: 1,
+      activationFaultCode,
+      timedOut: false,
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain(SECRET);
+    expect(
+      liveDeploymentFailureDiagnostic('apply', 1, {
+        diagnostic: { activationFaultCode: SECRET },
+      }),
+    ).not.toHaveProperty('activationFaultCode');
+  },
+);
+
+test('soak diagnostics retain fixed categories while rejecting arbitrary host output', () => {
+  const diagnostic = liveDeploymentFailureDiagnostic('soak-observation', 100, {
+    diagnostic: {
+      soakFaultStage: 'resources',
+      soakFaultCode: 'assertion',
+      hostFaultStage: 'observe-process',
+      hostFaultCode: 'command-failed',
+      stdout: SECRET,
+      stderr: SECRET,
+    },
+  });
+  expect(diagnostic).toMatchObject({
+    soakFaultStage: 'resources',
+    soakFaultCode: 'assertion',
+    hostFaultStage: 'observe-process',
+    hostFaultCode: 'command-failed',
+  });
+  const unsafe = liveDeploymentFailureDiagnostic('soak-observation', 100, {
+    diagnostic: {
+      soakFaultStage: SECRET,
+      soakFaultCode: SECRET,
+      hostFaultStage: SECRET,
+      hostFaultCode: SECRET,
+    },
+  });
+  expect(JSON.stringify([diagnostic, unsafe])).not.toContain(SECRET);
+  expect(unsafe).not.toHaveProperty('soakFaultStage');
+  expect(unsafe).not.toHaveProperty('hostFaultStage');
+});
+
+test('soak diagnostics retain only allowlisted bounded numeric measurements', () => {
+  const measurements = {
+    soakObservedMs: 300001,
+    soakLimitMs: 300000,
+    soakObservedBytes: 268435457,
+    soakLimitBytes: 268435456,
+  };
+  expect(
+    liveDeploymentFailureDiagnostic('soak-resources', 100, {
+      diagnostic: { ...measurements, arbitraryMeasurement: 1 },
+    }),
+  ).toEqual(expect.objectContaining(measurements));
+  for (const unsafe of [
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+    '300000',
+    { value: SECRET },
+  ]) {
+    const diagnostic = liveDeploymentFailureDiagnostic('soak-resources', 100, {
+      diagnostic: {
+        ...Object.fromEntries(
+          Object.keys(measurements).map((key) => [key, unsafe]),
+        ),
+        arbitraryMeasurement: 1,
+        stdout: SECRET,
+      },
+    });
+    for (const key of [...Object.keys(measurements), 'arbitraryMeasurement']) {
+      expect(diagnostic).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(diagnostic)).not.toContain(SECRET);
+  }
+});
+
+test('soak waits reject a backwards wall clock without extending the duration', async () => {
+  let wall = 1800000000000;
+  await expect(
+    waitForLiveDeploymentSoakObservation(wall + 10000, {
+      wallNow: () => wall,
+      now: () => 0,
+      wait: async () => {
+        wall--;
+      },
+    }),
+  ).rejects.toThrow('clock moved backwards');
+});
+
+test('soak waits terminate under a frozen wall clock using monotonic time', async () => {
+  const wall = 1800000000000;
+  let monotonic = 0;
+  await expect(
+    waitForLiveDeploymentSoakObservation(wall + 10000, {
+      wallNow: () => wall,
+      now: () => monotonic,
+      wait: async () => {
+        monotonic += 10000;
+      },
+    }),
+  ).rejects.toThrow('monotonic deadline');
 });
