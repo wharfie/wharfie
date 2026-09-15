@@ -301,7 +301,10 @@ describe('docs command surface', () => {
     expect(installationDoc).toContain('npm ci');
     expect(installationDoc).toContain('node ./bin/wharfie --help');
     expect(installationDoc).toMatch(/standalone builder\s+binary/u);
-    expect(installationDoc).toContain('release-ready binary installer');
+    expect(installationDoc).toContain(
+      'npm install --save-dev @wharfie/wharfie@0.0.15',
+    );
+    expect(installationDoc).toContain('not ready for production use');
     expect(installationDoc).not.toContain('releases/latest');
     expect(installationDoc).not.toContain('install.sh');
     expect(installationDoc).not.toContain('install.ps1');
@@ -488,7 +491,6 @@ describe('docs command surface', () => {
     const documents = await Promise.all(
       [
         'README.md',
-        'docs/README.md',
         'docs/guides/quickstart.md',
         'src/cli/README.md',
         'docs/architecture/decisions/0030-versioned-application-package-receipt.md',
@@ -506,7 +508,7 @@ describe('docs command surface', () => {
       );
     }
 
-    const quickstart = documents[2];
+    const quickstart = documents[1];
     expect(quickstart).toContain(
       'wharfie app package ./path/to/app --target linux-x64',
     );
@@ -930,7 +932,6 @@ describe('docs command surface', () => {
     const documents = await Promise.all(
       [
         'README.md',
-        'docs/README.md',
         'docs/guides/quickstart.md',
         'docs/guides/application-structure.md',
         'src/cli/README.md',
@@ -958,7 +959,7 @@ describe('docs command surface', () => {
       expect(document).toContain('schema-v8');
     }
 
-    const quickstart = documents[2];
+    const quickstart = documents[1];
     expect(quickstart).toContain('schema-v8 redacted run view');
     expect(quickstart).toContain('reused: true');
     expect(quickstart).toContain('original uncertainty event');
