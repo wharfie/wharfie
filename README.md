@@ -14,9 +14,11 @@
 
 Wharfie is a local-first TypeScript application runtime that turns an ordinary CLI into a portable executable, then lets that same application become a durable, observable service across trusted machines without an architectural rewrite.
 
-Start with [build, share, and run a preview](docs/guides/recipient-preview.md):
+The published preview is [v0.0.15](https://github.com/wharfie/wharfie/releases/tag/v0.0.15),
+available on npm and as standalone downloads. Start with
+[build, share, and run a preview](docs/guides/recipient-preview.md):
 
-1. Install one exact candidate in a fresh project and run the starter as a CLI.
+1. Install v0.0.15 in a fresh project and run the starter as a CLI.
 2. Package it and share the executable for the recipient's platform.
 3. Install its persistent service on a Linux server, close the submitting
    controller, and reconnect to inspect the same durable work.
@@ -29,11 +31,12 @@ multi-node failover are outside this preview's persistence promise.
 
 Use the [minimal hello-world starter](examples/hello-world/README.md) to learn
 `defineApp({ id, main })`, or the [steady-file guide](docs/guides/golden-path.md)
-for the complete application and operator model. Preview release downloads must
-include `preview-release.json`; older releases belong to the retired product.
-The [release workflow](docs/guides/preview-release.md) distinguishes locally
-tested candidates, authenticated draft downloads, and publicly obtainable bytes.
-Candidate CI alone is not proof that a preview has been published.
+for the complete application and operator model. Verify builder release downloads
+against their `preview-release.json` and `SHA256SUMS`. Share each generated app
+with its `.artifact.json` record and transfer checksums, as the handoff guide
+shows. The [release workflow](docs/guides/preview-release.md) documents the
+publication checks. Share results through the
+[preview feedback form](https://github.com/wharfie/wharfie/issues/new?template=preview-feedback.yml).
 
 Inside a packaged application, normal argv belongs to the application. Wharfie
 reserves only `<app> wharfie <command>` for operator commands; internal service

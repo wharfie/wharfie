@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Build a TypeScript CLI, share a portable executable, and run it persistently on a trusted Linux server. Try the Wharfie v0.0.15 preview."
+    />
+    <meta name="color-scheme" content="light" />
+    <title>Wharfie — from a CLI to a persistent service</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #172f3c;
+        --muted: #435c67;
+        --paper: #f6f5ef;
+        --blue: #154e70;
+        --line: #cbd4d6;
+        --accent: #b45029;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        line-height: 1.6;
+      }
+      a {
+        color: var(--blue);
+        text-underline-offset: 0.2em;
+      }
+      a:hover {
+        text-decoration-thickness: 2px;
+      }
+      a:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 5px;
+        border-radius: 2px;
+      }
+      .wrap {
+        width: min(1080px, calc(100% - 48px));
+        margin-inline: auto;
+      }
+      .skip {
+        position: absolute;
+        left: 16px;
+        top: -100px;
+        padding: 10px 16px;
+        z-index: 1;
+        background: white;
+      }
+      .skip:focus {
+        top: 16px;
+      }
+      header {
+        border-bottom: 1px solid var(--line);
+      }
+      .header-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        padding-block: 23px;
+      }
+      .brand {
+        color: var(--ink);
+        text-decoration: none;
+        font-size: 1.5rem;
+        font-weight: 760;
+        letter-spacing: -0.055em;
+      }
+      .brand span {
+        display: inline-grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        margin-right: 10px;
+        border-radius: 8px 8px 3px 3px;
+        background: var(--ink);
+        color: var(--paper);
+        font-size: 1.1rem;
+        letter-spacing: -0.1em;
+      }
+      nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 25px;
+        font-size: 0.9rem;
+      }
+      nav a {
+        color: var(--muted);
+      }
+      .hero {
+        padding-block: 76px 65px;
+      }
+      .eyebrow {
+        color: var(--blue);
+        font-size: 0.82rem;
+        font-weight: 750;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .eyebrow a {
+        text-decoration: none;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 3px;
+      }
+      h1 {
+        max-width: 950px;
+        font-size: clamp(2.7rem, 6.4vw, 4.9rem);
+        font-weight: 740;
+        line-height: 1.09;
+        letter-spacing: -0.065em;
+        margin: 26px 0;
+      }
+      h1 span {
+        color: var(--blue);
+      }
+      .intro {
+        max-width: 640px;
+        margin: 0 0 30px;
+        font-size: 1.2rem;
+        color: var(--muted);
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 18px 25px;
+      }
+      .button {
+        display: inline-block;
+        padding: 13px 20px;
+        border: 1px solid var(--blue);
+        border-radius: 5px;
+        background: var(--blue);
+        color: white;
+        text-decoration: none;
+        font-weight: 650;
+      }
+      .button:hover {
+        background: var(--ink);
+      }
+      .note {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin: 18px 0 0;
+      }
+      .journey {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 28px;
+        border-block: 1px solid var(--line);
+        padding-block: 32px 35px;
+      }
+      .step {
+        color: var(--accent);
+        font-size: 0.78rem;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+      }
+      h2 {
+        font-size: 1.4rem;
+        line-height: 1.3;
+        letter-spacing: -0.025em;
+        margin: 10px 0;
+      }
+      .journey p {
+        color: var(--muted);
+        margin: 0;
+      }
+      .details {
+        display: grid;
+        grid-template-columns: 1.15fr 1fr;
+        gap: 70px;
+        padding-block: 52px 60px;
+      }
+      .details h2 {
+        margin-top: 0;
+      }
+      .details p,
+      .details li {
+        color: var(--muted);
+      }
+      .details ul {
+        padding-left: 21px;
+        margin: 18px 0 0;
+      }
+      .details li + li {
+        margin-top: 10px;
+      }
+      .feedback {
+        align-self: start;
+        border-left: 3px solid var(--accent);
+        padding-left: 25px;
+      }
+      .feedback p {
+        margin: 12px 0 18px;
+      }
+      footer {
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.85rem;
+        padding-block: 22px 30px;
+      }
+      footer p {
+        margin: 0;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+        overflow-wrap: anywhere;
+      }
+      @media (max-width: 700px) {
+        .wrap {
+          width: calc(100% - 36px);
+        }
+        .hero {
+          padding-block: 45px 40px;
+        }
+        .journey,
+        .details {
+          grid-template-columns: 1fr;
+          gap: 26px;
+        }
+        .journey {
+          padding-block: 27px;
+        }
+        .details {
+          padding-block: 35px 40px;
+        }
+        .intro {
+          font-size: 1.1rem;
+        }
+        .header-inner {
+          gap: 15px;
+        }
+        nav {
+          gap: 10px 16px;
+        }
+      }
+      @media (max-width: 390px) {
+        .header-inner {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header>
+      <div class="wrap header-inner">
+        <a class="brand" href="./" aria-label="Wharfie home"
+          ><span aria-hidden="true">w</span>Wharfie</a
+        >
+        <nav aria-label="Main navigation">
+          <a
+            href="https://github.com/wharfie/wharfie/blob/master/docs/README.md"
+            >Documentation</a
+          >
+          <a href="https://github.com/wharfie/wharfie">GitHub</a>
+        </nav>
+      </div>
+    </header>
+    <main id="main" class="wrap">
+      <section class="hero" aria-labelledby="headline">
+        <div class="eyebrow">
+          <a href="https://github.com/wharfie/wharfie/releases/tag/v0.0.15"
+            >v0.0.15 · Experimental preview</a
+          >
+        </div>
+        <h1 id="headline">
+          Write a CLI.<br />Share an executable.<br /><span
+            >Keep it running.</span
+          >
+        </h1>
+        <p class="intro">
+          Wharfie packages your TypeScript or JavaScript application into a
+          portable executable. Run it locally, share it with someone else, then
+          let a trusted Linux server keep the work moving.
+        </p>
+        <div class="actions">
+          <a
+            class="button"
+            href="https://github.com/wharfie/wharfie/blob/master/docs/guides/recipient-preview.md"
+            >Build, share, and run the preview</a
+          >
+          <a href="https://github.com/wharfie/wharfie/releases/tag/v0.0.15"
+            >Downloads &amp; checksums</a
+          >
+        </div>
+        <p class="note">
+          The builder uses Node. Your packaged application’s recipient does not
+          need it.
+        </p>
+      </section>
+      <section class="journey" aria-label="The preview journey">
+        <div>
+          <div class="step">01 / BUILD</div>
+          <h2>Start with an ordinary CLI</h2>
+          <p>
+            Use the included file-checking app, then package an executable for
+            your recipient’s platform.
+          </p>
+        </div>
+        <div>
+          <div class="step">02 / SHARE</div>
+          <h2>Hand over the application</h2>
+          <p>
+            Transfer the executable, its artifact record, and checksums. Run it
+            on a matching machine without your source tree.
+          </p>
+        </div>
+        <div>
+          <div class="step">03 / KEEP RUNNING</div>
+          <h2>Close the submitting shell</h2>
+          <p>
+            A resident service carries the work through a durable timer.
+            Reconnect to inspect the same run, then practice cleanup.
+          </p>
+        </div>
+      </section>
+      <section class="details" aria-label="Preview scope and feedback">
+        <div>
+          <h2>A preview with a defined scope</h2>
+          <p>
+            Try sample data on a disposable existing Linux server, AWS, or
+            Hetzner. The guide starts with Linux x64 glibc and a systemd user
+            service.
+          </p>
+          <ul>
+            <li>
+              Use trusted hosts. Breaking changes are expected; this is not a
+              production-ready release.
+            </li>
+            <li>
+              Crashes and reboots can require explicit
+              <a
+                href="https://github.com/wharfie/wharfie/blob/master/docs/guides/recipient-preview.md#run-on-the-recipient-and-keep-work-alive"
+                >coordinator recovery</a
+              >. Keep application data; cloud deployments also need their
+              controller journal and SSH authority.
+            </li>
+            <li>
+              Cloud destruction removes root-disk data. This preview does not
+              recover automatically from a lost disk.
+            </li>
+            <li>
+              Download and recipient checks have passed for v0.0.15. The full
+              72-hour soak and unfamiliar-tester acceptance are still pending.
+            </li>
+          </ul>
+        </div>
+        <aside class="feedback" aria-labelledby="feedback-title">
+          <h2 id="feedback-title">Tell us where you got to</h2>
+          <p>
+            Getting stuck is useful feedback too. The handoff ends with a short
+            worksheet: your platform, timings, last successful step, and
+            anything that needed explaining.
+          </p>
+          <p>
+            <a
+              href="https://github.com/wharfie/wharfie/issues/new?template=preview-feedback.yml"
+              >Share preview feedback</a
+            >
+          </p>
+          <a
+            href="https://github.com/wharfie/wharfie/blob/master/docs/guides/installation.md"
+            >Builder requirements and supported targets</a
+          >
+        </aside>
+      </section>
+    </main>
+    <footer>
+      <div class="wrap">
+        <p>
+          Wharfie v0.0.15 · Source
+          <a
+            href="https://github.com/wharfie/wharfie/commit/aae74e0de018fe340564c08c0c820ff590de1894"
+            ><code>aae74e0</code></a
+          >
+          ·
+          <a href="https://github.com/wharfie/wharfie/blob/master/LICENSE"
+            >Apache-2.0</a
+          >
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
