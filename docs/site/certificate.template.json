@@ -1,0 +1,22 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "DNS-validated certificate for the Wharfie documentation CloudFront hostname; deploy in the Wharfie AWS account in us-east-1.",
+  "Resources": {
+    "DocsCertificate": {
+      "Type": "AWS::CertificateManager::Certificate",
+      "Properties": {
+        "DomainName": "docs.wharfie.dev",
+        "ValidationMethod": "DNS",
+        "KeyAlgorithm": "RSA_2048",
+        "CertificateTransparencyLoggingPreference": "ENABLED",
+        "Tags": [
+          { "Key": "project", "Value": "wharfie" },
+          { "Key": "purpose", "Value": "public-docs" }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "CertificateArn": { "Value": { "Ref": "DocsCertificate" } }
+  }
+}

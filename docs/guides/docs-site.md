@@ -1,152 +1,240 @@
-# Publish the current documentation landing page
+# Publish the documentation landing page
 
-This is the publication plan for [docs/site/index.html](../site/index.html).
-The artifact is ready for local review. It has not been deployed by this PR.
-[Issue 137](https://github.com/wharfie/wharfie/issues/137) remains open until the
-public endpoint and legacy routes have been independently checked.
+Deploy [the landing page](../site/index.html) through private S3, CloudFront OAC, and a
+CloudFront Function. This manual AWS CLI runbook uses repository templates and local helpers; there is no CI deployment workflow.
+Staging verification passes; custom-domain publication remains pending. [Issue 137](https://github.com/wharfie/wharfie/issues/137) stays open until public acceptance and rollback records are complete.
 
-## Prepared artifact
+The fixed destination is AWS account `411430101559`, region `us-east-1`, stack
+`wharfie-docs`, bucket `wharfie-docs-411430101559-us-east-1`, and certificate stack
+`wharfie-docs-certificate`. The bucket blocks public access; its policy permits this distribution to read release HTML through signed [OAC requests](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html).
+CloudFront serves HTTPS and the function enforces this route contract:
 
-`docs/site/index.html` is a single HTML file with inline CSS. It needs no build,
-JavaScript, third-party fonts, package install, or runtime service. It links to
-one canonical repository journey,
-[Build, share, and run a preview](recipient-preview.md), and the exact
-[v0.0.15 release](https://github.com/wharfie/wharfie/releases/tag/v0.0.15).
-The repository guides remain the source of command examples.
+| Request                                                                | Response                                                               |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `/`, `/index.html`                                                     | `200`, exact reviewed HTML bytes.                                      |
+| `/install`, `/install/`, `/install.html`                               | `302` to the current [installation guide](installation.md).            |
+| `/quickstart`, `/quickstart/`, `/quickstart.html`                      | `302` to the [recipient guide](recipient-preview.md).                  |
+| `/project-structure`, `/project-structure/`, `/project-structure.html` | `302` to [application structure](application-structure.md).            |
+| `/install.sh`, `/install.ps1`                                          | `410`, plain text linking to current installation; no executable body. |
+| Every other accepted request path                                      | `404`, with a link to current documentation.                           |
+| Methods other than GET/HEAD                                            | `405`, `Allow: GET, HEAD`.                                             |
 
-Review it locally without publishing:
+Application HTTPS responses use `Cache-Control: no-store` and security headers. Redirects discard queries; unknown paths cannot reach arbitrary objects or the old origin.
+CloudFront can reject malformed paths with `400` before the function runs. The verifier checks 36 application routes and one explicit provider rejection (`/%2e%2e/install`), for 37 total checks; provider errors are outside the application header/body contract.
+
+## Prepare a reviewed bundle
+
+Use the repository-pinned Node.js `24.13.1`, AWS CLI v2 with a working `wharfie` login, and Cloudflare DNS access.
+Run blocks in one Bash session from a clean, reviewed checkout. Retain evidence privately outside Git; never commit credentials, emails, or DNS backups.
 
 ```bash
-python3 -m http.server 8765 --bind 127.0.0.1 --directory docs/site
+set -eu
+umask 077
+export AWS_PROFILE=wharfie AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1
+export AWS_DEFAULT_OUTPUT=json AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
+docs_account_guard() {
+  test "$(aws sts get-caller-identity --query Account --output text)" = 411430101559
+}
+docs_account_guard
+test -z "$(git status --porcelain --untracked-files=normal)"
+docs_run=$(mktemp -d "${TMPDIR:-/tmp}/wharfie-docs.XXXXXX")
+docs_bundle="$docs_run/bundle"
+docs_evidence="$docs_run/evidence"
+mkdir -m 700 "$docs_evidence"
+node scripts/prepare-docs-site.js --output-dir "$docs_bundle"
+docs_sha=$(node --input-type=module - "$docs_bundle" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const dir = process.argv[2];
+const m = JSON.parse(readFileSync(`${dir}/manifest.json`));
+assert.equal(m.git.dirty, false);
+assert.equal(m.contentSha256, m.files.find(f => f.name === 'index.html').sha256);
+for (const f of m.files) {
+  const bytes = readFileSync(`${dir}/${f.name}`);
+  assert.equal(bytes.length, f.size);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), f.sha256);
+}
+console.log(m.contentSha256);
+NODE
+)
+docs_bucket=wharfie-docs-411430101559-us-east-1
 ```
 
-Open `http://127.0.0.1:8765/`, check a narrow and wide viewport, tab through the
-links, and follow the guide and release links. Stop the server when finished.
-This review does not establish that any public URL changed.
+The bundle contains `manifest.json`, `index.html`, rendered `hosting.template.json`, `certificate.template.json`, and `parameters.json`. The manifest records Git provenance,
+file sizes/hashes, and `releases/<contentSha256>/index.html`. Retain accepted bundles.
+**Generated `parameters.json` is staging-only:** its empty hostname/certificate values
+would detach the production alias if reused in an update.
 
-## Current origin and remaining authority
+## Create staging and verify its object
 
-The proposed public entry point remains `https://docs.wharfie.dev/`. A fresh
-read on 2026-09-15 returned the retired v0.0.14 Athena/table documentation and
-links to removed installers. The maintainer confirmed that Cloudflare's `docs`
-record targets `docs.wharfie.dev.s3-website-us-west-2.amazonaws.com` and that the
-zone is currently managed through a personal Cloudflare account. Deployment
-access to that account has not yet been established.
+For an absent stack, create this change set; for an existing stack, inspect its outputs/parameters and use the update procedure. Guard the account before mutations.
 
-The removed historical deploy script targeted a bucket named
-`docs.wharfie.dev`, matching the confirmed website endpoint in `us-west-2`.
-The current repository contains no active docs deployment workflow. Public
-reads of the regional S3 endpoint succeed, but ownership checks have not
-identified the bucket's AWS account. The available Wharfie and personal AWS
-profiles have no verified authority to manage it. Cloudflare account ownership
-does not establish S3 bucket ownership or grant access to its contents.
+```bash
+docs_account_guard
+docs_change="docs-create-$(date -u +%Y%m%dT%H%M%SZ)"
+aws cloudformation create-change-set --stack-name wharfie-docs \
+  --change-set-name "$docs_change" --change-set-type CREATE \
+  --template-body "file://$docs_bundle/hosting.template.json" \
+  --parameters "file://$docs_bundle/parameters.json"
+aws cloudformation wait change-set-create-complete --stack-name wharfie-docs --change-set-name "$docs_change"
+aws cloudformation describe-change-set --stack-name wharfie-docs --change-set-name "$docs_change" > "$docs_evidence/create-change.json"
+```
 
-The proposed next hosting change is a replacement origin in a Wharfie-owned
-AWS account, with its deployment configuration kept in this repository. Stage
-and verify that origin before changing the `docs` record. The current DNS
-account can perform that scoped cutover; broader zone ownership changes are a
-separate task. Retiring the old bucket requires establishing its owner and
-verifying the replacement first.
+Review `create-change.json` and the template for the expected bucket, OAC, distribution, function, headers, and policy. Stop on unexpected changes.
 
-Before a publication change, record the actual owner and available operator
-access for:
+```bash
+docs_account_guard
+aws cloudformation execute-change-set --stack-name wharfie-docs --change-set-name "$docs_change"
+aws cloudformation wait stack-create-complete --stack-name wharfie-docs
+aws cloudformation describe-stacks --stack-name wharfie-docs > "$docs_evidence/staging-stack.json"
+docs_distribution=$(aws cloudformation describe-stacks --stack-name wharfie-docs --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue | [0]" --output text)
+docs_account_guard
+if ! aws s3api put-object --bucket "$docs_bucket" --key "releases/$docs_sha/index.html" \
+  --body "$docs_bundle/index.html" --content-type 'text/html; charset=utf-8' \
+  --cache-control no-store --if-none-match '*' --expected-bucket-owner 411430101559 \
+  > "$docs_evidence/upload.json" 2> "$docs_evidence/upload.err"; then
+  case "$(cat "$docs_evidence/upload.err")" in
+    *'(PreconditionFailed)'*) ;; # Existing immutable object: verify it below.
+    *) cat "$docs_evidence/upload.err" >&2; exit 1 ;;
+  esac
+fi
+aws s3api get-object --bucket "$docs_bucket" --key "releases/$docs_sha/index.html" \
+  --expected-bucket-owner 411430101559 "$docs_evidence/download.html" > "$docs_evidence/download.json"
+node --input-type=module - "$docs_evidence" "$docs_sha" <<'NODE'
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const [dir, sha] = process.argv.slice(2);
+assert.equal(createHash('sha256').update(readFileSync(`${dir}/download.html`)).digest('hex'), sha);
+const metadata = JSON.parse(readFileSync(`${dir}/download.json`));
+assert.equal(metadata.ContentType, 'text/html; charset=utf-8');
+assert.equal(metadata.CacheControl, 'no-store');
+NODE
+node scripts/verify-docs-site.js --url "https://$docs_distribution" \
+  --bundle-dir "$docs_bundle" --output "$docs_evidence/staging.json"
+```
 
-- The replacement origin: AWS account, bucket, region, and serving endpoint.
-- The Cloudflare zone and current DNS, origin, redirect, and cache rules.
-- The exact object keys and route rules this change will replace.
-- A named maintainer who can apply and roll back those changes.
+On [`412 PreconditionFailed`](https://docs.aws.amazon.com/cli/latest/reference/s3api/put-object.html), verify the existing object; never overwrite it. Different bytes or metadata stop publication.
+Initial staging can return `403` before its policy/object exist; require stack completion, readback, and **37 passing live verifier checks**.
+Validate function changes in the actual AWS runtime and repeat the live gate: Node tests alone do not establish CloudFront compatibility. Initial staging caught a default-parameter syntax error that passed Node checks.
+Inspect mobile/desktop rendering, keyboard navigation, and outgoing links.
 
-Record the selected serving mechanism and exact cutover commands in the
-hosting follow-up before deployment. A DNS CNAME alone is not a complete origin
-configuration: verify the incoming hostname, certificate, and route handling
-at the replacement endpoint. Until the cutover passes, send testers directly
-to the repository guide.
+## Validate the certificate and attach the hostname
 
-## Route map
+CloudFront requires the ACM certificate in [us-east-1](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cnames-and-https-procedures.html).
+Inspect `wharfie-docs-certificate` first; it may already be waiting for DNS. Execute
+the creation command below only when absent, after reviewing the bundled template.
 
-Apply these explicit routes at the established serving layer. During initial
-verification, use temporary redirects so a correction is not locked into a
-browser's permanent redirect cache. Query strings must not be forwarded to a
-different origin.
+```bash
+# First installation only, after confirming the certificate stack is absent:
+docs_account_guard
+aws cloudformation create-stack --stack-name wharfie-docs-certificate \
+  --template-body "file://$docs_bundle/certificate.template.json"
+# For either an existing or newly created stack, once its certificate appears:
+docs_certificate=$(aws cloudformation describe-stack-resources --stack-name wharfie-docs-certificate --query "StackResources[?LogicalResourceId=='DocsCertificate'].PhysicalResourceId | [0]" --output text)
+aws acm describe-certificate --certificate-arn "$docs_certificate" \
+  --query 'Certificate.DomainValidationOptions[].ResourceRecord'
+```
 
-This response contract needs a serving layer that can enforce every route.
-Replacing an S3 index object leaves other existing objects reachable; an
-[S3 error document](https://docs.aws.amazon.com/AmazonS3/latest/userguide/CustomErrorDocSupport.html)
-only handles requests that already fail. Cloudflare's ordinary
-[Single Redirects](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/settings/)
-return redirect statuses, so they do not implement the installer `410`
-responses below. Select and verify an explicit response handler before the
-cutover; unrecognized paths must never fall through to old origin content.
+Add the exact returned validation CNAME in Cloudflare as **DNS only**; retain it for
+renewal. After these waits, confirm ACM status `ISSUED`, domain `docs.wharfie.dev`, and
+ARN account `411430101559`/region `us-east-1`. Attach the alias with the content preserved:
 
-| Public request                                                         | Intended response                                                                                             |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `/` and `/index.html`                                                  | Serve the reviewed landing page as `text/html; charset=utf-8`.                                                |
-| `/install`, `/install/`, `/install.html`                               | Redirect to `https://github.com/wharfie/wharfie/blob/master/docs/guides/installation.md`.                     |
-| `/quickstart`, `/quickstart/`, `/quickstart.html`                      | Redirect to `https://github.com/wharfie/wharfie/blob/master/docs/guides/recipient-preview.md`.                |
-| `/project-structure`, `/project-structure/`, `/project-structure.html` | Redirect to `https://github.com/wharfie/wharfie/blob/master/docs/guides/application-structure.md`.            |
-| `/install.sh` and `/install.ps1`                                       | Return `410 Gone` as plain text, with a link to the current installation guide and no executable body.        |
-| Every other path on the retired docs host                              | Return a small `404` page linking to the new landing page; do not fall through to the retired origin content. |
+```bash
+aws acm wait certificate-validated --certificate-arn "$docs_certificate"
+aws cloudformation wait stack-create-complete --stack-name wharfie-docs-certificate
+docs_account_guard
+docs_change="docs-alias-$(date -u +%Y%m%dT%H%M%SZ)"
+aws cloudformation create-change-set --stack-name wharfie-docs --change-set-name "$docs_change" \
+  --change-set-type UPDATE --use-previous-template --parameters \
+  ParameterKey=ContentSha256,UsePreviousValue=true \
+  ParameterKey=CustomDomain,ParameterValue=docs.wharfie.dev \
+  ParameterKey=CertificateArn,ParameterValue="$docs_certificate"
+aws cloudformation wait change-set-create-complete --stack-name wharfie-docs --change-set-name "$docs_change"
+aws cloudformation describe-change-set --stack-name wharfie-docs --change-set-name "$docs_change" > "$docs_evidence/alias-change.json"
+```
 
-Inventory the current redirects and old installer link destinations before
-applying the map. The plan above controls only `docs.wharfie.dev`; any installer
-links on another hostname require that hostname's owner to retire them. URL
-fragments do not reach the server, so redirect each page to a useful guide
-without assuming the old fragment has a matching new section.
+Review `alias-change.json`, execute the exact change set with the guarded command
+above, and wait for `stack-update-complete`. Before changing public DNS, run:
 
-## Bounded publication and rollback
+```bash
+node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
+  --connect-host "$docs_distribution" --bundle-dir "$docs_bundle" \
+  --output "$docs_evidence/alias-before-dns.json"
+```
 
-1. Record the reviewed Git commit, SHA-256 of `docs/site/index.html`, and an
-   explicit deployment manifest containing only the objects and route rules
-   being changed. Read back and retain the current values, content types,
-   cache headers, and any origin/DNS configuration affected by the change.
-   Confirm those backups are readable before writing anything.
-2. Upload the landing page to a new, private staging key or preview host under
-   the confirmed authority. Compare its downloaded SHA-256 with the reviewed
-   file and inspect its rendered content. A staging key must not accidentally
-   become the default public page. Verify private S3 staging through an
-   authenticated read: an obscure key does not make a publicly readable object
-   private. [S3 website endpoints](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html)
-   serve public content over HTTP; the replacement endpoint must establish its
-   own verified HTTPS serving path.
-3. Publish only the manifest's exact keys and route rules. Serve HTML with a
-   short cache lifetime during the cutover. Purge only the affected public
-   URLs from the CDN, then check the responses below. Do not restore the old
-   broad-prefix S3 deletion script or use an unrestricted recursive sync.
-4. If checks fail, restore the backed-up exact objects and rules, invalidate
-   those same URLs, and independently verify rollback. If the previous page
-   would expose retired installation commands, prefer a prepared maintenance
-   page linking directly to the repository guide; record that choice before
-   the cutover. Avoid a partial rollback that leaves redirects and origin
-   objects pointing at different documentation generations.
-5. Retain the deployment manifest, before/after hashes, response evidence, and
-   rollback location with the issue. Remove only the explicitly recorded
-   staging object once the cutover is accepted.
+`--connect-host` changes only the connection destination; verified TLS, SNI, and HTTP Host use `docs.wharfie.dev`. Public DNS remains unchanged.
 
-The final origin-specific commands belong in a reviewed follow-up once the
-actual account, bucket, and CDN controls are established. This plan grants no
-new account access and changes no hosting resources.
+## Cut over the existing Cloudflare record
 
-## Independent public acceptance
+Before cutover, merge [PR 169](https://github.com/wharfie/wharfie/pull/169) and check its public guide and feedback links: the landing page targets `master`, where the new `preview-feedback.yml` form was still absent during staging. Confirm the revised recipient and installation guides are visible too.
+Prepare the clean committed release bundle and compare its HTML and rendered hosting-template hashes with the verified staging bundle; restage and reverify any changed artifact.
 
-From a fresh client outside the publisher's session, GET the root and every
-route in the map. Retain status, redirect location, content type, and final URL;
-verify redirects do not preserve a sample query string. Check both ordinary
-requests and a cache-busting request, with redirects followed separately so
-the initial response remains visible.
+The zone is managed in a personal Cloudflare account. Its existing `docs` CNAME targets
+`docs.wharfie.dev.s3-website-us-west-2.amazonaws.com`; the old AWS bucket owner remains
+unknown. DNS ownership does not establish S3 ownership. Leave that bucket untouched
+and record existing Cloudflare redirect/cache rules.
 
-The root must identify the TypeScript CLI product and v0.0.15 preview, link to
-the current single handoff and exact release, and retain its preview limits.
-Its downloaded bytes must match the published artifact. The old tutorial
-paths must reach their mapped current guides. Both installer paths must return
-410 with no shell or PowerShell body, and an unknown path must return 404
-without serving retired content. Repeat the checks after the CDN's configured
-cache lifetime has elapsed.
+Privately back up the **exact DNS record**: ID, type, full name, target, proxy state,
+TTL, and other editable metadata. In Cloudflare's DNS dashboard update that record:
+type `CNAME`, name `docs`, target `$docs_distribution`, **DNS only** (`proxied: false`),
+TTL `300`. Save the resulting record and timestamp. Keep validation CNAMEs separate;
+leave other records and Cloudflare rules unchanged.
 
-Inspect the public page at mobile and desktop widths and with keyboard-only
-navigation. Check all outgoing links and the feedback form. Open its preview
-without submitting an issue. Record any checks that could not run rather than
-marking them successful.
+Check DNS with an independent resolver and allow the previous TTL to expire. Run
+from a fresh client/network with the bundle and scripts, without a connection override:
 
-Only after these public checks and a confirmed rollback record should issue
-137 close. This documentation cutover neither publishes a new Wharfie package
-nor establishes completion of the operational soak or unfamiliar-tester runs.
+```bash
+node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
+  --bundle-dir "$docs_bundle" --output "$docs_evidence/public.json"
+```
+
+Require all 37 checks, including the manifest's root SHA. Repeat after DNS convergence with a new report path.
+Check public mobile/desktop rendering, keyboard navigation, links, and the feedback form without submitting an issue.
+Until then, give testers the [recipient guide](recipient-preview.md) directly.
+
+## Update content or roll it back
+
+Prepare a new clean bundle/evidence directory and repeat immutable upload/readback before switching content.
+Retain current `describe-stacks` output including `ContentSha256` and the accepted bundle for rollback. For **content-only** changes:
+
+```bash
+docs_account_guard
+docs_change="docs-content-$(date -u +%Y%m%dT%H%M%SZ)"
+aws cloudformation create-change-set --stack-name wharfie-docs --change-set-name "$docs_change" \
+  --change-set-type UPDATE --use-previous-template --parameters \
+  ParameterKey=ContentSha256,ParameterValue="$docs_sha" \
+  ParameterKey=CustomDomain,UsePreviousValue=true \
+  ParameterKey=CertificateArn,UsePreviousValue=true
+```
+
+Wait for change-set completion, inspect it, execute it after an account guard, and wait
+for stack-update completion. Verify both endpoints against the new bundle. This recipe
+preserves the existing template; router/template changes require a separate reviewed
+update. Never use the generated staging parameters in production.
+
+For rollback, select the prior bundle's verified hash in the same content-only change
+set and repeat public verification. Prefer this certificate-backed origin or reviewed
+maintenance HTML linking to `https://github.com/wharfie/wharfie/blob/master/docs/guides/recipient-preview.md`,
+published with the same bundle/upload/update procedure. If DNS rollback is necessary,
+verify the destination and TLS first, restore the exact saved record, and recheck after
+its TTL. The old origin contains retired installers; returning users there is not a
+successful recovery. If no safe origin is available, send testers the repository guide
+and record the outage. Retain the bucket, certificate, and rollback releases; do not
+use recursive sync, broad deletion, or old-origin cleanup.
+
+Evidence checked on 2026-09-15: `staging-verification-v2.json` finished at 16:35 UTC with all 37 checks passing; `fixed-api-proof.json` records six passing AWS `LIVE` function cases. Retain these bounded reports with the bundle; they do not establish custom-domain publication.
+
+| Acceptance evidence                                                | Status                                                                                                                                       |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Staging immutable object and authenticated readback                | Passed; SHA-256 `0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808` matches bundle, origin readback, and public staging HTML. |
+| Clean committed release bundle                                     | Pending; staging records commit `00c5ec4d193b22eca3b609caf16fb0ea6b75609e` with `dirty: true`.                                               |
+| CloudFront staging endpoint                                        | [d1sdjfclzv637e.cloudfront.net](https://d1sdjfclzv637e.cloudfront.net/) (`EITEBWLWDGRVN`); **37/37 passed**.                                 |
+| AWS `LIVE` function runtime                                        | **6/6 passed** after the default-parameter syntax fix.                                                                                       |
+| Issued certificate and pre-DNS hostname/TLS report                 | Pending DNS validation and alias attachment.                                                                                                 |
+| PR 169 public guides and feedback form                             | Pending merge and public link verification.                                                                                                  |
+| Private DNS backup, cutover record, independent public reports     | Pending; `docs.wharfie.dev` has not been cut over.                                                                                           |
+| Public rendering/keyboard/link review and verified rollback record | Pending.                                                                                                                                     |
+
+Attach sanitized evidence before closing issue 137. This cutover does not publish a Wharfie package or prove soak/tester acceptance.
