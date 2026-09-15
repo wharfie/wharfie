@@ -50,6 +50,36 @@ describe('manifest security boundary', () => {
   });
 
   it.each([
+    'https://reader:credential-sentinel@example.invalid/data',
+    'postgres://reader:credential-sentinel@example.invalid/database',
+    ' \r\nhttps://reader:credential-sentinel@example.invalid/data\t',
+    'https://example.invalid/data?%61pi%54oken%56alue=credential-sentinel',
+    'custom:opaque?access_token=credential-sentinel',
+  ])('rejects URL credentials across WHATWG URL forms', (endpoint) => {
+    expect(() => assertManifestIsSecretFree({ endpoint })).toThrow(
+      /credential-bearing URLs.*inspectable manifest/i,
+    );
+    try {
+      assertManifestIsSecretFree({ endpoint });
+    } catch (error) {
+      expect(String(error)).not.toContain('credential-sentinel');
+      expect(String(error)).not.toContain(endpoint);
+    }
+  });
+
+  it.each([
+    'ready',
+    'wsnd1_ordinary-deployment-identity',
+    '2026-09-14T00:00:00Z',
+    '/var/lib/wharfie/state',
+    'https://[invalid-host',
+    'https://example.invalid/data?region=us-east-2',
+    'custom:opaque?region=us-east-2',
+  ])('allows non-URL strings and URLs without credentials', (value) => {
+    expect(() => assertManifestIsSecretFree({ value })).not.toThrow();
+  });
+
+  it.each([
     'Authorization: Bearer header-secret-sentinel',
     'Basic header-secret-sentinel',
     '-----BEGIN PRIVATE KEY-----\nkey-secret-sentinel',
