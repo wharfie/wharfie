@@ -7,6 +7,7 @@ import {
   createLiveDeploymentSoakCheckpoint,
   validateLiveDeploymentSoakCheckpoint,
   LIVE_DEPLOYMENT_SOAK_MAX_CHECKPOINT_BYTES,
+  LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
 } from '../../scripts/live-deployment-soak.js';
 import { LIVE_DEPLOYMENT_INPUT_BYTES } from '../../scripts/live-deployment-package.js';
 import { createWorkflowRunId } from '../../src/core/lib/ledger/workflow-execution-contract.js';
@@ -23,11 +24,12 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
   let wall = 1_000_000;
   let mono = 0;
   let starts = 0;
+  let hostCreations = 0;
   let checkpoint = createLiveDeploymentSoakCheckpoint({
     state,
     startedAt: wall,
     durationMs: settings.durationMs ?? 900_000,
-    intervalMs: settings.intervalMs ?? 120_000,
+    intervalMs: settings.intervalMs ?? 240_000,
   });
   const runs = new Map();
   const commands = /** @type {Array<{name: string, args: string[]}>} */ ([]);
@@ -153,7 +155,7 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
       return Array.from({ length: count }, (_, index) => ({
         sequence: index + 1,
         digest:
-          settings.changedMiddleMarker && index === 3
+          settings.changedMiddleMarker && index === 1
             ? '0'.repeat(64)
             : createHash('sha256').update(bytes).digest('hex'),
       }));
@@ -245,7 +247,10 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
     },
   });
   const dependencies = {
-    createHost: async () => host,
+    createHost: async () => {
+      hostCreations++;
+      return host;
+    },
     wallNow: () => wall,
     now: () => mono,
     /** @param {number} milliseconds */
@@ -267,6 +272,9 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
     },
     get starts() {
       return starts;
+    },
+    get hostCreations() {
+      return hostCreations;
     },
     options,
     dependencies,
@@ -293,9 +301,9 @@ describe('bounded periodic live soak', () => {
       f.setWall(result.nextAt);
       result = await f.tick();
     }
-    expect(f.starts).toBe(7);
-    expect(f.checkpoint.samples).toHaveLength(8);
-    expect(f.checkpoint.completed).toHaveLength(7);
+    expect(f.starts).toBe(3);
+    expect(f.checkpoint.samples).toHaveLength(4);
+    expect(f.checkpoint.completed).toHaveLength(3);
     expect(f.receipts['soak-progress.json']).toMatchObject({
       complete: true,
       physicalExecutionVerified: true,
@@ -317,17 +325,22 @@ describe('bounded periodic live soak', () => {
     expect(f.checkpoint.endAt).toBe(1_900_000);
   });
 
-  test('reserves a full final run window when native observations take eighty seconds', async () => {
+  test('accepts 132-second observations with delayed wakeups while preserving three rehearsal runs and the fixed end', async () => {
     const f = fixture({
-      commandDurationMs: 10_000,
-      resourceDurationMs: 30_000,
+      commandDurationMs: 20_000,
+      resourceDurationMs: 32_000,
     });
     let result;
     do {
       result = await f.tick();
-      if (!result.complete) f.setWall(result.nextAt);
+      if (!result.complete) f.setWall(result.nextAt + 1000);
     } while (!result.complete);
-    expect(f.starts).toBe(7);
+    expect(f.starts).toBe(3);
+    const thirdTickStart = f.checkpoint.startedAt + 2 * 240_000 + 1000;
+    expect(f.checkpoint.samples[2].observedAt - thirdTickStart).toBe(132_000);
+    expect(
+      f.commands.filter((command) => command.name === 'soak-start'),
+    ).toHaveLength(3);
     expect(f.checkpoint.completed.at(-1).completedAt).toBeLessThan(
       f.checkpoint.endAt,
     );
@@ -337,26 +350,31 @@ describe('bounded periodic live soak', () => {
     expect(f.checkpoint.samples.at(-1).observedAt).toBeGreaterThanOrEqual(
       f.checkpoint.endAt,
     );
-    expect(f.checkpoint.samples).toHaveLength(8);
+    expect(f.checkpoint.samples).toHaveLength(4);
     expect(f.checkpoint.endAt).toBe(1_900_000);
   });
 
   test('refuses a late final run before guest commands when its full observation window is unavailable', async () => {
     const f = fixture();
-    for (let index = 0; index < 6; index++) {
+    for (let index = 0; index < 2; index++) {
       const result = await f.tick();
       f.setWall(result.nextAt);
     }
     const count = f.commands.length;
-    f.setWall(f.checkpoint.endAt - 120_000 + 1);
+    const hostCreations = f.hostCreations;
+    f.setWall(f.checkpoint.endAt - LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS + 1);
     await expect(f.tick()).rejects.toMatchObject({
       diagnostic: {
         soakFaultStage: 'coverage',
-        soakFaultCode: 'assertion',
+        soakFaultCode: 'admission-deadline',
+        soakObservedMs: 299_999,
+        soakLimitMs: 300_000,
       },
     });
     expect(f.commands).toHaveLength(count);
-    expect(f.starts).toBe(6);
+    expect(f.hostCreations).toBe(hostCreations);
+    expect(f.starts).toBe(2);
+    expect(f.checkpoint.endAt).toBe(1_900_000);
   });
 
   test.each(['lostStart', 'sampleFailure'])(
@@ -415,17 +433,58 @@ describe('bounded periodic live soak', () => {
     await expect(f.tick()).rejects.toMatchObject({
       diagnostic: {
         soakFaultStage: 'workflow',
-        soakFaultCode: 'assertion',
+        soakFaultCode: 'tick-deadline',
+        soakObservedMs: 300_000,
+        soakLimitMs: 300_000,
+        timedOut: true,
       },
     });
-    expect(f.commands.length).toBeLessThan(125);
+    expect(f.commands.length).toBeLessThan(305);
     expect(f.checkpoint.completed).toHaveLength(0);
+    expect(f.starts).toBe(1);
+  });
+
+  test('classifies a resource observation over five minutes without committing or retrying its work', async () => {
+    const f = fixture({ resourceDurationMs: 300_001 });
+    const error = await f.tick().catch((failure) => failure);
+    expect(error.message).toBe('Live soak observation failed.');
+    expect(error.diagnostic).toEqual({
+      soakFaultStage: 'resources',
+      soakFaultCode: 'tick-deadline',
+      soakObservedMs: 300_001,
+      soakLimitMs: 300_000,
+      timedOut: true,
+    });
+    expect(f.starts).toBe(1);
+    expect(
+      f.commands.filter((command) => command.name === 'soak-start'),
+    ).toHaveLength(1);
+    expect(f.checkpoint.completed).toHaveLength(0);
+    expect(f.checkpoint.samples).toHaveLength(0);
+    expect(f.checkpoint.pending.runId).not.toBeNull();
+    expect(f.receipts).toEqual({});
+    expect(f.checkpoint.endAt).toBe(1_900_000);
+  });
+
+  test('keeps an actual resource-limit fault distinct when the same sample also overruns', async () => {
+    const f = fixture({ resourceDurationMs: 300_001 });
+    f.resource.residentRssBytes = 513 * 1024 * 1024;
+    const error = await f.tick().catch((failure) => failure);
+    expect(error.diagnostic).toEqual({
+      soakFaultStage: 'resources',
+      soakFaultCode: 'resident-rss-limit',
+      soakObservedBytes: 513 * 1024 * 1024,
+      soakLimitBytes: 512 * 1024 * 1024,
+    });
+    expect(f.starts).toBe(1);
+    expect(f.checkpoint.completed).toHaveLength(0);
+    expect(f.checkpoint.pending).not.toBeNull();
   });
 
   test('rejects an observer coverage gap instead of treating elapsed idle time as a passing soak', async () => {
     const f = fixture();
     await f.tick();
-    f.setWall(f.checkpoint.startedAt + 240_001);
+    f.setWall(f.checkpoint.startedAt + 480_001);
     await expect(f.tick()).rejects.toMatchObject({
       diagnostic: {
         soakFaultStage: 'coverage',
@@ -438,11 +497,11 @@ describe('bounded periodic live soak', () => {
   test('audits every physical marker at completion, including a changed middle run', async () => {
     const f = fixture();
     let result;
-    for (let index = 0; index < 7; index++) {
+    for (let index = 0; index < 3; index++) {
       result = await f.tick();
       f.setWall(result.nextAt);
     }
-    expect(f.starts).toBe(7);
+    expect(f.starts).toBe(3);
     f.settings.changedMiddleMarker = true;
     await expect(f.tick()).rejects.toMatchObject({
       diagnostic: {
@@ -451,7 +510,7 @@ describe('bounded periodic live soak', () => {
       },
     });
     expect(f.checkpoint.complete).toBe(false);
-    expect(f.checkpoint.samples).toHaveLength(7);
+    expect(f.checkpoint.samples).toHaveLength(3);
   });
 
   test('rejects a clock rollback before the next scheduled tick', async () => {
@@ -467,23 +526,69 @@ describe('bounded periodic live soak', () => {
   });
 
   test.each([
-    ['residentRssBytes', 513 * 1024 * 1024],
-    ['diskAvailableBytes', 128 * 1024 * 1024],
-    ['userJournalBytesApprox', 257 * 1024 * 1024],
+    [
+      'residentRssBytes',
+      513 * 1024 * 1024,
+      512 * 1024 * 1024,
+      'resident-rss-limit',
+    ],
+    [
+      'diskAvailableBytes',
+      128 * 1024 * 1024,
+      256 * 1024 * 1024,
+      'disk-headroom-limit',
+    ],
+    ['stateBytes', 513 * 1024 * 1024, 512 * 1024 * 1024, 'state-size-limit'],
+    [
+      'userJournalBytesApprox',
+      257 * 1024 * 1024,
+      256 * 1024 * 1024,
+      'user-journal-size-limit',
+    ],
   ])(
     'fails finite resource guard %s while retaining the original submission',
-    async (field, value) => {
+    async (field, value, limit, code) => {
       const f = fixture();
       f.resource[field] = value;
+      f.resource.appBytes = Math.max(
+        f.resource.appBytes,
+        f.resource.stateBytes,
+      );
+      f.resource.homeBytes = Math.max(
+        f.resource.homeBytes,
+        f.resource.appBytes,
+      );
       await expect(f.tick()).rejects.toMatchObject({
         diagnostic: {
           soakFaultStage: 'resources',
-          soakFaultCode: 'assertion',
+          soakFaultCode: code,
+          soakObservedBytes: value,
+          soakLimitBytes: limit,
         },
       });
       expect(f.checkpoint.pending).not.toBeNull();
+      expect(f.checkpoint.completed).toHaveLength(0);
+      expect(f.starts).toBe(1);
+      expect(
+        f.commands.filter((command) => command.name === 'soak-start'),
+      ).toHaveLength(1);
     },
   );
+
+  test('accepts the unchanged exact RSS, state, disk-headroom, and journal limits', async () => {
+    const f = fixture();
+    Object.assign(f.resource, {
+      residentRssBytes: 512 * 1024 * 1024,
+      stateBytes: 512 * 1024 * 1024,
+      appBytes: 512 * 1024 * 1024,
+      homeBytes: 512 * 1024 * 1024,
+      diskAvailableBytes: 256 * 1024 * 1024,
+      userJournalBytesApprox: 256 * 1024 * 1024,
+    });
+    expect((await f.tick()).complete).toBe(false);
+    expect(f.checkpoint.completed).toHaveLength(1);
+    expect(f.checkpoint.samples[0].resource).toEqual(f.resource);
+  });
 
   test('rejects tampered scope, run identity, pending path and unknown metadata before host access', async () => {
     const f = fixture({ stageFailure: true });
@@ -521,14 +626,25 @@ describe('bounded periodic live soak', () => {
   });
 
   test('retains all 72-hour evidence within its report byte and sample budgets', async () => {
-    const f = fixture({ durationMs: 72 * 60 * 60 * 1000, intervalMs: 900_000 });
+    const f = fixture({
+      durationMs: 72 * 60 * 60 * 1000,
+      intervalMs: 900_000,
+      commandDurationMs: 20_000,
+      resourceDurationMs: 32_000,
+    });
     let result;
     do {
       result = await f.tick();
-      f.setWall(result.nextAt);
+      if (!result.complete) f.setWall(result.nextAt + 1000);
     } while (!result.complete);
     expect(f.checkpoint.completed).toHaveLength(288);
     expect(f.checkpoint.samples).toHaveLength(289);
+    expect(f.checkpoint.endAt).toBe(
+      f.checkpoint.startedAt + 72 * 60 * 60 * 1000,
+    );
+    expect(f.checkpoint.completed.at(-1).completedAt).toBeLessThan(
+      f.checkpoint.endAt,
+    );
     expect(Buffer.byteLength(JSON.stringify(f.checkpoint))).toBeLessThan(
       LIVE_DEPLOYMENT_SOAK_MAX_CHECKPOINT_BYTES,
     );

@@ -413,6 +413,14 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
     ...(LIVE_DEPLOYMENT_SOAK_FAULT_CODES.includes(diagnostic.soakFaultCode)
       ? { soakFaultCode: diagnostic.soakFaultCode }
       : {}),
+    ...Object.fromEntries(
+      ['soakObservedMs', 'soakLimitMs', 'soakObservedBytes', 'soakLimitBytes']
+        .filter(
+          (field) =>
+            Number.isSafeInteger(diagnostic[field]) && diagnostic[field] >= 0,
+        )
+        .map((field) => [field, diagnostic[field]]),
+    ),
     ...(LIVE_DEPLOYMENT_HOST_FAULT_STAGES.includes(diagnostic.hostFaultStage)
       ? { hostFaultStage: diagnostic.hostFaultStage }
       : {}),
@@ -812,7 +820,7 @@ async function runAcceptance(options, dependencies) {
       assert.ok([900000, 172800000, 259200000].includes(state.soak.durationMs));
       assert.equal(
         state.soak.intervalMs,
-        state.soak.durationMs === 900000 ? 120000 : 900000,
+        state.soak.durationMs === 900000 ? 240000 : 900000,
       );
       assert.ok(
         Number.isSafeInteger(state.soak.startedAt) && state.soak.startedAt > 0,
@@ -879,7 +887,7 @@ async function runAcceptance(options, dependencies) {
         : {
             soak: {
               durationMs: options.soakHours * 3600000,
-              intervalMs: options.soakHours === 0.25 ? 120000 : 900000,
+              intervalMs: options.soakHours === 0.25 ? 240000 : 900000,
               startedAt: null,
             },
           }),

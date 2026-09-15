@@ -1150,7 +1150,7 @@ describe('resumable bounded soak orchestration', () => {
           startedAt,
           endAt: startedAt + durationMs,
           sequence: 0,
-          intervalMs: 120000,
+          intervalMs: 240000,
           timerDelayMs: 1000,
         }),
         validateSoak: (/** @type {Record<string, any>} */ checkpoint) => {
@@ -1168,7 +1168,7 @@ describe('resumable bounded soak orchestration', () => {
           return {
             checkpoint,
             complete,
-            nextAt: checkpoint.startedAt + 120000,
+            nextAt: checkpoint.startedAt + 240000,
           };
         },
       },
@@ -1195,7 +1195,7 @@ describe('resumable bounded soak orchestration', () => {
     );
     expect(state.soak).toEqual({
       durationMs: 900000,
-      intervalMs: 120000,
+      intervalMs: 240000,
       startedAt: 1800000000000,
       provisionAttemptAt: 1800000000000,
     });
@@ -1291,6 +1291,31 @@ describe('resumable bounded soak orchestration', () => {
       expect(setup.ticks).toHaveLength(1);
     },
   );
+
+  test('an older rehearsal refuses new observations but retains cleanup authority', async () => {
+    const setup = soakFixture();
+    await setup.run();
+    for (const name of ['run.json', 'soak.json']) {
+      const file = path.join(setup.runDir, name);
+      const retained = JSON.parse(readFileSync(file, 'utf8'));
+      (name === 'run.json' ? retained.soak : retained).intervalMs = 120000;
+      writeFileSync(file, JSON.stringify(retained));
+    }
+    await expect(
+      runLiveDeploymentAcceptance({ resume: setup.runDir }, setup.ports),
+    ).rejects.toThrow();
+    expect(setup.ticks).toHaveLength(1);
+    expect(existsSync(path.join(setup.runDir, 'workspace'))).toBe(true);
+    expect(
+      await runLiveDeploymentAcceptance({ cleanup: setup.runDir }, setup.ports),
+    ).toMatchObject({
+      status: 'passed',
+      workspaceRemoved: true,
+      cleanup: { status: 'absent' },
+    });
+    expect(setup.ticks).toHaveLength(1);
+    expect(setup.buildCount()).toBe(1);
+  });
 
   test('a failure retains diagnostic and still independently cleans the host', async () => {
     const setup = soakFixture({ failSoak: true });
@@ -1433,6 +1458,43 @@ test('soak diagnostics retain fixed categories while rejecting arbitrary host ou
   expect(JSON.stringify([diagnostic, unsafe])).not.toContain(SECRET);
   expect(unsafe).not.toHaveProperty('soakFaultStage');
   expect(unsafe).not.toHaveProperty('hostFaultStage');
+});
+
+test('soak diagnostics retain only allowlisted bounded numeric measurements', () => {
+  const measurements = {
+    soakObservedMs: 300001,
+    soakLimitMs: 300000,
+    soakObservedBytes: 268435457,
+    soakLimitBytes: 268435456,
+  };
+  expect(
+    liveDeploymentFailureDiagnostic('soak-resources', 100, {
+      diagnostic: { ...measurements, arbitraryMeasurement: 1 },
+    }),
+  ).toEqual(expect.objectContaining(measurements));
+  for (const unsafe of [
+    -1,
+    1.5,
+    NaN,
+    Infinity,
+    Number.MAX_SAFE_INTEGER + 1,
+    '300000',
+    { value: SECRET },
+  ]) {
+    const diagnostic = liveDeploymentFailureDiagnostic('soak-resources', 100, {
+      diagnostic: {
+        ...Object.fromEntries(
+          Object.keys(measurements).map((key) => [key, unsafe]),
+        ),
+        arbitraryMeasurement: 1,
+        stdout: SECRET,
+      },
+    });
+    for (const key of [...Object.keys(measurements), 'arbitraryMeasurement']) {
+      expect(diagnostic).not.toHaveProperty(key);
+    }
+    expect(JSON.stringify(diagnostic)).not.toContain(SECRET);
+  }
 });
 
 test('soak waits reject a backwards wall clock without extending the duration', async () => {

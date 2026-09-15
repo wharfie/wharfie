@@ -61,9 +61,12 @@ Candidate assets alone do not establish that a version has been published.
 
 The fixture captures a host-local file fingerprint, waits on a one-second durable
 timer, and verifies the fingerprint. Full soaks schedule a run every fifteen
-minutes; rehearsals use two-minute intervals. The schedule reserves a complete
-observation window before the deadline, then takes a final resource and marker
-sample. A 72-hour run has 288 workflows; the fifteen-minute rehearsal has seven. Each submission has a persisted
+minutes; rehearsals use four-minute intervals. Each observation has a five-minute
+budget for fresh controllers, cross-region SSH, history, workflow, and resource
+checks. The schedule reserves a complete observation window before the deadline,
+then takes a final resource and marker sample. A 72-hour run has 288 workflows;
+the fifteen-minute rehearsal has three, with two minutes of admission slack for
+the last workflow. Each submission has a persisted
 idempotency key and retains the returned run ID, so an interrupted observer can
 retry the same submission without starting another run.
 
@@ -75,6 +78,12 @@ available disk space, and approximate user journal size. Reports are bounded and
 contain no raw application payloads or environment dumps. Resource guards fail
 the proof when fixed memory or disk limits are crossed; measured growth still needs
 review even when the guards pass.
+
+Failure reports distinguish observation deadlines, late admission, and named
+resource guards. They retain only allowlisted numeric measurements and limits;
+raw command output and exceptions are excluded. Older failed attempts retain
+their original results and can be cleaned up, but cannot resume under the
+revised observation budget.
 
 The same resident and host boot must remain present throughout this soak.
 Crash, reboot, and update recovery are separate scenarios in the existing live

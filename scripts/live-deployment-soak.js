@@ -16,7 +16,7 @@ import { LIVE_DEPLOYMENT_INPUT_BYTES } from './live-deployment-package.js';
 
 export const LIVE_DEPLOYMENT_SOAK_MAX_CHECKPOINT_BYTES = 256 * 1024;
 export const LIVE_DEPLOYMENT_SOAK_MAX_RUNS = 299;
-export const LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS = 120_000;
+export const LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS = 300_000;
 export const LIVE_DEPLOYMENT_SOAK_FAULT_STAGES = Object.freeze([
   'scope',
   'coverage',
@@ -32,6 +32,12 @@ export const LIVE_DEPLOYMENT_SOAK_FAULT_CODES = Object.freeze([
   'invalid-json',
   'aborted',
   'operation-failed',
+  'tick-deadline',
+  'admission-deadline',
+  'resident-rss-limit',
+  'disk-headroom-limit',
+  'state-size-limit',
+  'user-journal-size-limit',
 ]);
 const MAX_DURATION_MS = 72 * 60 * 60 * 1000;
 const HASH = /^[0-9a-f]{64}$/;
@@ -54,6 +60,29 @@ const RESOURCE_KEYS = [
   'diskAvailableBytes',
   'userJournalBytesApprox',
 ];
+
+/** Fixed local guard diagnostics contain only measured numbers and known labels. */
+class SoakGuardError extends Error {
+  /** @param {string} code @param {number} observed @param {number} limit @param {'ms'|'bytes'} unit */
+  constructor(code, observed, limit, unit) {
+    super('Live soak observation guard failed.');
+    this.diagnostic = {
+      soakFaultCode: code,
+      ...(unit === 'ms'
+        ? {
+            soakObservedMs: Math.max(0, Math.round(observed)),
+            soakLimitMs: limit,
+          }
+        : { soakObservedBytes: observed, soakLimitBytes: limit }),
+      ...(code === 'tick-deadline' ? { timedOut: true } : {}),
+    };
+  }
+}
+
+/** @param {boolean} condition @param {string} code @param {number} observed @param {number} limit @param {'ms'|'bytes'} unit */
+function guard(condition, code, observed, limit, unit) {
+  if (!condition) throw new SoakGuardError(code, observed, limit, unit);
+}
 
 /** @param {unknown} value @param {string[]} keys */
 function exact(value, keys) {
@@ -412,8 +441,10 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
     const save = async () => {
       const previousStage = stage;
       stage = 'checkpoint';
+      check();
       validateLiveDeploymentSoakCheckpoint(checkpoint, state);
       await options.saveCheckpoint(JSON.parse(JSON.stringify(checkpoint)));
+      check();
       stage = previousStage;
     };
     const expectedRuns = expectedRunCount(checkpoint);
@@ -438,18 +469,21 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
       'Soak observation coverage has a gap exceeding two intervals.',
     );
     if (checkpoint.completed.length < expectedRuns)
-      assert.ok(
+      guard(
         ports.wallNow() <=
           checkpoint.endAt - LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
-        'Soak deadline has insufficient time for the remaining observation.',
+        'admission-deadline',
+        checkpoint.endAt - ports.wallNow(),
+        LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
+        'ms',
       );
     /** @type {(name: string, operation: () => Promise<any>) => Promise<any>} */
     const phase =
       options.phase ?? (async (_name, operation) => await operation());
     const receipt = options.receipt ?? (() => {});
     stage = 'host';
-    const deadline = ports.now() + LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS;
-    const host = await ports.createHost(options);
+    const tickStarted = ports.now();
+    const deadline = tickStarted + LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS;
     const selectors = [
       '--deployment-instance',
       state.deploymentInstanceId,
@@ -458,11 +492,17 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
     ];
     const check = () => {
       options.signal?.throwIfAborted();
-      assert.ok(
+      guard(
         ports.now() < deadline,
-        'Soak tick exceeded its finite deadline.',
+        'tick-deadline',
+        ports.now() - tickStarted,
+        LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
+        'ms',
       );
     };
+    check();
+    const host = await ports.createHost(options);
+    check();
     /** @param {string} name @param {string[]} args */
     const exec = async (name, args) => {
       check();
@@ -471,6 +511,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
         ['wharfie', 'deployment', 'exec', ...selectors, '--', ...args],
         Math.max(1, Math.min(60_000, Math.floor(deadline - ports.now()))),
       );
+      check();
       assert.ok(Buffer.byteLength(result.stdout) <= 256 * 1024);
       return JSON.parse(result.stdout);
     };
@@ -487,6 +528,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
       return view;
     };
     const before = await host.observe();
+    check();
     assert.equal(before.service.health, 'healthy');
     assert.ok(before.process);
     const resident = before.process;
@@ -520,6 +562,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
           entry.markerDigest,
           'A committed physical activity repeated.',
         );
+        check();
       }
     });
     if (checkpoint.completed.length < expectedRuns) {
@@ -644,22 +687,35 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
           previous.clockTicksPerSecond,
         );
       }
-      assert.ok(
+      guard(
         resource.residentRssBytes <= 512 * 1024 * 1024,
-        'Soak resident RSS exceeded the 512 MiB guard.',
+        'resident-rss-limit',
+        resource.residentRssBytes,
+        512 * 1024 * 1024,
+        'bytes',
       );
-      assert.ok(
+      guard(
         resource.diskAvailableBytes >= 256 * 1024 * 1024,
-        'Soak disk headroom fell below 256 MiB.',
+        'disk-headroom-limit',
+        resource.diskAvailableBytes,
+        256 * 1024 * 1024,
+        'bytes',
       );
-      assert.ok(
+      guard(
         resource.stateBytes <= 512 * 1024 * 1024,
-        'Soak state exceeded the 512 MiB guard.',
+        'state-size-limit',
+        resource.stateBytes,
+        512 * 1024 * 1024,
+        'bytes',
       );
-      assert.ok(
+      guard(
         resource.userJournalBytesApprox <= 256 * 1024 * 1024,
-        'Soak user journal exceeded the 256 MiB guard.',
+        'user-journal-size-limit',
+        resource.userJournalBytesApprox,
+        256 * 1024 * 1024,
+        'bytes',
       );
+      check();
       checkpoint.samples.push({
         sequence: checkpoint.completed.length,
         observedAt: ports.wallNow(),
@@ -672,6 +728,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
         stage = 'final-markers';
         check();
         const audit = await host.readSoakMarkerAudit(expectedRuns);
+        check();
         assert.equal(audit.length, expectedRuns);
         audit.forEach((entry, index) => {
           assert.equal(entry.sequence, index + 1);
@@ -714,13 +771,15 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
         ...source?.diagnostic,
         soakFaultStage: stage,
         soakFaultCode:
-          source?.code === 'ERR_ASSERTION'
-            ? 'assertion'
-            : source?.name === 'SyntaxError'
-              ? 'invalid-json'
-              : source?.name === 'AbortError' || options.signal?.aborted
-                ? 'aborted'
-                : 'operation-failed',
+          error instanceof SoakGuardError
+            ? error.diagnostic.soakFaultCode
+            : source?.code === 'ERR_ASSERTION'
+              ? 'assertion'
+              : source?.name === 'SyntaxError'
+                ? 'invalid-json'
+                : source?.name === 'AbortError' || options.signal?.aborted
+                  ? 'aborted'
+                  : 'operation-failed',
       },
     });
   }
