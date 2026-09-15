@@ -24,31 +24,43 @@ Open `http://127.0.0.1:8765/`, check a narrow and wide viewport, tab through the
 links, and follow the guide and release links. Stop the server when finished.
 This review does not establish that any public URL changed.
 
-## Target and authority to establish
+## Current origin and remaining authority
 
 The proposed public entry point remains `https://docs.wharfie.dev/`. A fresh
 read on 2026-09-15 returned the retired v0.0.14 Athena/table documentation and
-links to removed installers. Response headers indicate Cloudflare with an S3
-origin; they do not establish ownership or the complete routing configuration.
+links to removed installers. The maintainer confirmed that Cloudflare's `docs`
+record targets `docs.wharfie.dev.s3-website-us-west-2.amazonaws.com` and that the
+zone is currently managed through a personal Cloudflare account. Deployment
+access to that account has not yet been established.
 
 The removed historical deploy script targeted a bucket named
-`docs.wharfie.dev`. The current repository contains no active docs deployment
-workflow. Read-only bucket-location and website checks using the current
-`wharfie` AWS profile returned `AccessDenied`. No deployment authority follows
-from that result.
+`docs.wharfie.dev`, matching the confirmed website endpoint in `us-west-2`.
+The current repository contains no active docs deployment workflow. Public
+reads of the regional S3 endpoint succeed, but ownership checks have not
+identified the bucket's AWS account. The available Wharfie and personal AWS
+profiles have no verified authority to manage it. Cloudflare account ownership
+does not establish S3 bucket ownership or grant access to its contents.
+
+The proposed next hosting change is a replacement origin in a Wharfie-owned
+AWS account, with its deployment configuration kept in this repository. Stage
+and verify that origin before changing the `docs` record. The current DNS
+account can perform that scoped cutover; broader zone ownership changes are a
+separate task. Retiring the old bucket requires establishing its owner and
+verifying the replacement first.
 
 Before a publication change, record the actual owner and available operator
 access for:
 
-- The serving origin: AWS account, bucket and region, or its replacement.
+- The replacement origin: AWS account, bucket, region, and serving endpoint.
 - The Cloudflare zone and current DNS, origin, redirect, and cache rules.
 - The exact object keys and route rules this change will replace.
 - A named maintainer who can apply and roll back those changes.
 
-Once those facts are available, choose whether to replace the existing origin
-or retire it in favor of another static host. The same one-file artifact works
-for either choice. Record that decision in this guide before deployment. Until
-then, send testers directly to the repository guide.
+Record the selected serving mechanism and exact cutover commands in the
+hosting follow-up before deployment. A DNS CNAME alone is not a complete origin
+configuration: verify the incoming hostname, certificate, and route handling
+at the replacement endpoint. Until the cutover passes, send testers directly
+to the repository guide.
 
 ## Route map
 
@@ -56,6 +68,15 @@ Apply these explicit routes at the established serving layer. During initial
 verification, use temporary redirects so a correction is not locked into a
 browser's permanent redirect cache. Query strings must not be forwarded to a
 different origin.
+
+This response contract needs a serving layer that can enforce every route.
+Replacing an S3 index object leaves other existing objects reachable; an
+[S3 error document](https://docs.aws.amazon.com/AmazonS3/latest/userguide/CustomErrorDocSupport.html)
+only handles requests that already fail. Cloudflare's ordinary
+[Single Redirects](https://developers.cloudflare.com/rules/url-forwarding/single-redirects/settings/)
+return redirect statuses, so they do not implement the installer `410`
+responses below. Select and verify an explicit response handler before the
+cutover; unrecognized paths must never fall through to old origin content.
 
 | Public request                                                         | Intended response                                                                                             |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -82,7 +103,11 @@ without assuming the old fragment has a matching new section.
 2. Upload the landing page to a new, private staging key or preview host under
    the confirmed authority. Compare its downloaded SHA-256 with the reviewed
    file and inspect its rendered content. A staging key must not accidentally
-   become the default public page.
+   become the default public page. Verify private S3 staging through an
+   authenticated read: an obscure key does not make a publicly readable object
+   private. [S3 website endpoints](https://docs.aws.amazon.com/AmazonS3/latest/userguide/WebsiteEndpoints.html)
+   serve public content over HTTP; the replacement endpoint must establish its
+   own verified HTTPS serving path.
 3. Publish only the manifest's exact keys and route rules. Serve HTML with a
    short cache lifetime during the cutover. Purge only the affected public
    URLs from the CDN, then check the responses below. Do not restore the old
