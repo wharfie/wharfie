@@ -85,6 +85,12 @@ raw command output and exceptions are excluded. Older failed attempts retain
 their original results and can be cleaned up, but cannot resume under the
 revised observation budget.
 
+Before the soak starts, a failed packaged apply also identifies the two fixed
+activation errors for artifact upload and service convergence when the complete
+error message matches exactly. These categories identify the failed step; they
+do not imply that its internal SSH timeout fired. Unknown or truncated errors
+remain generic, and no raw command output is retained.
+
 The same resident and host boot must remain present throughout this soak.
 Crash, reboot, and update recovery are separate scenarios in the existing live
 acceptance run. A soak failure remains a failure after successful cleanup.

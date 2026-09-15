@@ -36,6 +36,7 @@ import {
   buildLiveDeploymentCandidates,
   LIVE_DEPLOYMENT_APP_ID,
   LIVE_DEPLOYMENT_INPUT_BYTES,
+  LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES,
   runLiveDeploymentProcess,
 } from './live-deployment-package.js';
 import {
@@ -407,6 +408,11 @@ export function liveDeploymentFailureDiagnostic(phase, durationMs, error) {
     timedOut: diagnostic.timedOut === true,
     aborted: diagnostic.aborted === true,
     outputLimitExceeded: diagnostic.outputLimitExceeded === true,
+    ...(LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES.includes(
+      diagnostic.activationFaultCode,
+    )
+      ? { activationFaultCode: diagnostic.activationFaultCode }
+      : {}),
     ...(LIVE_DEPLOYMENT_SOAK_FAULT_STAGES.includes(diagnostic.soakFaultStage)
       ? { soakFaultStage: diagnostic.soakFaultStage }
       : {}),

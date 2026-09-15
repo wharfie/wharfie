@@ -23,6 +23,7 @@ import {
   buildLiveDeploymentCandidate,
   buildLiveDeploymentCandidates,
   createLiveDeploymentBuildEnvironment,
+  LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES,
   LIVE_DEPLOYMENT_APP_ID,
   LIVE_DEPLOYMENT_INPUT_BYTES,
   LIVE_DEPLOYMENT_NEXT_TIMER_DELAY_MS,
@@ -960,6 +961,228 @@ describe('live deployment subprocess lifecycle', () => {
     });
     expect(String(failure)).not.toContain('secret-fixture');
     expect(JSON.stringify(failure)).not.toContain('secret-fixture');
+  });
+
+  test('exposes only the frozen activation diagnostic allowlist', () => {
+    expect(LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES).toEqual([
+      'artifact-upload-failed',
+      'service-convergence-failed',
+    ]);
+    expect(Object.isFrozen(LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES)).toBe(true);
+  });
+
+  test.each([
+    [
+      'apply',
+      'Remote artifact upload did not complete exactly.',
+      'artifact-upload-failed',
+    ],
+    [
+      'fresh-controller',
+      'Remote artifact upload did not complete exactly.',
+      'artifact-upload-failed',
+    ],
+    [
+      'apply',
+      'Remote service convergence did not complete successfully.',
+      'service-convergence-failed',
+    ],
+    [
+      'fresh-controller',
+      'Remote service convergence did not complete successfully.',
+      'service-convergence-failed',
+    ],
+  ])(
+    'classifies the exact %s packaged failure: %s',
+    async (phase, message, activationFaultCode) => {
+      const cwd = await temporaryDirectory();
+      const failure = await runLiveDeploymentProcess({
+        file: process.execPath,
+        args: [
+          '-e',
+          'require("node:fs").writeSync(2, process.argv[1]); console.log("private-stdout-fixture"); process.exitCode = 7',
+          ` \t${message}\r\n`,
+        ],
+        cwd,
+        env: {},
+        timeoutMs: 5000,
+        phase,
+      }).catch((error) => error);
+      expect(failure.diagnostic).toMatchObject({
+        phase,
+        status: 7,
+        signal: null,
+        timedOut: false,
+        aborted: false,
+        outputLimitExceeded: false,
+        activationFaultCode,
+      });
+      expect(failure.diagnostic).not.toHaveProperty('stdout');
+      expect(failure.diagnostic).not.toHaveProperty('stderr');
+      expect(JSON.stringify(failure)).not.toContain(message);
+      expect(JSON.stringify(failure)).not.toContain('private-stdout-fixture');
+      expect(String(failure)).not.toContain(message);
+    },
+  );
+
+  test.each([
+    ['apply', 'Error: Remote artifact upload did not complete exactly.'],
+    ['apply', 'Remote artifact upload did not complete exactly. suffix'],
+    [
+      'fresh-controller',
+      'secret-fixture\nRemote service convergence did not complete successfully.',
+    ],
+    [
+      'fresh-controller',
+      'Remote service convergence did not complete successfully.\nsecret-fixture',
+    ],
+    [
+      'apply',
+      '\u001b[31mRemote artifact upload did not complete exactly.\u001b[0m',
+    ],
+    ['apply', 'Remote artifact upload did not complete exactly'],
+    ['apply', 'constructor'],
+    ['apply', 'Unknown private failure: secret-fixture'],
+    [
+      'package-fresh-install',
+      'Remote artifact upload did not complete exactly.',
+    ],
+    ['status', 'Remote service convergence did not complete successfully.'],
+    [
+      'soak-resource-observation',
+      'Remote artifact upload did not complete exactly.',
+    ],
+  ])(
+    'keeps generic diagnostics for %s with unrecognized stderr %j',
+    async (phase, message) => {
+      const cwd = await temporaryDirectory();
+      const failure = await runLiveDeploymentProcess({
+        file: process.execPath,
+        args: [
+          '-e',
+          'require("node:fs").writeSync(2, process.argv[1]); process.exitCode = 1',
+          message,
+        ],
+        cwd,
+        env: {},
+        timeoutMs: 5000,
+        phase,
+      }).catch((error) => error);
+      expect(failure.diagnostic).toMatchObject({ status: 1, phase });
+      expect(failure.diagnostic).not.toHaveProperty('activationFaultCode');
+      expect(JSON.stringify(failure)).not.toContain(message);
+      expect(JSON.stringify(failure)).not.toContain('secret-fixture');
+      expect(String(failure)).not.toContain(message);
+    },
+  );
+
+  test('does not classify a matching message written only to stdout', async () => {
+    const cwd = await temporaryDirectory();
+    const failure = await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: [
+        '-e',
+        'console.log("Remote artifact upload did not complete exactly."); process.exitCode = 1',
+      ],
+      cwd,
+      env: {},
+      timeoutMs: 5000,
+      phase: 'apply',
+    }).catch((error) => error);
+    expect(failure.diagnostic).toMatchObject({ status: 1 });
+    expect(failure.diagnostic).not.toHaveProperty('activationFaultCode');
+  });
+
+  test('requires a nonzero exit before classifying activation stderr', async () => {
+    const cwd = await temporaryDirectory();
+    const result = await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: [
+        '-e',
+        'console.error("Remote artifact upload did not complete exactly.")',
+      ],
+      cwd,
+      env: {},
+      timeoutMs: 5000,
+      phase: 'apply',
+    });
+    expect(result.status).toBe(0);
+    expect(result).not.toHaveProperty('diagnostic');
+    expect(result.stderr).toBe(
+      'Remote artifact upload did not complete exactly.\n',
+    );
+  });
+
+  test.each(['stdout', 'stderr'])(
+    'does not classify activation after %s exceeds its output bound',
+    async (stream) => {
+      const cwd = await temporaryDirectory();
+      const failure = await runLiveDeploymentProcess({
+        file: process.execPath,
+        args: [
+          '-e',
+          `const fs = require('node:fs');
+fs.writeSync(2, 'Remote artifact upload did not complete exactly.');
+fs.writeSync(process.argv[1] === 'stdout' ? 1 : 2, Buffer.alloc(5 * 1024 * 1024, ' '));
+fs.writeSync(2, 'private-truncated-fixture');
+process.exitCode = 1;`,
+          stream,
+        ],
+        cwd,
+        env: {},
+        timeoutMs: 5000,
+        phase: 'apply',
+      }).catch((error) => error);
+      expect(failure.diagnostic.outputLimitExceeded).toBe(true);
+      expect(failure.diagnostic).not.toHaveProperty('activationFaultCode');
+      expect(JSON.stringify(failure)).not.toContain(
+        'private-truncated-fixture',
+      );
+    },
+  );
+
+  test('does not classify interrupted activation output or infer an inner timeout', async () => {
+    const cwd = await temporaryDirectory();
+    const failure = await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: [
+        '-e',
+        'require("node:fs").writeSync(2, "Remote artifact upload did not complete exactly.\\n"); process.kill(process.pid, "SIGTERM")',
+      ],
+      cwd,
+      env: {},
+      timeoutMs: 5000,
+      phase: 'apply',
+    }).catch((error) => error);
+    expect(failure.diagnostic).toMatchObject({
+      status: null,
+      signal: 'SIGTERM',
+      timedOut: false,
+    });
+    expect(failure.diagnostic).not.toHaveProperty('activationFaultCode');
+  });
+
+  test('does not classify a nonzero activation exit whose inherited pipes exceed the outer deadline', async () => {
+    const cwd = await temporaryDirectory();
+    const failure = await runLiveDeploymentProcess({
+      file: process.execPath,
+      args: [
+        '-e',
+        `require('node:fs').writeSync(2, 'Remote artifact upload did not complete exactly.\\n');
+require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio: 'inherit'}).unref();
+process.exitCode = 1;`,
+      ],
+      cwd,
+      env: {},
+      timeoutMs: 500,
+      phase: 'apply',
+    }).catch((error) => error);
+    expect(failure.diagnostic).toMatchObject({
+      status: 1,
+      signal: null,
+      timedOut: true,
+    });
+    expect(failure.diagnostic).not.toHaveProperty('activationFaultCode');
   });
 
   test('bounds output and kills an overflowing process', async () => {

@@ -1430,6 +1430,34 @@ describe('resumable bounded soak orchestration', () => {
   });
 });
 
+test.each(['artifact-upload-failed', 'service-convergence-failed'])(
+  'activation diagnostics retain the fixed %s category without raw output',
+  (activationFaultCode) => {
+    const diagnostic = liveDeploymentFailureDiagnostic('apply', 662498, {
+      diagnostic: {
+        command: '/private/app',
+        status: 1,
+        activationFaultCode,
+        stdout: SECRET,
+        stderr: SECRET,
+      },
+    });
+    expect(diagnostic).toMatchObject({
+      phase: 'apply',
+      command: 'packaged-app',
+      status: 1,
+      activationFaultCode,
+      timedOut: false,
+    });
+    expect(JSON.stringify(diagnostic)).not.toContain(SECRET);
+    expect(
+      liveDeploymentFailureDiagnostic('apply', 1, {
+        diagnostic: { activationFaultCode: SECRET },
+      }),
+    ).not.toHaveProperty('activationFaultCode');
+  },
+);
+
 test('soak diagnostics retain fixed categories while rejecting arbitrary host output', () => {
   const diagnostic = liveDeploymentFailureDiagnostic('soak-observation', 100, {
     diagnostic: {

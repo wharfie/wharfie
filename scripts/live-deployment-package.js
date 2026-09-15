@@ -23,6 +23,19 @@ import { verifyPreviewRecipientCandidate } from './preview-recipient-download.js
 
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_INPUT_BYTES = 256 * 1024;
+const PACKAGED_ACTIVATION_FAILURES = new Map([
+  [
+    'Remote artifact upload did not complete exactly.',
+    'artifact-upload-failed',
+  ],
+  [
+    'Remote service convergence did not complete successfully.',
+    'service-convergence-failed',
+  ],
+]);
+export const LIVE_DEPLOYMENT_ACTIVATION_FAULT_CODES = Object.freeze([
+  ...PACKAGED_ACTIVATION_FAILURES.values(),
+]);
 export const LIVE_DEPLOYMENT_APP_ID = 'steady-file-demo';
 export const LIVE_DEPLOYMENT_INPUT_BYTES =
   'Wharfie live durable acceptance input.\n';
@@ -180,12 +193,20 @@ export async function runLiveDeploymentProcess(options) {
     spawnError: false,
     stdinError: false,
   };
-  /** @returns {Error} - Safe failure with bounded structured metadata. */
-  const failure = () => {
+  /**
+   * @param {string} [activationFaultCode] - Exact allowlisted packaged failure.
+   * @returns {Error} - Safe failure with bounded structured metadata.
+   */
+  const failure = (activationFaultCode) => {
     diagnostic.durationMs = Math.round(performance.now() - started);
     return Object.assign(
       new Error(`Live deployment command failed during ${diagnostic.phase}.`),
-      { diagnostic: { ...diagnostic } },
+      {
+        diagnostic: {
+          ...diagnostic,
+          ...(activationFaultCode === undefined ? {} : { activationFaultCode }),
+        },
+      },
     );
   };
   if (options.signal?.aborted) {
@@ -275,7 +296,23 @@ export async function runLiveDeploymentProcess(options) {
         diagnostic.stdinError
       ) {
         killGroup();
-        reject(failure());
+        // The packaged deployment CLI prints only error.message. Recognize
+        // complete fixed messages; never retain logs or infer an inner timeout.
+        const activationFaultCode =
+          ['apply', 'fresh-controller'].includes(diagnostic.phase) &&
+          typeof status === 'number' &&
+          status !== 0 &&
+          signal === null &&
+          !diagnostic.timedOut &&
+          !diagnostic.aborted &&
+          !diagnostic.outputLimitExceeded &&
+          !diagnostic.spawnError &&
+          !diagnostic.stdinError
+            ? PACKAGED_ACTIVATION_FAILURES.get(
+                Buffer.concat(stderr, stderrBytes).toString('utf8').trim(),
+              )
+            : undefined;
+        reject(failure(activationFaultCode));
         return;
       }
       killGroup();
