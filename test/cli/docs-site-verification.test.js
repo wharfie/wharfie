@@ -24,6 +24,11 @@ const index = Buffer.from(
 const contentSha256 = createHash('sha256').update(index).digest('hex');
 const reviewedCsp =
   "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const rejectedPath =
+  '/%2e%2e/install?wharfie-docs-check=wharfie-private-query-probe';
+const providerBody =
+  '<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>\r\n';
+/** @typedef {{status?: number, body?: string | Buffer, headers?: Record<string, string>}} ProviderFault */
 
 /** @param {Headers} headers @returns {Record<string, string>} */
 function headerValues(headers) {
@@ -65,7 +70,7 @@ describe('live docs verification transport and evidence', () => {
     await rm(bundleDir, { recursive: true, force: true });
   });
 
-  /** @param {{oversize?: boolean, redirect?: boolean, cacheable?: boolean, compressedNative?: boolean, badHeadLength?: boolean, nativeBody?: boolean, nativeHeaderLeak?: boolean, csp?: string, throwSynchronously?: boolean, stall?: boolean}} [fault] */
+  /** @param {{oversize?: boolean, redirect?: boolean, cacheable?: boolean, compressedNative?: boolean, badHeadLength?: boolean, nativeBody?: boolean, nativeHeaderLeak?: boolean, csp?: string, provider?: ProviderFault, throwSynchronously?: boolean, stall?: boolean}} [fault] */
   function transport(fault = {}) {
     let active = 0;
     let peak = 0;
@@ -97,6 +102,7 @@ describe('live docs verification transport and evidence', () => {
           }
           setImmediate(async () => {
             try {
+              const providerRejection = options.path === rejectedPath;
               const incoming = new Request(
                 'https://wharfie-docs.pages.dev' + options.path,
                 { method: options.method },
@@ -120,16 +126,25 @@ describe('live docs verification transport and evidence', () => {
                     }),
                 },
               };
-              const routed = nativeMethod
-                ? new Response(null, {
-                    status: 405,
-                    headers: { ...headers, 'content-type': '' },
+              const routed = providerRejection
+                ? new Response(providerBody, {
+                    status: 400,
+                    headers: {
+                      server: 'cloudflare',
+                      'content-type': 'text/html',
+                      'content-length': '155',
+                    },
                   })
-                : pathname === '/'
-                  ? await env.ASSETS.fetch(incoming)
-                  : await worker.fetch(incoming, env);
+                : nativeMethod
+                  ? new Response(null, {
+                      status: 405,
+                      headers: { ...headers, 'content-type': '' },
+                    })
+                  : pathname === '/'
+                    ? await env.ASSETS.fetch(incoming)
+                    : await worker.fetch(incoming, env);
               const responseHeaders = headerValues(routed.headers);
-              if (fault.csp !== undefined)
+              if (fault.csp !== undefined && !providerRejection)
                 responseHeaders['content-security-policy'] = fault.csp;
               if (nativeMethod) delete responseHeaders['content-type'];
               if (fault.cacheable && routed.status === 200)
@@ -148,6 +163,10 @@ describe('live docs verification transport and evidence', () => {
                 statusCode: routed.status,
                 headers: responseHeaders,
               });
+              if (providerRejection && fault.provider) {
+                response.statusCode = fault.provider.status ?? routed.status;
+                Object.assign(response.headers, fault.provider.headers);
+              }
               responses.push(response);
               response.once('close', () => {
                 active--;
@@ -157,7 +176,10 @@ describe('live docs verification transport and evidence', () => {
                 response.headers.location =
                   'https://evil.example/private-location-detail';
               }
-              const body = Buffer.from(await routed.arrayBuffer());
+              const body =
+                providerRejection && fault.provider?.body !== undefined
+                  ? fault.provider.body
+                  : Buffer.from(await routed.arrayBuffer());
               callback(response);
               response.end(
                 fault.oversize &&
@@ -214,18 +236,101 @@ describe('live docs verification transport and evidence', () => {
     ).toBe(true);
     expect(report.contentSha256).toBe(contentSha256);
     expect(
-      report.checks.filter((check) => check.kind === 'normalized-legacy-route'),
+      report.checks.filter((check) => check.kind === 'provider-path-rejection'),
     ).toEqual([
       {
         method: 'GET',
-        path: '/%2e%2e/install?wharfie-docs-check=wharfie-private-query-probe',
-        statusCode: 302,
+        path: rejectedPath,
+        statusCode: 400,
         success: true,
-        kind: 'normalized-legacy-route',
+        kind: 'provider-path-rejection',
       },
     ]);
     expect(report.checks.filter((check) => check.sha256)).toHaveLength(4);
     expect(JSON.stringify(report)).not.toContain(index.toString('utf8'));
+  });
+
+  /** @type {Array<[string, ProviderFault, string]>} */
+  const providerFailures = [
+    [
+      'a normalized Worker redirect instead of public edge rejection',
+      {
+        status: 302,
+        headers: {
+          location:
+            'https://github.com/wharfie/wharfie/blob/master/docs/guides/installation.md',
+        },
+      },
+      'unexpected-status',
+    ],
+    [
+      'a redirect on the rejected request',
+      { headers: { location: 'https://evil.example/' } },
+      'unexpected-redirect',
+    ],
+    [
+      'a refresh redirect on the rejected request',
+      { headers: { refresh: '0; url=https://evil.example/' } },
+      'unexpected-redirect',
+    ],
+    [
+      'compression hiding reflected query bytes',
+      {
+        headers: { 'content-encoding': 'gzip' },
+        body: gzipSync('wharfie-private-query-probe'),
+      },
+      'unexpected-content-encoding',
+    ],
+    [
+      'reflected query bytes in the provider body',
+      { body: 'wharfie-private-query-probe' },
+      'reflected-query',
+    ],
+    [
+      'reflected query bytes in provider headers',
+      { headers: { 'x-probe': 'wharfie-private-query-probe' } },
+      'reflected-query',
+    ],
+    [
+      'executable HTML with the same byte length',
+      { body: '<script>alert("unsafe-provider-body")</script>'.padEnd(155) },
+      'unexpected-provider-body',
+    ],
+    [
+      'an unexpected executable content type',
+      { headers: { 'content-type': 'application/javascript' } },
+      'unexpected-provider-headers',
+    ],
+    [
+      'an unbounded provider error body',
+      { body: Buffer.alloc(256 * 1024 + 1, 65) },
+      'response-too-large',
+    ],
+  ];
+
+  it.each(providerFailures)('rejects %s', async (_name, provider, failure) => {
+    const mock = transport({ provider });
+    const report = await verifyDocsSite(
+      { url: 'https://wharfie-docs.pages.dev/', bundleDir },
+      mock.request,
+    );
+
+    expect(report.success).toBe(false);
+    expect(report.checks.filter((check) => !check.success)).toEqual([
+      {
+        method: 'GET',
+        path: rejectedPath,
+        statusCode:
+          failure === 'response-too-large' ? null : (provider.status ?? 400),
+        success: false,
+        kind: 'provider-path-rejection',
+        failure,
+      },
+    ]);
+    expect(mock.calls).toHaveLength(40);
+    expect(JSON.stringify(report)).not.toMatch(
+      /evil\.example|unsafe-provider-body|<html>/,
+    );
   });
 
   it('does not follow an unexpected redirect or retain its target', async () => {
@@ -269,10 +374,13 @@ describe('live docs verification transport and evidence', () => {
 
       expect(report.success).toBe(false);
       expect(report.checks).toHaveLength(40);
+      expect(report.checks.filter((check) => !check.success)).toHaveLength(39);
       expect(
-        report.checks.every(
-          (check) => check.failure === 'missing-content-security-policy',
-        ),
+        report.checks
+          .filter((check) => check.kind !== 'provider-path-rejection')
+          .every(
+            (check) => check.failure === 'missing-content-security-policy',
+          ),
       ).toBe(true);
     },
   );

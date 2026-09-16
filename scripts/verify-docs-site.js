@@ -9,6 +9,8 @@ const MAX_BODY = 256 * 1024;
 const QUERY = '?wharfie-docs-check=wharfie-private-query-probe';
 const GUIDES = 'https://github.com/wharfie/wharfie/blob/master/docs/guides/';
 const PAGES = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,2}pages\.dev$/u;
+const PROVIDER_REJECTION_SHA256 =
+  'efca0895b4d88b27a94249f8e7ac0083eff0a4ff3ac37c2841b3f6d7e11c1905';
 const EXPECTED_CSP = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
@@ -19,7 +21,7 @@ const EXPECTED_CSP = [
   .sort()
   .join(';');
 
-/** @typedef {{method: string, path: string, status: number, guide?: string, nativeMethod?: boolean, normalizedLegacy?: boolean}} Check */
+/** @typedef {{method: string, path: string, status: number, guide?: string, nativeMethod?: boolean, providerRejection?: boolean}} Check */
 /** @typedef {{statusCode: number, headers: import('node:http').IncomingHttpHeaders, body: Buffer}} Response */
 /** @typedef {{url: string, bundleDir: string, connectHost?: string}} Options */
 
@@ -146,9 +148,8 @@ function routes() {
   checks.push({
     method: 'GET',
     path: '/%2e%2e/install' + QUERY,
-    status: 302,
-    guide: 'installation.md',
-    normalizedLegacy: true,
+    status: 400,
+    providerRejection: true,
   });
   for (const method of ['POST', 'OPTIONS']) {
     checks.push({ method, path: '/' + QUERY, status: 405, nativeMethod: true });
@@ -178,6 +179,25 @@ function failureCode(check, response, expectedHash, expectedSize) {
     )
   )
     return 'reflected-query';
+  // The public edge rejects this exact probe before Pages routing or _headers.
+  // Pin its inert error body; local Wrangler's normalized 302 is not accepted.
+  if (check.providerRejection) {
+    if (headers.location !== undefined || headers.refresh !== undefined)
+      return 'unexpected-redirect';
+    if (
+      headers.server !== 'cloudflare' ||
+      headers['content-type'] !== 'text/html' ||
+      headers['content-length'] !== '155'
+    )
+      return 'unexpected-provider-headers';
+    if (
+      body.length !== 155 ||
+      createHash('sha256').update(body).digest('hex') !==
+        PROVIDER_REJECTION_SHA256
+    )
+      return 'unexpected-provider-body';
+    return;
+  }
   if (headers['x-content-type-options'] !== 'nosniff') return 'missing-nosniff';
   if (headers['cache-control'] !== 'no-store')
     return 'unexpected-cache-control';
@@ -332,8 +352,8 @@ export async function verifyDocsSite(options, request = https.request) {
           statusCode: response?.statusCode ?? null,
           success: !failure,
           ...(check.nativeMethod ? { kind: 'native-static-method' } : {}),
-          ...(check.normalizedLegacy
-            ? { kind: 'normalized-legacy-route' }
+          ...(check.providerRejection
+            ? { kind: 'provider-path-rejection' }
             : {}),
           ...(failure ? { failure } : {}),
           ...(response && check.method === 'GET' && check.status === 200
