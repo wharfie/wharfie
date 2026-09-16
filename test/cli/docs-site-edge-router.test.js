@@ -1,72 +1,10 @@
 /* eslint-env jest */
 
-import { describe, expect, it } from '@jest/globals';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
-import { parse } from '@babel/parser';
+import { describe, expect, it, jest } from '@jest/globals';
+import worker from '../../docs/site/_worker.js';
 
-const source = readFileSync(
-  new URL('../../docs/site/edge-router.js', import.meta.url),
-  'utf8',
-);
-const contentSha256 = '0123456789abcdef'.repeat(4);
-const marker = '__WHARFIE_DOCS_SHA256__';
 const guides = 'https://github.com/wharfie/wharfie/blob/master/docs/guides/';
-
-/** @param {string} [hash] */
-function loadHandler(hash = contentSha256) {
-  return runInNewContext(
-    source.replace(marker, hash) + '\nhandler;',
-    {},
-    {
-      timeout: 100,
-      filename: 'docs-site-edge-router.js',
-    },
-  );
-}
-
-/**
- * A CloudFront Functions 1.0 event, including duplicate query/header values.
- * https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/functions-event-structure.html
- *
- * @param {unknown} uri
- * @param {string} [method]
- */
-function createEvent(uri, method = 'GET') {
-  return {
-    version: '1.0',
-    context: {
-      eventType: 'viewer-request',
-      distributionDomainName: 'd111111abcdef8.cloudfront.net',
-      distributionId: 'EDFDVBD6EXAMPLE',
-      requestId: 'example-request-id',
-    },
-    viewer: { ip: '192.0.2.10' },
-    request: {
-      method,
-      uri,
-      querystring: {
-        token: {
-          value: 'private-query-value',
-          multiValue: [
-            { value: 'private-query-value' },
-            { value: 'https://evil.example/?credential=private-query-value' },
-          ],
-        },
-      },
-      headers: {
-        host: { value: 'docs.wharfie.dev' },
-        authorization: { value: 'Bearer private-header-value' },
-        accept: {
-          value: 'text/html',
-          multiValue: [{ value: 'text/html' }, { value: '*/*' }],
-        },
-      },
-      cookies: { session: { value: 'private-cookie-value' } },
-    },
-  };
-}
-
+const index = '<!doctype html><title>Reviewed landing</title>';
 const redirectRoutes = [
   ['/install', 'installation.md'],
   ['/install/', 'installation.md'],
@@ -79,93 +17,109 @@ const redirectRoutes = [
   ['/project-structure.html', 'application-structure.md'],
 ];
 
-describe('documentation CloudFront viewer-request routing', () => {
-  const handler = loadHandler();
-
-  it('fits the CloudFront Functions 10 KB source limit after hash substitution', () => {
-    expect(source.split(marker)).toHaveLength(2);
-    expect(source).not.toContain('${');
-    expect(
-      Buffer.byteLength(source.replace(marker, contentSha256)),
-    ).toBeLessThan(10 * 1024);
+/** @param {string} pathname @param {string} [method] */
+function request(pathname, method = 'GET') {
+  return new Request('https://wharfie-docs.pages.dev' + pathname, {
+    method,
+    headers: {
+      authorization: 'Bearer private-header',
+      cookie: 'session=private-cookie',
+    },
   });
+}
 
-  it('uses simple function parameters supported by the CloudFront runtime', () => {
-    const program = parse(source, { sourceType: 'script' }).program;
-    const functions = program.body.filter(
-      (node) => node.type === 'FunctionDeclaration',
-    );
+function assets() {
+  return {
+    ASSETS: {
+      fetch: jest.fn(
+        async (/** @type {Request} */ incoming) =>
+          new Response(incoming.method === 'HEAD' ? null : index, {
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              'cache-control': 'max-age=300',
+            },
+          }),
+      ),
+    },
+  };
+}
 
-    expect(functions).toHaveLength(2);
-    for (const declaration of functions) {
-      expect(
-        declaration.params.every(
-          (parameter) => parameter.type === 'Identifier',
-        ),
-      ).toBe(true);
-    }
+/** @param {Headers} headers @returns {Record<string, string>} */
+function headerValues(headers) {
+  const values = /** @type {Record<string, string>} */ ({});
+  headers.forEach((value, name) => {
+    values[name] = value;
   });
+  return values;
+}
 
+describe('Cloudflare Pages documentation routing', () => {
   it.each([
     ['/', 'GET'],
     ['/index.html', 'GET'],
     ['/', 'HEAD'],
     ['/index.html', 'HEAD'],
   ])(
-    'rewrites %s %s to the pinned HTML object and strips query values',
-    (uri, method) => {
-      const event = createEvent(uri, method);
-      const originalHeaders = structuredClone(event.request.headers);
-      const result = handler(event);
+    'serves exact landing bytes for %s %s without passing query or credentials to assets',
+    async (pathname, method) => {
+      const env = assets();
+      const response = await worker.fetch(
+        request(pathname + '?token=private-query', method),
+        env,
+      );
 
-      expect(result).toBe(event.request);
-      expect(result.uri).toBe('/releases/' + contentSha256 + '/index.html');
-      expect(result.querystring).toEqual({});
-      expect(result.method).toBe(method);
-      expect(result.headers).toEqual(originalHeaders);
-      expect(result).not.toHaveProperty('statusCode');
-      expect(result).not.toHaveProperty('body');
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(method === 'HEAD' ? '' : index);
+      expect(env.ASSETS.fetch).toHaveBeenCalledTimes(1);
+      const forwarded = env.ASSETS.fetch.mock.calls[0][0];
+      expect(forwarded.url).toBe('https://wharfie-docs.pages.dev/');
+      expect(forwarded.method).toBe(method);
+      expect(headerValues(forwarded.headers)).toEqual({});
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('content-type')).toBe(
+        'text/html; charset=utf-8',
+      );
     },
   );
 
   it.each(redirectRoutes)(
-    'redirects only exact legacy route %s to %s',
-    (uri, guide) => {
-      const result = handler(createEvent(uri));
+    'redirects %s to its exact current guide %s',
+    async (pathname, guide) => {
+      const env = assets();
+      const response = await worker.fetch(
+        request(pathname + '?next=https://evil.example/private-query'),
+        env,
+      );
 
-      expect(result.statusCode).toBe(302);
-      expect(result.statusDescription).toBe('Found');
-      expect(result.headers.location).toEqual({ value: guides + guide });
-      expect(result.body).toEqual({
-        encoding: 'text',
-        data: 'Current guide: ' + guides + guide + '\n',
-      });
-      expect(JSON.stringify(result)).not.toMatch(/private-|evil\.example/);
-      expect(result).not.toHaveProperty('uri');
-      expect(result).not.toHaveProperty('querystring');
+      expect(response.status).toBe(302);
+      expect(response.headers.get('location')).toBe(guides + guide);
+      expect(await response.text()).toBe(
+        'Current guide: ' + guides + guide + '\n',
+      );
+      expect(env.ASSETS.fetch).not.toHaveBeenCalled();
     },
   );
 
   it.each(['/install.sh', '/install.ps1'])(
-    'retires %s with a non-executable plain-text 410',
-    (uri) => {
-      const result = handler(createEvent(uri));
+    'retires %s with the reviewed non-executable plain-text body',
+    async (pathname) => {
+      const env = assets();
+      const response = await worker.fetch(
+        request(pathname + '?token=private-query'),
+        env,
+      );
 
-      expect(result.statusCode).toBe(410);
-      expect(result.statusDescription).toBe('Gone');
-      expect(result.headers['content-type']).toEqual({
-        value: 'text/plain; charset=utf-8',
-      });
-      expect(result.body).toEqual({
-        encoding: 'text',
-        data:
-          'This installer has been retired.\nCurrent installation guide: ' +
+      expect(response.status).toBe(410);
+      expect(response.headers.get('content-type')).toBe(
+        'text/plain; charset=utf-8',
+      );
+      expect(response.headers.get('location')).toBeNull();
+      expect(await response.text()).toBe(
+        'This installer has been retired.\nCurrent installation guide: ' +
           guides +
           'installation.md\n',
-      });
-      expect(result.body.data).not.toMatch(/#!|curl|wget|Invoke-|\$|<script/i);
-      expect(result.headers).not.toHaveProperty('location');
-      expect(JSON.stringify(result)).not.toContain('private-');
+      );
+      expect(env.ASSETS.fetch).not.toHaveBeenCalled();
     },
   );
 
@@ -178,139 +132,96 @@ describe('documentation CloudFront viewer-request routing', () => {
     '/quickstart/child',
     '/project-structure.json',
     '/install.sh/extra',
-    '/install.ps1?download=1',
-    '/index.html?token=private-query-value',
-    '//index.html',
-    '/./index.html',
-    '/private/../index.html',
+    '//install',
     '/%69ndex.html',
-    '/%2e%2e/install',
     '/%2finstall',
     '/%zz',
-    '/install\u0000',
-    '/install\r\nlocation: https://evil.example/',
-    '/<script>alert("private-path-value")</script>',
-    '//evil.example/',
-    'https://evil.example/',
-    '/releases/' + contentSha256 + '/index.html',
-    '',
-    null,
-    undefined,
-    42,
-    { toString: () => '/install' },
-  ])(
-    'refuses an unrecognized or malformed path without reflecting it: %p',
-    (uri) => {
-      const result = handler(createEvent(uri));
+    '/install%00',
+    '/install%0d%0alocation:evil',
+    '/%3Cscript%3Eprivate-path%3C/script%3E',
+    '/_worker.js',
+    '/_routes.json',
+    '/manifest.json',
+    '/releases/old/index.html',
+  ])('keeps unrecognized path %s away from static assets', async (pathname) => {
+    const env = assets();
+    const response = await worker.fetch(
+      request(pathname + '?token=private-query'),
+      env,
+    );
 
-      expect(result.statusCode).toBe(404);
-      expect(result.body).toEqual({
-        encoding: 'text',
-        data: 'Page not found.\nCurrent documentation: https://docs.wharfie.dev/\n',
-      });
-      expect(result).not.toHaveProperty('uri');
-      expect(result.headers).not.toHaveProperty('location');
-      expect(JSON.stringify(result)).not.toMatch(
-        /private-|evil\.example|<script/,
-      );
-    },
-  );
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe(
+      'Page not found.\nCurrent documentation: https://docs.wharfie.dev/\n',
+    );
+    expect(response.headers.get('location')).toBeNull();
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
 
-  it.each([
-    'POST',
-    'PUT',
-    'PATCH',
-    'DELETE',
-    'OPTIONS',
-    'TRACE',
-    'CONNECT',
-    'get',
-    '',
-  ])(
-    'refuses unsupported method %s before any route reaches the origin',
-    (method) => {
-      for (const uri of ['/', '/install', '/install.sh', '/unknown']) {
-        const result = handler(createEvent(uri, method));
+  it('handles Fetch URL dot-segment normalization with only the fixed legacy redirect', async () => {
+    const env = assets();
+    const incoming = request('/%2e%2e/install?token=private-query');
+    const response = await worker.fetch(incoming, env);
 
-        expect(result.statusCode).toBe(405);
-        expect(result.headers.allow).toEqual({ value: 'GET, HEAD' });
-        expect(result.body).toEqual({
-          encoding: 'text',
-          data: 'Use GET or HEAD.\n',
-        });
-        expect(result).not.toHaveProperty('uri');
-        expect(result.headers).not.toHaveProperty('location');
-        expect(JSON.stringify(result)).not.toContain('private-');
+    expect(new URL(incoming.url).pathname).toBe('/install');
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe(guides + 'installation.md');
+    expect(await response.text()).not.toContain('private-query');
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])(
+    'refuses %s before any handler route reaches assets',
+    async (method) => {
+      const env = assets();
+      for (const pathname of [
+        '/',
+        '/index.html',
+        '/install',
+        '/install.sh',
+        '/unknown',
+      ]) {
+        const response = await worker.fetch(request(pathname, method), env);
+        expect(response.status).toBe(405);
+        expect(response.headers.get('allow')).toBe('GET, HEAD');
+        expect(await response.text()).toBe('Use GET or HEAD.\n');
       }
+      expect(env.ASSETS.fetch).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    ...redirectRoutes.map(([uri]) => uri),
+    ...redirectRoutes.map(([pathname]) => pathname),
     '/install.sh',
     '/install.ps1',
     '/unknown',
-  ])('returns the same headers and no generated body for HEAD %s', (uri) => {
-    const getResult = handler(createEvent(uri));
-    const headResult = handler(createEvent(uri, 'HEAD'));
+  ])('keeps GET headers but no body for HEAD %s', async (pathname) => {
+    const env = assets();
+    const get = await worker.fetch(request(pathname), env);
+    const head = await worker.fetch(request(pathname, 'HEAD'), env);
 
-    expect(headResult.statusCode).toBe(getResult.statusCode);
-    expect(headResult.statusDescription).toBe(getResult.statusDescription);
-    expect(headResult.headers).toEqual(getResult.headers);
-    expect(headResult).not.toHaveProperty('body');
+    expect(head.status).toBe(get.status);
+    expect(headerValues(head.headers)).toEqual(headerValues(get.headers));
+    expect(await head.text()).toBe('');
   });
 
-  it.each([
-    marker,
-    'a'.repeat(63),
-    'a'.repeat(65),
-    'A'.repeat(64),
-    '../index.html',
-  ])(
-    'keeps a missing or invalid content hash away from the origin: %s',
-    (hash) => {
-      const invalidHandler = loadHandler(hash);
-
-      for (const uri of ['/', '/index.html']) {
-        const result = invalidHandler(createEvent(uri));
-        expect(result.statusCode).toBe(503);
-        expect(result.body.data).toContain(guides + 'recipient-preview.md');
-        expect(result).not.toHaveProperty('uri');
-        expect(JSON.stringify(result)).not.toContain('private-');
-        expect(invalidHandler(createEvent(uri, 'HEAD'))).not.toHaveProperty(
-          'body',
-        );
-      }
-    },
-  );
-
-  it('sends fixed security and no-store headers on every generated response', () => {
-    const results = [
-      handler(createEvent('/install')),
-      handler(createEvent('/install.sh')),
-      handler(createEvent('/unknown')),
-      handler(createEvent('/', 'POST')),
-      loadHandler(marker)(createEvent('/')),
-    ];
-
-    for (const result of results) {
-      expect(result.headers).toMatchObject({
-        'content-type': { value: 'text/plain; charset=utf-8' },
-        'cache-control': { value: 'no-store' },
-        'content-security-policy': {
-          value:
-            "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-        },
-        'x-content-type-options': { value: 'nosniff' },
-        'referrer-policy': { value: 'no-referrer' },
-        'x-frame-options': { value: 'DENY' },
+  it('sets matching no-store/security headers on every handler response', async () => {
+    for (const pathname of [
+      '/',
+      '/index.html',
+      '/install',
+      '/install.sh',
+      '/unknown',
+    ]) {
+      const response = await worker.fetch(request(pathname), assets());
+      expect(headerValues(response.headers)).toMatchObject({
+        'cache-control': 'no-store',
+        'content-security-policy':
+          "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'no-referrer',
+        'x-frame-options': 'DENY',
       });
-      expect(
-        Object.keys(result.headers).every(
-          (name) => name === name.toLowerCase(),
-        ),
-      ).toBe(true);
-      expect(result).not.toHaveProperty('cookies');
     }
   });
 });

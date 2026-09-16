@@ -1,240 +1,262 @@
-# Publish the documentation landing page
+# Publish the documentation with Cloudflare Pages
 
-Deploy [the landing page](../site/index.html) through private S3, CloudFront OAC, and a
-CloudFront Function. This manual AWS CLI runbook uses repository templates and local helpers; there is no CI deployment workflow.
-Staging verification passes; custom-domain publication remains pending. [Issue 137](https://github.com/wharfie/wharfie/issues/137) stays open until public acceptance and rollback records are complete.
+Publish the landing page on Cloudflare Pages' free plan with automatic GitHub deployments.
+The migration keeps the working CloudFront origin until the Pages deployment,
+custom hostname, and public route checks pass. Pages deployment and AWS removal
+are still pending; the evidence table records the completed baseline separately.
 
-The fixed destination is AWS account `411430101559`, region `us-east-1`, stack
-`wharfie-docs`, bucket `wharfie-docs-411430101559-us-east-1`, and certificate stack
-`wharfie-docs-certificate`. The bucket blocks public access; its policy permits this distribution to read release HTML through signed [OAC requests](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html).
-CloudFront serves HTTPS and the function enforces this route contract:
+The `wharfie.dev` zone is managed in the maintainer's personal Cloudflare account.
+Select that account explicitly and retain the account ID, project name, deployment
+ID, commit, bundle hashes, and DNS backup in private operator evidence. Do not
+commit account email addresses, OAuth credentials, tokens, or DNS backups.
 
-| Request                                                                | Response                                                               |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `/`, `/index.html`                                                     | `200`, exact reviewed HTML bytes.                                      |
-| `/install`, `/install/`, `/install.html`                               | `302` to the current [installation guide](installation.md).            |
-| `/quickstart`, `/quickstart/`, `/quickstart.html`                      | `302` to the [recipient guide](recipient-preview.md).                  |
-| `/project-structure`, `/project-structure/`, `/project-structure.html` | `302` to [application structure](application-structure.md).            |
-| `/install.sh`, `/install.ps1`                                          | `410`, plain text linking to current installation; no executable body. |
-| Every other accepted request path                                      | `404`, with a link to current documentation.                           |
-| Methods other than GET/HEAD                                            | `405`, `Allow: GET, HEAD`.                                             |
+## What is free, and which requests run code
 
-Application HTTPS responses use `Cache-Control: no-store` and security headers. Redirects discard queries; unknown paths cannot reach arbitrary objects or the old origin.
-CloudFront can reject malformed paths with `400` before the function runs. The verifier checks 36 application routes and one explicit provider rejection (`/%2e%2e/install`), for 37 total checks; provider errors are outside the application header/body contract.
+The ordinary `/` landing page bypasses Functions through `_routes.json`. Requests
+that do not invoke Functions are free and unlimited. `/index.html`, retired routes,
+and unknown paths run the small `_worker.js` handler; their requests share the
+Workers Free allowance of **100,000 requests per day across the account**, resetting
+at midnight UTC. This is not unlimited Function execution. Keep the project on the
+free plan; no database, storage binding, or paid Worker plan is required.
+[Cloudflare pricing](https://developers.cloudflare.com/pages/functions/pricing/)
+
+Pages Free also limits Git builds to **500 per month**, one concurrent build, and
+20 minutes per build. Its asset limits are 20,000 files and 25 MiB per file; this
+bundle contains five small deployment files.
+[Pages limits](https://developers.cloudflare.com/pages/platform/limits/)
+
+Set the project's **Settings > Runtime > Fail open / closed** option to **Fail
+closed** so exhausted Function capacity does not bypass the handler. Retain the
+`_routes.json` root exclusion; moving `/` into the Function would consume the daily
+allowance for ordinary visits. Static responses receive `_headers`; the Worker
+sets its response headers itself.
+[Invocation routes](https://developers.cloudflare.com/pages/functions/routing/),
+[static headers](https://developers.cloudflare.com/pages/configuration/headers/)
+
+| Request                                                                | Response                                                                                             |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| GET/HEAD `/`                                                           | Static `200`, reviewed HTML; no Function invocation.                                                 |
+| GET/HEAD `/index.html`                                                 | Worker `200`, the same HTML bytes.                                                                   |
+| `/install`, `/install/`, `/install.html`                               | `302` to the current [installation guide](installation.md).                                          |
+| `/quickstart`, `/quickstart/`, `/quickstart.html`                      | `302` to the [recipient guide](recipient-preview.md).                                                |
+| `/project-structure`, `/project-structure/`, `/project-structure.html` | `302` to [application structure](application-structure.md).                                          |
+| `/install.sh`, `/install.ps1`                                          | `410`, fixed plain text; no executable body.                                                         |
+| Other accepted paths                                                   | `404` linking to current documentation.                                                              |
+| Unsupported methods                                                    | `405`; the static root has Pages' empty response, while Worker responses include `Allow: GET, HEAD`. |
+
+Responses retain the CSP, `nosniff`, and `Cache-Control: no-store` contract. Redirects
+to repository guides discard query strings. Pages normalizes encoded parent segments
+before routing: the verifier expects `/%2e%2e/install` to reach the fixed installation
+redirect, rather than CloudFront's former `400`. A root HEAD response may omit
+`Content-Length`; GET responses must still match the exact bundle SHA-256.
 
 ## Prepare a reviewed bundle
 
-Use the repository-pinned Node.js `24.13.1`, AWS CLI v2 with a working `wharfie` login, and Cloudflare DNS access.
-Run blocks in one Bash session from a clean, reviewed checkout. Retain evidence privately outside Git; never commit credentials, emails, or DNS backups.
+Use the repository-pinned Node.js `24.13.1`. The helper uses Node built-ins and does
+not need dependency installation. Start from a clean, reviewed commit and retain
+the new bundle outside the checkout:
 
 ```bash
 set -eu
 umask 077
-export AWS_PROFILE=wharfie AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1
-export AWS_DEFAULT_OUTPUT=json AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
-docs_account_guard() {
-  test "$(aws sts get-caller-identity --query Account --output text)" = 411430101559
-}
-docs_account_guard
+test "$(node --version)" = v24.13.1
 test -z "$(git status --porcelain --untracked-files=normal)"
-docs_run=$(mktemp -d "${TMPDIR:-/tmp}/wharfie-docs.XXXXXX")
+docs_run=$(mktemp -d "${TMPDIR:-/tmp}/wharfie-pages.XXXXXX")
 docs_bundle="$docs_run/bundle"
 docs_evidence="$docs_run/evidence"
 mkdir -m 700 "$docs_evidence"
 node scripts/prepare-docs-site.js --output-dir "$docs_bundle"
-docs_sha=$(node --input-type=module - "$docs_bundle" <<'NODE'
+node --input-type=module - "$docs_bundle" <<'NODE'
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 const dir = process.argv[2];
 const m = JSON.parse(readFileSync(`${dir}/manifest.json`));
+assert.equal(m.version, 2);
+assert.equal(m.provider, 'cloudflare-pages');
+assert.equal(m.deployDirectory, 'site');
 assert.equal(m.git.dirty, false);
-assert.equal(m.contentSha256, m.files.find(f => f.name === 'index.html').sha256);
-for (const f of m.files) {
-  const bytes = readFileSync(`${dir}/${f.name}`);
-  assert.equal(bytes.length, f.size);
-  assert.equal(createHash('sha256').update(bytes).digest('hex'), f.sha256);
+for (const file of m.files) {
+  const bytes = readFileSync(`${dir}/${file.name}`);
+  assert.equal(bytes.length, file.size);
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), file.sha256);
 }
-console.log(m.contentSha256);
+assert.equal(m.contentSha256, m.files.find(f => f.name === 'site/index.html').sha256);
+console.log(JSON.stringify({ commit: m.git.commit, contentSha256: m.contentSha256 }));
 NODE
-)
-docs_bucket=wharfie-docs-411430101559-us-east-1
 ```
 
-The bundle contains `manifest.json`, `index.html`, rendered `hosting.template.json`, `certificate.template.json`, and `parameters.json`. The manifest records Git provenance,
-file sizes/hashes, and `releases/<contentSha256>/index.html`. Retain accepted bundles.
-**Generated `parameters.json` is staging-only:** its empty hostname/certificate values
-would detach the production alias if reused in an update.
+The version-2 `manifest.json` records provenance and every file's size/hash. Only
+`bundle/site/` is deployable: it contains `index.html`, `404.html`, `_headers`,
+`_routes.json`, and `_worker.js`. Keep the manifest and evidence outside that directory.
+The explicit `404.html` prevents Pages' implicit single-page-app fallback.
+[Serving Pages](https://developers.cloudflare.com/pages/configuration/serving-pages/)
 
-## Create staging and verify its object
+## Configure automatic GitHub publication
 
-For an absent stack, create this change set; for an existing stack, inspect its outputs/parameters and use the update procedure. Guard the account before mutations.
+Create a **Git-integrated Pages project**, connected to `wharfie/wharfie`, in the
+verified Cloudflare account. Authorize the Cloudflare GitHub app for that repository.
+Wrangler OAuth access to Pages does not itself install the GitHub app or grant DNS
+editing permission. Keep the existing manual DNS workflow.
+
+Do not create a Direct Upload project as an intermediate step: Cloudflare cannot
+convert one to Git integration later. A Git-integrated project can still accept a
+manual Wrangler deployment when needed.
+[Deployment modes](https://developers.cloudflare.com/pages/get-started/direct-upload/)
+
+During migration, keep automatic production deployments disabled while verifying
+the migration branch's preview. The pre-migration `master` helper does not produce
+the Pages output directory. After the preview passes, enable production deployments
+for the reviewed merge and verify the resulting `master` deployment before DNS
+cutover. The table describes the final settings; use the same build and runtime
+configuration for production and previews.
+
+| Setting                    | Value                                                                  |
+| -------------------------- | ---------------------------------------------------------------------- |
+| Repository root            | Repository root; no subdirectory.                                      |
+| Framework preset           | None.                                                                  |
+| Production branch          | `master`, automatic production deployments enabled.                    |
+| Build command              | `node scripts/prepare-docs-site.js --output-dir docs-pages-build`      |
+| Build output directory     | `docs-pages-build/site`                                                |
+| Environment                | `NODE_VERSION=24.13.1`, `SKIP_DEPENDENCY_INSTALL=true`                 |
+| Runtime compatibility date | `2026-09-16` in production and preview deployment settings.            |
+| Preview branches           | Enable the migration branch and later reviewed documentation branches. |
+
+The output directory must be new. If a cached build directory unexpectedly exists,
+inspect that build's workspace rather than weakening the exclusive-output check.
+The build uses no project dependencies; the Node version and skip-install setting
+are documented [Pages build controls](https://developers.cloudflare.com/pages/configuration/build-image/).
+Record the chosen project name and actual `pages.dev` hostname from the dashboard;
+do not infer the hostname if Cloudflare assigns a suffix.
+
+Before merging, verify the migration branch's unique preview deployment. After
+merge, wait for the `master` production deployment and verify it again. For each,
+retain the deployment ID, environment, Git commit, build result, manifest from the
+build log, and exact deployment URL. Reproduce the bundle locally from that same
+commit and compare its file hashes before running:
 
 ```bash
-docs_account_guard
-docs_change="docs-create-$(date -u +%Y%m%dT%H%M%SZ)"
-aws cloudformation create-change-set --stack-name wharfie-docs \
-  --change-set-name "$docs_change" --change-set-type CREATE \
-  --template-body "file://$docs_bundle/hosting.template.json" \
-  --parameters "file://$docs_bundle/parameters.json"
-aws cloudformation wait change-set-create-complete --stack-name wharfie-docs --change-set-name "$docs_change"
-aws cloudformation describe-change-set --stack-name wharfie-docs --change-set-name "$docs_change" > "$docs_evidence/create-change.json"
+# Set this to the exact HTTPS deployment URL shown by Pages.
+: "${docs_deployment_url:?Set the verified Pages deployment URL}"
+node scripts/verify-docs-site.js --url "$docs_deployment_url" \
+  --bundle-dir "$docs_bundle" --output "$docs_evidence/pages-deployment.json"
 ```
 
-Review `create-change.json` and the template for the expected bucket, OAC, distribution, function, headers, and policy. Stop on unexpected changes.
+All verifier checks must pass in Pages itself; local Node tests alone do not prove
+provider behavior. Inspect mobile/desktop rendering, keyboard focus, and outgoing
+links. Retain the deployment URL and report; a preview deployment is not yet the
+production site. GitHub integration supplies automatic builds and preview URLs;
+there is no separate GitHub Actions deployment workflow.
+[GitHub integration](https://developers.cloudflare.com/pages/configuration/git-integration/github-integration/)
 
-```bash
-docs_account_guard
-aws cloudformation execute-change-set --stack-name wharfie-docs --change-set-name "$docs_change"
-aws cloudformation wait stack-create-complete --stack-name wharfie-docs
-aws cloudformation describe-stacks --stack-name wharfie-docs > "$docs_evidence/staging-stack.json"
-docs_distribution=$(aws cloudformation describe-stacks --stack-name wharfie-docs --query "Stacks[0].Outputs[?OutputKey=='DistributionDomainName'].OutputValue | [0]" --output text)
-docs_account_guard
-if ! aws s3api put-object --bucket "$docs_bucket" --key "releases/$docs_sha/index.html" \
-  --body "$docs_bundle/index.html" --content-type 'text/html; charset=utf-8' \
-  --cache-control no-store --if-none-match '*' --expected-bucket-owner 411430101559 \
-  > "$docs_evidence/upload.json" 2> "$docs_evidence/upload.err"; then
-  case "$(cat "$docs_evidence/upload.err")" in
-    *'(PreconditionFailed)'*) ;; # Existing immutable object: verify it below.
-    *) cat "$docs_evidence/upload.err" >&2; exit 1 ;;
-  esac
-fi
-aws s3api get-object --bucket "$docs_bucket" --key "releases/$docs_sha/index.html" \
-  --expected-bucket-owner 411430101559 "$docs_evidence/download.html" > "$docs_evidence/download.json"
-node --input-type=module - "$docs_evidence" "$docs_sha" <<'NODE'
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-const [dir, sha] = process.argv.slice(2);
-assert.equal(createHash('sha256').update(readFileSync(`${dir}/download.html`)).digest('hex'), sha);
-const metadata = JSON.parse(readFileSync(`${dir}/download.json`));
-assert.equal(metadata.ContentType, 'text/html; charset=utf-8');
-assert.equal(metadata.CacheControl, 'no-store');
-NODE
-node scripts/verify-docs-site.js --url "https://$docs_distribution" \
-  --bundle-dir "$docs_bundle" --output "$docs_evidence/staging.json"
-```
+## Associate the hostname, then change DNS
 
-On [`412 PreconditionFailed`](https://docs.aws.amazon.com/cli/latest/reference/s3api/put-object.html), verify the existing object; never overwrite it. Different bytes or metadata stop publication.
-Initial staging can return `403` before its policy/object exist; require stack completion, readback, and **37 passing live verifier checks**.
-Validate function changes in the actual AWS runtime and repeat the live gate: Node tests alone do not establish CloudFront compatibility. Initial staging caught a default-parameter syntax error that passed Node checks.
-Inspect mobile/desktop rendering, keyboard navigation, and outgoing links.
+The working migration source is `d1sdjfclzv637e.cloudfront.net`, distribution
+`EITEBWLWDGRVN`. Before changes, back up the exact `docs` DNS record: ID, full name,
+CNAME target, proxy state, TTL, and editable metadata. The current record is DNS
+only, TTL `300`. Keep its AWS certificate and origin available through acceptance.
 
-## Validate the certificate and attach the hostname
+First associate `docs.wharfie.dev` with the verified Pages project using **Custom
+domains > Set up a domain**, or the Pages domain-association API. Confirm the
+association belongs to that project and retain its status. Association must precede
+the CNAME switch; a CNAME alone can produce `522`. For a zone already in Cloudflare,
+the dashboard can update DNS after confirmation. Keep association and DNS updates
+separate, verify the DNS record remains unchanged, and stop before DNS confirmation
+until the candidate checks pass.
+[Custom-domain setup](https://developers.cloudflare.com/pages/configuration/custom-domains/)
 
-CloudFront requires the ACM certificate in [us-east-1](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/cnames-and-https-procedures.html).
-Inspect `wharfie-docs-certificate` first; it may already be waiting for DNS. Execute
-the creation command below only when absent, after reviewing the bundled template.
+Once the production deployment passes, manually edit only the existing `docs`
+record to the project's verified production `pages.dev` hostname. Use DNS only and
+TTL `300` for the controlled migration unless Pages explicitly requires a different
+setting; record the exact resulting record. Do not point the custom domain at a
+single preview deployment or branch alias. Wait for Pages to report the custom
+domain active and for its managed HTTPS certificate to validate.
 
-```bash
-# First installation only, after confirming the certificate stack is absent:
-docs_account_guard
-aws cloudformation create-stack --stack-name wharfie-docs-certificate \
-  --template-body "file://$docs_bundle/certificate.template.json"
-# For either an existing or newly created stack, once its certificate appears:
-docs_certificate=$(aws cloudformation describe-stack-resources --stack-name wharfie-docs-certificate --query "StackResources[?LogicalResourceId=='DocsCertificate'].PhysicalResourceId | [0]" --output text)
-aws acm describe-certificate --certificate-arn "$docs_certificate" \
-  --query 'Certificate.DomainValidationOptions[].ResourceRecord'
-```
-
-Add the exact returned validation CNAME in Cloudflare as **DNS only**; retain it for
-renewal. After these waits, confirm ACM status `ISSUED`, domain `docs.wharfie.dev`, and
-ARN account `411430101559`/region `us-east-1`. Attach the alias with the content preserved:
-
-```bash
-aws acm wait certificate-validated --certificate-arn "$docs_certificate"
-aws cloudformation wait stack-create-complete --stack-name wharfie-docs-certificate
-docs_account_guard
-docs_change="docs-alias-$(date -u +%Y%m%dT%H%M%SZ)"
-aws cloudformation create-change-set --stack-name wharfie-docs --change-set-name "$docs_change" \
-  --change-set-type UPDATE --use-previous-template --parameters \
-  ParameterKey=ContentSha256,UsePreviousValue=true \
-  ParameterKey=CustomDomain,ParameterValue=docs.wharfie.dev \
-  ParameterKey=CertificateArn,ParameterValue="$docs_certificate"
-aws cloudformation wait change-set-create-complete --stack-name wharfie-docs --change-set-name "$docs_change"
-aws cloudformation describe-change-set --stack-name wharfie-docs --change-set-name "$docs_change" > "$docs_evidence/alias-change.json"
-```
-
-Review `alias-change.json`, execute the exact change set with the guarded command
-above, and wait for `stack-update-complete`. Before changing public DNS, run:
+From a fresh client, check authoritative/public DNS and run without a connection
+override:
 
 ```bash
 node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
-  --connect-host "$docs_distribution" --bundle-dir "$docs_bundle" \
-  --output "$docs_evidence/alias-before-dns.json"
+  --bundle-dir "$docs_bundle" --output "$docs_evidence/public-pages.json"
 ```
 
-`--connect-host` changes only the connection destination; verified TLS, SNI, and HTTP Host use `docs.wharfie.dev`. Public DNS remains unchanged.
+Repeat after DNS convergence with a new report path. Require exact root bytes,
+all route checks, valid TLS, and a mobile/desktop/keyboard review. Follow the current
+guides, release, license, and feedback links; anonymous GitHub users must sign in
+to see the feedback form. Do not submit an issue as part of acceptance.
 
-## Cut over the existing Cloudflare record
+## Update and roll back
 
-Before cutover, merge [PR 169](https://github.com/wharfie/wharfie/pull/169) and check its public guide and feedback links: the landing page targets `master`, where the new `preview-feedback.yml` form was still absent during staging. Confirm the revised recipient and installation guides are visible too.
-Prepare the clean committed release bundle and compare its HTML and rendered hosting-template hashes with the verified staging bundle; restage and reverify any changed artifact.
+A reviewed merge to `master` triggers production publication. Check its deployment
+commit and run the verifier against the corresponding bundle and public hostname.
+Retain the last verified production deployment ID and bundle before each update.
 
-The zone is managed in a personal Cloudflare account. Its existing `docs` CNAME targets
-`docs.wharfie.dev.s3-website-us-west-2.amazonaws.com`; the old AWS bucket owner remains
-unknown. DNS ownership does not establish S3 ownership. Leave that bucket untouched
-and record existing Cloudflare redirect/cache rules.
+For rollback, select the previous successful **production** deployment in the
+Pages project's **Deployments > All deployments > Rollback to this deployment**
+action. Preview deployments cannot be rollback targets. Verify the restored bytes
+and routes against the retained bundle. Revert the source change through Git so
+the next automatic deployment does not reintroduce it.
+[Pages rollbacks](https://developers.cloudflare.com/pages/configuration/rollbacks/)
 
-Privately back up the **exact DNS record**: ID, type, full name, target, proxy state,
-TTL, and other editable metadata. In Cloudflare's DNS dashboard update that record:
-type `CNAME`, name `docs`, target `$docs_distribution`, **DNS only** (`proxied: false`),
-TTL `300`. Save the resulting record and timestamp. Keep validation CNAMEs separate;
-leave other records and Cloudflare rules unchanged.
+During migration, the saved CloudFront record remains a fallback only while that
+origin and certificate still exist. Verify them before restoring the exact DNS
+backup, then recheck public HTTPS after the previous TTL. Changing DNS away from
+Pages can deactivate its custom-domain association; switching back requires waiting
+for activation and checking TLS again. Prefer Pages deployment rollback after the
+migration. After AWS teardown, there is no CloudFront DNS rollback target.
 
-Check DNS with an independent resolver and allow the previous TTL to expire. Run
-from a fresh client/network with the bundle and scripts, without a connection override:
+## Remove only the replacement AWS documentation resources
+
+Perform this phase only after the Pages custom domain passes public acceptance and
+its deployment rollback record is retained. Scope is limited to AWS account
+`411430101559`, region `us-east-1`, hosting stack `wharfie-docs`, certificate stack
+`wharfie-docs-certificate`, distribution `EITEBWLWDGRVN`, and retained bucket
+`wharfie-docs-411430101559-us-east-1`.
 
 ```bash
-node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
-  --bundle-dir "$docs_bundle" --output "$docs_evidence/public.json"
+export AWS_PROFILE=wharfie AWS_REGION=us-east-1 AWS_DEFAULT_REGION=us-east-1
+export AWS_DEFAULT_OUTPUT=json AWS_PAGER='' AWS_CLI_AUTO_PROMPT=off
+test "$(aws sts get-caller-identity --query Account --output text)" = 411430101559
+aws cloudformation describe-stacks --stack-name wharfie-docs > "$docs_evidence/aws-hosting-before.json"
+aws cloudformation list-stack-resources --stack-name wharfie-docs > "$docs_evidence/aws-resources-before.json"
+aws cloudformation describe-stacks --stack-name wharfie-docs-certificate > "$docs_evidence/aws-certificate-before.json"
 ```
 
-Require all 37 checks, including the manifest's root SHA. Repeat after DNS convergence with a new report path.
-Check public mobile/desktop rendering, keyboard navigation, links, and the feedback form without submitting an issue.
-Until then, give testers the [recipient guide](recipient-preview.md) directly.
+Bind teardown to those saved stack ARNs and physical resource IDs, recheck the
+account before mutations, and stop on any identity mismatch. Retain the old
+CloudFront configuration, bucket policy, certificate ARN, and object inventory.
+Compare every object's authenticated readback hash with an accepted deployment
+manifest using `--expected-bucket-owner 411430101559`. Stop on unrecorded keys,
+versions, or resources; never use recursive deletion or `--force` bucket removal.
 
-## Update content or roll it back
+Delete the exact hosting stack and wait for deletion, including CloudFront's
+distribution removal. The bucket's retention policy leaves it behind: delete only
+its verified object keys, then remove that exact empty bucket with the expected
+owner guard. Delete the exact certificate stack after the distribution no longer
+uses it. Independently verify both stack deletions and the absence of the recorded
+distribution, bucket, certificate, function, OAC, and response-header policy.
+Re-run public Pages verification after cleanup and retain bounded receipts.
 
-Prepare a new clean bundle/evidence directory and repeat immutable upload/readback before switching content.
-Retain current `describe-stacks` output including `ContentSha256` and the accepted bundle for rollback. For **content-only** changes:
+Do not touch the historical `docs.wharfie.dev` bucket in `us-west-2`: its owner
+remains unknown. The Cloudflare zone, other applications, and unrelated AWS or
+soak resources are outside this cleanup.
 
-```bash
-docs_account_guard
-docs_change="docs-content-$(date -u +%Y%m%dT%H%M%SZ)"
-aws cloudformation create-change-set --stack-name wharfie-docs --change-set-name "$docs_change" \
-  --change-set-type UPDATE --use-previous-template --parameters \
-  ParameterKey=ContentSha256,ParameterValue="$docs_sha" \
-  ParameterKey=CustomDomain,UsePreviousValue=true \
-  ParameterKey=CertificateArn,UsePreviousValue=true
-```
+## Migration evidence
 
-Wait for change-set completion, inspect it, execute it after an account guard, and wait
-for stack-update completion. Verify both endpoints against the new bundle. This recipe
-preserves the existing template; router/template changes require a separate reviewed
-update. Never use the generated staging parameters in production.
+The AWS-hosted public baseline on 2026-09-16 served reviewed SHA-256
+`0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808` with valid TLS,
+expected headers, and successful mobile/desktop/keyboard checks. PR 169 is merged;
+its guides and feedback form match the reviewed bytes, and public links resolve.
+These results establish the working migration source, not Pages acceptance.
 
-For rollback, select the prior bundle's verified hash in the same content-only change
-set and repeat public verification. Prefer this certificate-backed origin or reviewed
-maintenance HTML linking to `https://github.com/wharfie/wharfie/blob/master/docs/guides/recipient-preview.md`,
-published with the same bundle/upload/update procedure. If DNS rollback is necessary,
-verify the destination and TLS first, restore the exact saved record, and recheck after
-its TTL. The old origin contains retired installers; returning users there is not a
-successful recovery. If no safe origin is available, send testers the repository guide
-and record the outage. Retain the bucket, certificate, and rollback releases; do not
-use recursive sync, broad deletion, or old-origin cleanup.
+| Evidence                                                                  | Status                    |
+| ------------------------------------------------------------------------- | ------------------------- |
+| Cloudflare account/free plan, Git-integrated project, deployment settings | Pending verification.     |
+| Clean bundle and preview/production deployment reports                    | Pending Pages runs.       |
+| Pages custom-domain association, managed TLS, exact DNS record            | Pending cutover.          |
+| Public Pages routes, rendering, links, and rollback record                | Pending acceptance.       |
+| Exact AWS resource teardown and independent absence checks                | Pending Pages acceptance. |
 
-Evidence checked on 2026-09-15: `staging-verification-v2.json` finished at 16:35 UTC with all 37 checks passing; `fixed-api-proof.json` records six passing AWS `LIVE` function cases. Retain these bounded reports with the bundle; they do not establish custom-domain publication.
-
-| Acceptance evidence                                                | Status                                                                                                                                       |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Staging immutable object and authenticated readback                | Passed; SHA-256 `0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808` matches bundle, origin readback, and public staging HTML. |
-| Clean committed release bundle                                     | Pending; staging records commit `00c5ec4d193b22eca3b609caf16fb0ea6b75609e` with `dirty: true`.                                               |
-| CloudFront staging endpoint                                        | [d1sdjfclzv637e.cloudfront.net](https://d1sdjfclzv637e.cloudfront.net/) (`EITEBWLWDGRVN`); **37/37 passed**.                                 |
-| AWS `LIVE` function runtime                                        | **6/6 passed** after the default-parameter syntax fix.                                                                                       |
-| Issued certificate and pre-DNS hostname/TLS report                 | Pending DNS validation and alias attachment.                                                                                                 |
-| PR 169 public guides and feedback form                             | Pending merge and public link verification.                                                                                                  |
-| Private DNS backup, cutover record, independent public reports     | Pending; `docs.wharfie.dev` has not been cut over.                                                                                           |
-| Public rendering/keyboard/link review and verified rollback record | Pending.                                                                                                                                     |
-
-Attach sanitized evidence before closing issue 137. This cutover does not publish a Wharfie package or prove soak/tester acceptance.
+Close [issue 137](https://github.com/wharfie/wharfie/issues/137) only after retaining
+sanitized public acceptance and cleanup evidence. This migration does not publish
+a new Wharfie package or establish soak/tester acceptance.

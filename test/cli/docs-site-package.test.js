@@ -9,20 +9,26 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runInNewContext } from 'node:vm';
 
 import {
   parseDocsSiteArgs,
   prepareDocsSite,
 } from '../../scripts/prepare-docs-site.js';
 
-const marker = '__WHARFIE_DOCS_SHA256__';
+const siteFiles = [
+  '404.html',
+  '_headers',
+  '_routes.json',
+  '_worker.js',
+  'index.html',
+];
 const script = fileURLToPath(
   new URL('../../scripts/prepare-docs-site.js', import.meta.url),
 );
@@ -57,18 +63,20 @@ beforeEach(() => {
     '<!doctype html>\r\n<p>Current docs.</p>\n',
   );
   writeFileSync(
-    path.join(source, 'edge-router.js'),
-    `function handler() { return '${marker}'; } // literal \u0024{neverExpand}\n`,
+    path.join(source, '_worker.js'),
+    'export default { fetch() { return new Response("Not found", {status:404}); } };\n',
   );
   writeFileSync(
-    path.join(source, 'hosting.template.json'),
-    JSON.stringify({
-      Resources: {
-        DocsRoutes: {
-          Properties: { FunctionCode: '__WHARFIE_DOCS_EDGE_CODE__' },
-        },
-      },
-    }),
+    path.join(source, '404.html'),
+    '<!doctype html><title>Not found</title>\n',
+  );
+  writeFileSync(
+    path.join(source, '_headers'),
+    '/*\n  Cache-Control: no-store\n',
+  );
+  writeFileSync(
+    path.join(source, '_routes.json'),
+    JSON.stringify({ version: 1, include: ['/*'], exclude: ['/'] }),
   );
   git('init', '-q');
   git('add', '.');
@@ -90,25 +98,32 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-describe('local documentation deployment bundle', () => {
-  it('binds exact HTML bytes, all file hashes, staging parameters, and clean Git provenance', () => {
+describe('local Cloudflare Pages documentation bundle', () => {
+  it('binds exact site bytes, all file hashes, and clean Git provenance outside the upload directory', () => {
     const outputDir = path.join(directory, 'bundle');
     const manifest = prepareDocsSite({ outputDir, repoRoot });
     const index = readFileSync(path.join(source, 'index.html'));
-    expect(readFileSync(path.join(outputDir, 'index.html'))).toEqual(index);
+    expect(readFileSync(path.join(outputDir, 'site', 'index.html'))).toEqual(
+      index,
+    );
     expect(manifest).toMatchObject({
       format: 'wharfie-docs-site',
-      version: 1,
+      version: 2,
+      provider: 'cloudflare-pages',
+      deployDirectory: 'site',
       git: { commit: git('rev-parse', 'HEAD'), dirty: false },
-      account: '411430101559',
-      region: 'us-east-1',
-      stack: 'wharfie-docs',
-      bucket: 'wharfie-docs-411430101559-us-east-1',
       contentSha256: digest(index),
-      objectKey: `releases/${digest(index)}/index.html`,
     });
+    expect(readdirSync(outputDir).sort()).toEqual(['manifest.json', 'site']);
+    expect(readdirSync(path.join(outputDir, 'site')).sort()).toEqual(siteFiles);
+    expect(manifest.files.map((file) => file.name).sort()).toEqual(
+      siteFiles.map((name) => `site/${name}`),
+    );
     for (const file of manifest.files) {
       const bytes = readFileSync(path.join(outputDir, file.name));
+      expect(bytes).toEqual(
+        readFileSync(path.join(source, path.basename(file.name))),
+      );
       expect(file).toEqual({
         name: file.name,
         sha256: digest(bytes),
@@ -118,50 +133,31 @@ describe('local documentation deployment bundle', () => {
     expect(
       JSON.parse(readFileSync(path.join(outputDir, 'manifest.json'), 'utf8')),
     ).toEqual(manifest);
-    expect(
-      JSON.parse(readFileSync(path.join(outputDir, 'parameters.json'), 'utf8')),
-    ).toEqual([
-      { ParameterKey: 'ContentSha256', ParameterValue: digest(index) },
-      { ParameterKey: 'CustomDomain', ParameterValue: '' },
-      { ParameterKey: 'CertificateArn', ParameterValue: '' },
-    ]);
-    const template = JSON.parse(
-      readFileSync(path.join(outputDir, 'hosting.template.json'), 'utf8'),
-    );
-    /** @type {[string, Array<string | {Ref: string}>]} */
-    const join =
-      template.Resources.DocsRoutes.Properties.FunctionCode['Fn::Join'];
-    expect(join[0]).toBe('');
-    expect(join[1][1]).toEqual({ Ref: 'ContentSha256' });
-    const code = join[1]
-      .map((part) => (typeof part === 'string' ? part : manifest.contentSha256))
-      .join('');
-    expect(code).toContain('${neverExpand}');
-    expect(code).not.toContain(marker);
-    expect(runInNewContext(`${code}\nhandler();`)).toBe(manifest.contentSha256);
   });
 
-  it('records dirty source accurately, changes the object identity, and copies the optional certificate exactly', () => {
+  it('records changed source accurately without putting unlisted files or private evidence in the upload directory', () => {
     const first = prepareDocsSite({
       outputDir: path.join(directory, 'first'),
       repoRoot,
     });
     writeFileSync(path.join(source, 'index.html'), '<p>Revised docs.</p>');
-    const certificate = Buffer.from('{"Description":"Certificate"}\r\n');
-    writeFileSync(path.join(source, 'certificate.template.json'), certificate);
+    writeFileSync(path.join(source, '.env'), 'TOKEN=private-test-value\n');
+    writeFileSync(
+      path.join(source, 'manifest.json'),
+      '{"private":"test-evidence"}\n',
+    );
+    writeFileSync(
+      path.join(source, 'hosting.template.json'),
+      '{"obsolete":true}\n',
+    );
     const outputDir = path.join(directory, 'second');
     const second = prepareDocsSite({ outputDir, repoRoot });
     expect(second.git).toEqual({ commit: first.git.commit, dirty: true });
     expect(second.contentSha256).not.toBe(first.contentSha256);
-    expect(second.objectKey).not.toBe(first.objectKey);
-    expect(
-      readFileSync(path.join(outputDir, 'certificate.template.json')),
-    ).toEqual(certificate);
-    expect(second.files).toContainEqual({
-      name: 'certificate.template.json',
-      sha256: digest(certificate),
-      size: certificate.length,
-    });
+    expect(readdirSync(path.join(outputDir, 'site')).sort()).toEqual(siteFiles);
+    expect(JSON.stringify(second)).not.toMatch(
+      /private-test-value|test-evidence|obsolete/,
+    );
   });
 
   it('refuses to overwrite an existing output directory or any of its files', () => {
@@ -175,31 +171,22 @@ describe('local documentation deployment bundle', () => {
     expect(existsSync(path.join(outputDir, 'manifest.json'))).toBe(false);
   });
 
-  it.each(['missing', `${marker} ${marker}`])(
-    'rejects ambiguous edge markers before creating output: %s',
-    (edge) => {
-      writeFileSync(path.join(source, 'edge-router.js'), edge);
-      const outputDir = path.join(directory, 'invalid');
-      expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow(
-        /one content marker/,
-      );
-      expect(existsSync(outputDir)).toBe(false);
-    },
-  );
-
-  it('rejects an already-rendered hosting template before creating output', () => {
+  it('refuses routing changes that would send ordinary landing requests through Functions', () => {
     writeFileSync(
-      path.join(source, 'hosting.template.json'),
-      JSON.stringify({
-        Resources: {
-          DocsRoutes: { Properties: { FunctionCode: 'already-rendered' } },
-        },
-      }),
+      path.join(source, '_routes.json'),
+      JSON.stringify({ version: 1, include: ['/*'], exclude: [] }),
     );
     const outputDir = path.join(directory, 'invalid');
     expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow(
-      /exact edge-code marker/,
+      /landing page must remain outside Pages Functions/,
     );
+    expect(existsSync(outputDir)).toBe(false);
+  });
+
+  it('refuses an incomplete source before creating an output directory', () => {
+    rmSync(path.join(source, '_worker.js'));
+    const outputDir = path.join(directory, 'invalid');
+    expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow(/ENOENT/);
     expect(existsSync(outputDir)).toBe(false);
   });
 

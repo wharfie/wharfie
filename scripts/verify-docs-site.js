@@ -8,9 +8,9 @@ import { pathToFileURL } from 'node:url';
 const MAX_BODY = 256 * 1024;
 const QUERY = '?wharfie-docs-check=wharfie-private-query-probe';
 const GUIDES = 'https://github.com/wharfie/wharfie/blob/master/docs/guides/';
-const CLOUDFRONT = /^d[a-z0-9]+\.cloudfront\.net$/u;
+const PAGES = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,2}pages\.dev$/u;
 
-/** @typedef {{method: string, path: string, status: number, guide?: string, providerRejection?: boolean}} Check */
+/** @typedef {{method: string, path: string, status: number, guide?: string, nativeMethod?: boolean, normalizedLegacy?: boolean}} Check */
 /** @typedef {{statusCode: number, headers: import('node:http').IncomingHttpHeaders, body: Buffer}} Response */
 /** @typedef {{url: string, bundleDir: string, connectHost?: string}} Options */
 
@@ -137,10 +137,16 @@ function routes() {
   checks.push({
     method: 'GET',
     path: '/%2e%2e/install' + QUERY,
-    status: 400,
-    providerRejection: true,
+    status: 302,
+    guide: 'installation.md',
+    normalizedLegacy: true,
   });
-  checks.push({ method: 'POST', path: '/' + QUERY, status: 405 });
+  for (const method of ['POST', 'OPTIONS']) {
+    checks.push({ method, path: '/' + QUERY, status: 405, nativeMethod: true });
+  }
+  for (const uri of ['/index.html', '/install']) {
+    checks.push({ method: 'POST', path: uri + QUERY, status: 405 });
+  }
   return checks;
 }
 
@@ -157,14 +163,32 @@ function failureCode(check, response, expectedHash, expectedSize) {
   if (statusCode !== check.status) return 'unexpected-status';
   if (headers['content-encoding'] && headers['content-encoding'] !== 'identity')
     return 'unexpected-content-encoding';
-  if (check.providerRejection) {
-    if (headers.location !== undefined) return 'unexpected-redirect';
-    if (
-      (body.toString('utf8') + JSON.stringify(headers)).includes(
-        'wharfie-private-query-probe',
-      )
+  if (
+    (body.toString('utf8') + JSON.stringify(headers)).includes(
+      'wharfie-private-query-probe',
     )
-      return 'reflected-query';
+  )
+    return 'reflected-query';
+  if (headers['x-content-type-options'] !== 'nosniff') return 'missing-nosniff';
+  if (headers['cache-control'] !== 'no-store')
+    return 'unexpected-cache-control';
+  const csp = headers['content-security-policy'];
+  if (
+    typeof csp !== 'string' ||
+    !csp.includes("default-src 'none'") ||
+    !csp.includes("frame-ancestors 'none'")
+  )
+    return 'missing-content-security-policy';
+  if (
+    headers['referrer-policy'] !== 'no-referrer' ||
+    headers['x-frame-options'] !== 'DENY'
+  )
+    return 'missing-security-headers';
+  if (check.nativeMethod) {
+    if (headers.location !== undefined) return 'unexpected-redirect';
+    if (body.length !== 0) return 'unexpected-native-method-body';
+    if (headers.allow !== undefined && headers.allow !== 'GET, HEAD')
+      return 'unexpected-allow';
     return;
   }
   const contentType =
@@ -173,19 +197,9 @@ function failureCode(check, response, expectedHash, expectedSize) {
       : 'text/plain; charset=utf-8';
   if (headers['content-type']?.toLowerCase() !== contentType)
     return 'unexpected-content-type';
-  if (headers['x-content-type-options'] !== 'nosniff') return 'missing-nosniff';
-  if (headers['cache-control'] !== 'no-store')
-    return 'unexpected-cache-control';
   if (check.method === 'HEAD' && body.length !== 0)
     return 'unexpected-head-body';
   if (check.status === 200) {
-    const csp = headers['content-security-policy'];
-    if (
-      typeof csp !== 'string' ||
-      !csp.includes("default-src 'none'") ||
-      !csp.includes("frame-ancestors 'none'")
-    )
-      return 'missing-content-security-policy';
     if (
       check.method === 'GET' &&
       createHash('sha256').update(body).digest('hex') !== expectedHash
@@ -193,16 +207,12 @@ function failureCode(check, response, expectedHash, expectedSize) {
       return 'landing-hash-mismatch';
     if (
       check.method === 'HEAD' &&
+      headers['content-length'] !== undefined &&
       headers['content-length'] !== String(expectedSize)
     )
       return 'landing-length-mismatch';
   } else {
     const text = body.toString('utf8');
-    if (
-      text.includes('wharfie-private-query-probe') ||
-      JSON.stringify(headers).includes('wharfie-private-query-probe')
-    )
-      return 'reflected-query';
     if (check.status === 302 && headers.location !== GUIDES + check.guide)
       return 'unexpected-redirect';
     if (check.status !== 302 && headers.location !== undefined)
@@ -239,14 +249,14 @@ export async function verifyDocsSite(options, request = https.request) {
       url.pathname === '/' &&
       !url.search &&
       !url.hash &&
-      (url.hostname === 'docs.wharfie.dev' || CLOUDFRONT.test(url.hostname)),
-    'Use the exact HTTPS docs or CloudFront root URL.',
+      (url.hostname === 'docs.wharfie.dev' || PAGES.test(url.hostname)),
+    'Use the exact HTTPS docs or Pages root URL.',
   );
   assert.ok(
     !options.connectHost ||
-      (CLOUDFRONT.test(options.connectHost) &&
+      (PAGES.test(options.connectHost) &&
         options.connectHost === options.connectHost.trim()),
-    'Connect host must be a CloudFront distribution hostname.',
+    'Connect host must be a Pages deployment hostname.',
   );
   const manifest = JSON.parse(
     (
@@ -257,16 +267,18 @@ export async function verifyDocsSite(options, request = https.request) {
     ).toString('utf8'),
   );
   const index = await readBounded(
-    path.join(options.bundleDir, 'index.html'),
+    path.join(options.bundleDir, 'site', 'index.html'),
     MAX_BODY,
   );
   const contentSha256 = createHash('sha256').update(index).digest('hex');
   const indexEntries = manifest.files?.filter(
-    (/** @type {{name?: string}} */ file) => file.name === 'index.html',
+    (/** @type {{name?: string}} */ file) => file.name === 'site/index.html',
   );
   assert.ok(
     manifest.format === 'wharfie-docs-site' &&
-      manifest.version === 1 &&
+      manifest.version === 2 &&
+      manifest.provider === 'cloudflare-pages' &&
+      manifest.deployDirectory === 'site' &&
       manifest.contentSha256 === contentSha256 &&
       indexEntries?.length === 1 &&
       indexEntries[0].sha256 === contentSha256 &&
@@ -304,7 +316,10 @@ export async function verifyDocsSite(options, request = https.request) {
           path: check.path,
           statusCode: response?.statusCode ?? null,
           success: !failure,
-          ...(check.providerRejection ? { kind: 'provider-rejection' } : {}),
+          ...(check.nativeMethod ? { kind: 'native-static-method' } : {}),
+          ...(check.normalizedLegacy
+            ? { kind: 'normalized-legacy-route' }
+            : {}),
           ...(failure ? { failure } : {}),
           ...(response && check.method === 'GET' && check.status === 200
             ? {
@@ -319,7 +334,8 @@ export async function verifyDocsSite(options, request = https.request) {
   );
   return {
     format: 'wharfie-docs-site-verification',
-    version: 1,
+    version: 2,
+    provider: 'cloudflare-pages',
     url: url.href,
     connectHost: options.connectHost ?? null,
     contentSha256,
@@ -338,7 +354,7 @@ async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
     process.stdout.write(
-      'Usage: node scripts/verify-docs-site.js --url https://docs.wharfie.dev --bundle-dir <prepared-directory> [--connect-host d123.cloudfront.net] [--output <new-report.json>]\n',
+      'Usage: node scripts/verify-docs-site.js --url https://docs.wharfie.dev --bundle-dir <prepared-directory> [--connect-host <project>.pages.dev] [--output <new-report.json>]\n',
     );
     return;
   }
