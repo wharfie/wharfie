@@ -9,6 +9,15 @@ const MAX_BODY = 256 * 1024;
 const QUERY = '?wharfie-docs-check=wharfie-private-query-probe';
 const GUIDES = 'https://github.com/wharfie/wharfie/blob/master/docs/guides/';
 const PAGES = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,2}pages\.dev$/u;
+const EXPECTED_CSP = [
+  "default-src 'none'",
+  "style-src 'unsafe-inline'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+]
+  .sort()
+  .join(';');
 
 /** @typedef {{method: string, path: string, status: number, guide?: string, nativeMethod?: boolean, normalizedLegacy?: boolean}} Check */
 /** @typedef {{statusCode: number, headers: import('node:http').IncomingHttpHeaders, body: Buffer}} Response */
@@ -173,12 +182,18 @@ function failureCode(check, response, expectedHash, expectedSize) {
   if (headers['cache-control'] !== 'no-store')
     return 'unexpected-cache-control';
   const csp = headers['content-security-policy'];
-  if (
-    typeof csp !== 'string' ||
-    !csp.includes("default-src 'none'") ||
-    !csp.includes("frame-ancestors 'none'")
-  )
-    return 'missing-content-security-policy';
+  const normalizedCsp =
+    typeof csp === 'string'
+      ? csp
+          .split(';')
+          .map((directive) =>
+            directive.replace(/^[ \t]+|[ \t]+$/gu, '').replace(/[ \t]+/gu, ' '),
+          )
+          .filter(Boolean)
+          .sort()
+          .join(';')
+      : undefined;
+  if (normalizedCsp !== EXPECTED_CSP) return 'missing-content-security-policy';
   if (
     headers['referrer-policy'] !== 'no-referrer' ||
     headers['x-frame-options'] !== 'DENY'

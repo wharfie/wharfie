@@ -22,6 +22,8 @@ const index = Buffer.from(
   '<!doctype html><title>Reviewed Wharfie docs</title>',
 );
 const contentSha256 = createHash('sha256').update(index).digest('hex');
+const reviewedCsp =
+  "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /** @param {Headers} headers @returns {Record<string, string>} */
 function headerValues(headers) {
@@ -63,7 +65,7 @@ describe('live docs verification transport and evidence', () => {
     await rm(bundleDir, { recursive: true, force: true });
   });
 
-  /** @param {{oversize?: boolean, redirect?: boolean, cacheable?: boolean, compressedNative?: boolean, badHeadLength?: boolean, nativeBody?: boolean, nativeHeaderLeak?: boolean, throwSynchronously?: boolean, stall?: boolean}} [fault] */
+  /** @param {{oversize?: boolean, redirect?: boolean, cacheable?: boolean, compressedNative?: boolean, badHeadLength?: boolean, nativeBody?: boolean, nativeHeaderLeak?: boolean, csp?: string, throwSynchronously?: boolean, stall?: boolean}} [fault] */
   function transport(fault = {}) {
     let active = 0;
     let peak = 0;
@@ -105,8 +107,7 @@ describe('live docs verification transport and evidence', () => {
               const headers = {
                 'content-type': 'text/html; charset=utf-8',
                 'cache-control': 'no-store',
-                'content-security-policy':
-                  "default-src 'none'; frame-ancestors 'none'",
+                'content-security-policy': reviewedCsp,
                 'x-content-type-options': 'nosniff',
                 'referrer-policy': 'no-referrer',
                 'x-frame-options': 'DENY',
@@ -128,6 +129,8 @@ describe('live docs verification transport and evidence', () => {
                   ? await env.ASSETS.fetch(incoming)
                   : await worker.fetch(incoming, env);
               const responseHeaders = headerValues(routed.headers);
+              if (fault.csp !== undefined)
+                responseHeaders['content-security-policy'] = fault.csp;
               if (nativeMethod) delete responseHeaders['content-type'];
               if (fault.cacheable && routed.status === 200)
                 responseHeaders['cache-control'] = 'max-age=300';
@@ -240,6 +243,50 @@ describe('live docs verification transport and evidence', () => {
     expect(JSON.stringify(report)).not.toMatch(
       /evil\.example|private-location-detail/,
     );
+  });
+
+  it.each([
+    "default-src 'none'; frame-ancestors 'none'",
+    reviewedCsp + "; script-src * 'unsafe-inline'",
+    reviewedCsp.replace(
+      "style-src 'unsafe-inline'",
+      "style-src 'unsafe-inline' https://evil.example",
+    ),
+    reviewedCsp + '; style-src *',
+    reviewedCsp.replace("base-uri 'none'; ", ''),
+    reviewedCsp.replace(
+      "style-src 'unsafe-inline'",
+      "style-src\u00a0'unsafe-inline'",
+    ),
+  ])(
+    'rejects CSP that changes or weakens the reviewed policy: %s',
+    async (csp) => {
+      const mock = transport({ csp });
+      const report = await verifyDocsSite(
+        { url: 'https://wharfie-docs.pages.dev/', bundleDir },
+        mock.request,
+      );
+
+      expect(report.success).toBe(false);
+      expect(report.checks).toHaveLength(40);
+      expect(
+        report.checks.every(
+          (check) => check.failure === 'missing-content-security-policy',
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('accepts only directive ordering and ASCII spacing variations of the full reviewed CSP', async () => {
+    const mock = transport({
+      csp: " frame-ancestors   'none' ;\tform-action 'none'; base-uri 'none'; style-src 'unsafe-inline'; default-src 'none' ; ",
+    });
+    const report = await verifyDocsSite(
+      { url: 'https://wharfie-docs.pages.dev/', bundleDir },
+      mock.request,
+    );
+
+    expect(report.success).toBe(true);
   });
 
   it('requires the cutover no-store policy on HTML GET and HEAD responses', async () => {
