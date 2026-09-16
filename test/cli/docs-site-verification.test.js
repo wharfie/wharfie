@@ -74,6 +74,10 @@ describe('live docs verification transport and evidence', () => {
   function transport(fault = {}) {
     let active = 0;
     let peak = 0;
+    let markFirstBatchStarted = () => {};
+    const firstBatchStarted = new Promise((resolve) => {
+      markFirstBatchStarted = () => resolve(undefined);
+    });
     /** @type {any[]} */
     const calls = [];
     /** @type {PassThrough[]} */
@@ -89,6 +93,7 @@ describe('live docs verification transport and evidence', () => {
         end() {
           active++;
           peak = Math.max(peak, active);
+          if (active === 4) markFirstBatchStarted();
           if (fault.stall) {
             options.signal.addEventListener(
               'abort',
@@ -204,6 +209,7 @@ describe('live docs verification transport and evidence', () => {
       calls,
       responses,
       peak: () => peak,
+      firstBatchStarted,
     };
   }
 
@@ -508,8 +514,7 @@ describe('live docs verification transport and evidence', () => {
       { url: 'https://docs.wharfie.dev/', bundleDir },
       mock.request,
     );
-    for (let i = 0; i < 100 && mock.calls.length === 0; i++)
-      await new Promise(setImmediate);
+    await Promise.race([mock.firstBatchStarted, pending]);
     expect(mock.calls).toHaveLength(4);
     await jest.advanceTimersByTimeAsync(100_000);
     const report = await pending;
