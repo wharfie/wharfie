@@ -263,6 +263,27 @@
       "optional": true
     }
   },
+  "overrides": {
+    "@npmcli/arborist": {
+      "minimatch": "11.0.4"
+    },
+    "@npmcli/map-workspaces": {
+      "glob": "14.0.3",
+      "minimatch": "11.0.4"
+    },
+    "@npmcli/package-json": {
+      "glob": "14.0.3"
+    },
+    "@tufjs/models": {
+      "minimatch": "11.0.4"
+    },
+    "cacache": {
+      "glob": "14.0.3"
+    },
+    "ignore-walk": {
+      "minimatch": "11.0.4"
+    }
+  },
   "dependencies": {
     "@babel/parser": "^7.28.5",
     "@npmcli/arborist": "^9.9.0",

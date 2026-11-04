@@ -1,13 +1,16 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { describe, expect, it } from '@jest/globals';
+import { beforeAll, describe, expect, it } from '@jest/globals';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 import createVanillaDB from '../../src/core/lib/db/adapters/vanilla.js';
-import { resolveExecutionPayloadStoreId } from '../../src/core/lib/config/db.js';
+import {
+  createControlDBClient,
+  resolveExecutionPayloadStoreId,
+} from '../../src/core/lib/config/db.js';
 import {
   AttemptStatus,
   ExecutionLedgerTransitionConflictError,
@@ -177,6 +180,20 @@ async function readState(configuration, runId) {
 }
 
 describe('generic workflow execution-ledger operator boundary', () => {
+  beforeAll(async () => {
+    // Resolve the operator's lazy adapter through its production factory during
+    // suite setup, outside either workflow transition's five-second test budget.
+    const root = mkdtempSync(
+      path.join(os.tmpdir(), 'wharfie-workflow-operator-setup-'),
+    );
+    try {
+      const db = await createControlDBClient('vanilla', { path: root });
+      await db.close();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('reconciles retained evidence once and replays from the original uncertainty after the cursor advances', async () => {
     const root = mkdtempSync(
       path.join(os.tmpdir(), 'wharfie-workflow-operator-reconcile-'),

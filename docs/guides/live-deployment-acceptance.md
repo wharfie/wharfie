@@ -146,6 +146,9 @@ The runner attempts cleanup after a failed acceptance phase as well. A failed
 phase remains a failure even if cleanup succeeds. Unit tests and CI do not
 provision hosts or use live cloud credentials.
 
+For the separate bounded 48–72-hour workload and resource-growth proof, see
+[run an operational soak](./operational-soak.md).
+
 ## Receipts and interrupted cleanup
 
 The run directory retains bounded, redacted receipts and a private diagnostic

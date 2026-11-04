@@ -50,7 +50,27 @@ tasks:
   - key: test
     use: npm-install
     timeout: 30m
-    run: npm run test
+    # OverlayFS can report different devices for a directory and its files.
+    # Keep only the small, non-executing service fixtures on single-device tmpfs.
+    run: |
+      set -e
+      node --input-type=module <<'NODE'
+      import fs from 'node:fs';
+      import path from 'node:path';
+      const root = fs.mkdtempSync('/dev/shm/wharfie-service-fixture-');
+      try {
+        const file = path.join(root, 'probe');
+        fs.writeFileSync(file, 'probe', { mode: 0o600 });
+        if (fs.lstatSync(root).dev !== fs.lstatSync(file).dev) {
+          throw new Error('Service fixtures require matching directory and file devices.');
+        }
+        const { bavail, bsize } = fs.statfsSync(root);
+        console.log(`Service fixture filesystem verified; ${bavail * bsize} bytes available.`);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+      NODE
+      WHARFIE_SERVICE_TEST_TMPDIR=/dev/shm npm run test
 
   - key: typecheck
     use: npm-install

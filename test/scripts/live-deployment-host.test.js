@@ -9,6 +9,8 @@ import {
   rebootLiveDeploymentInChild,
   rebootLiveDeploymentProvider,
 } from '../../scripts/live-deployment-reboot-child.js';
+import { runLiveDeploymentProcess } from '../../scripts/live-deployment-package.js';
+import { createDeploymentOpenSshTransport } from '../../src/core/runtime/deployment-openssh-transport.js';
 import { SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH } from '../../src/core/runtime/single-node-cloud-init.js';
 import { prepareSingleNodeDeploymentReleaseUpdate } from '../../src/core/runtime/single-node-deployment-journal.js';
 import { getSingleNodeRemoteArtifactPaths } from '../../src/core/runtime/single-node-remote-activation.js';
@@ -59,6 +61,7 @@ async function hostFixture() {
     input: '',
     markers: '',
     disappeared: false,
+    resourceOutput: /** @type {string|null} */ (null),
     artifactDigest: fixture.artifactRecord.byteDigest.value,
     service: createHealthySingleNodeServiceStatus(fixture),
   };
@@ -83,7 +86,39 @@ async function hostFixture() {
     } else if (argv[0] === '/usr/bin/sha256sum') {
       output = `${Buffer.from(observed.artifactDigest, 'base64url').toString('hex')}  ${argv.at(-1)}\n`;
     } else if (argv[0] === '/bin/sh') {
-      if (argv[2].includes('set -C'))
+      if (argv[3] === 'wharfie-live-soak-marker-audit') {
+        output = Array.from(
+          { length: Number(argv[5]) },
+          (_, index) =>
+            `${'a'.repeat(64)}  ${argv[4]}${String(index + 1).padStart(4, '0')}.txt.activities.jsonl\n`,
+        ).join('');
+      } else if (argv[3] === 'wharfie-live-soak-resources') {
+        const fields = Array(49).fill('0');
+        fields[0] = 'S';
+        fields[11] = '20';
+        fields[12] = '10';
+        fields[19] = observed.startTicks;
+        fields[21] = '1000';
+        const root =
+          '/home/wharfie/.local/share/wharfie-nodejs/applications/status-app';
+        output =
+          observed.resourceOutput ??
+          [
+            `${observed.pid} (fixture name) ${fields.join(' ')}`,
+            '4096',
+            '100',
+            '500000000\t/home/wharfie',
+            `400000000\t${root}`,
+            `10000000\t${root}/state`,
+            `100000\t${root}/state/control/execution-payloads`,
+            '1B-blocks       Avail',
+            '20000000000 10000000000',
+            'Archived and active journals take up 8.0M in the file system.',
+          ].join('\n');
+      } else if (argv[3] === 'wharfie-live-soak-input') {
+        observed.input = observed.input || request.stdin.toString('utf8');
+        output = observed.input;
+      } else if (argv[2].includes('set -C'))
         observed.input = request.stdin.toString('utf8');
       else if (argv[2].includes('test ! -L')) output = observed.markers;
       else if (argv[2].includes('--signal=KILL')) observed.disappeared = true;
@@ -136,6 +171,208 @@ async function hostFixture() {
 }
 
 describe('live acceptance pinned host operations', () => {
+  it('stages resumable bounded soak paths and refuses other paths before remote access', async () => {
+    const { host, remote, observed } = await hostFixture();
+    const selected = `/home/wharfie/live-acceptance-${ACCEPTANCE_ID}-soak-0001.txt`;
+    await expect(
+      host.stageSoakInput(selected, 'fixed bytes'),
+    ).resolves.toMatchObject({ staged: true });
+    await expect(
+      host.stageSoakInput(selected, 'fixed bytes'),
+    ).resolves.toMatchObject({ staged: true });
+    await expect(
+      host.stageSoakInput(selected, 'different bytes'),
+    ).rejects.toThrow('host-stage-soak-input');
+    observed.markers = JSON.stringify({ activity: 'capture' });
+    await expect(host.readSoakMarkers(selected)).resolves.toEqual([
+      { activity: 'capture' },
+    ]);
+    for (const invalid of [
+      INPUT_PATH,
+      '/etc/passwd',
+      selected.replace('0001', '0000'),
+      selected.replace('0001', '0301'),
+      selected.replace('0001', '../1'),
+      selected.replace(ACCEPTANCE_ID, BOOT_ID),
+    ]) {
+      remote.mockClear();
+      await expect(host.stageSoakInput(invalid, 'bytes')).rejects.toThrow();
+      await expect(host.readSoakMarkers(invalid)).rejects.toThrow();
+      expect(remote).not.toHaveBeenCalled();
+    }
+  });
+
+  it('observes bounded resident, allocated storage, free disk and approximate user-journal bytes', async () => {
+    const { host, remote } = await hostFixture();
+    const value = await host.observeResources();
+    expect(value).toMatchObject({
+      schemaVersion: 1,
+      kind: 'wharfie.live-deployment.resources',
+      bootId: BOOT_ID,
+      pid: 1257,
+      startTicks: '32931',
+      residentRssBytes: 4096000,
+      residentCpuTicks: 30,
+      clockTicksPerSecond: 100,
+      homeBytes: 500000000,
+      appBytes: 400000000,
+      stateBytes: 10000000,
+      payloadBytes: 100000,
+      diskAvailableBytes: 10000000000,
+      userJournalBytesApprox: 8 * 1024 * 1024,
+    });
+    const command = remote.mock.calls.find(
+      ([request]) => request.argv[3] === 'wharfie-live-soak-resources',
+    )?.[0];
+    expect(command?.timeoutMilliseconds).toBe(30_000);
+    expect(command?.argv[2]).toContain('/usr/bin/du -sx -B1');
+    expect(command?.argv[2]).toContain('export LC_ALL=C');
+    expect(command?.argv[2]).toContain('test ! -L "$root"');
+    expect(command?.argv[2]).toContain('test "${21}" = "$1"');
+    expect(JSON.stringify(value)).not.toContain('private-token');
+  });
+
+  it('refuses malformed resource probes without retaining raw output', async () => {
+    const { host, observed } = await hostFixture();
+    observed.resourceOutput = 'private malformed probe';
+    const error = await host.observeResources().catch((failure) => failure);
+    expect(error.diagnostic.phase).toBe('host-observe-resources');
+    expect(JSON.stringify(error)).not.toContain('private malformed probe');
+  });
+
+  it.each(['service-status', 'resource-probe'])(
+    'stops resource observation immediately when cancellation follows %s',
+    async (boundary) => {
+      const { input, dependencies, remote } = await hostFixture();
+      const controller = new AbortController();
+      const original = remote.getMockImplementation();
+      if (!original) throw new Error('Missing fixture transport.');
+      remote.mockImplementation(async (request) => {
+        const result = await original(request);
+        const selected =
+          boundary === 'service-status'
+            ? request.argv.includes('service')
+            : request.argv[3] === 'wharfie-live-soak-resources';
+        if (selected) controller.abort(new Error('private abort reason'));
+        return result;
+      });
+      const host = await createLiveDeploymentHost(
+        { ...input, signal: controller.signal },
+        dependencies,
+      );
+      const failure = await host.observeResources().catch((error) => error);
+      expect(failure.diagnostic).toMatchObject({
+        phase: 'host-observe-resources',
+        aborted: true,
+        hostFaultCode: 'aborted',
+      });
+      expect(JSON.stringify(failure)).not.toContain('private abort reason');
+      const last = remote.mock.calls.at(-1)?.[0].argv;
+      if (boundary === 'service-status') expect(last).toContain('service');
+      else expect(last?.[3]).toBe('wharfie-live-soak-resources');
+      const commands = remote.mock.calls.length;
+      await expect(host.observe()).rejects.toMatchObject({
+        diagnostic: { aborted: true, hostFaultCode: 'aborted' },
+      });
+      expect(remote).toHaveBeenCalledTimes(commands);
+    },
+  );
+
+  it('does not read host authority after cancellation before or during identity initialization', async () => {
+    const { input, dependencies } = await hostFixture();
+    for (const preAborted of [true, false]) {
+      const controller = new AbortController();
+      if (preAborted) controller.abort();
+      const readIdentity = jest.fn(async () => {
+        controller.abort();
+        return fixture.sshIdentity;
+      });
+      const readHostKey = jest.fn(async () => journal.sshHost);
+      const createTransport = jest.fn();
+      await expect(
+        createLiveDeploymentHost(
+          { ...input, signal: controller.signal },
+          { ...dependencies, readIdentity, readHostKey, createTransport },
+        ),
+      ).rejects.toMatchObject({
+        diagnostic: {
+          phase: 'host-initialize',
+          aborted: true,
+          hostFaultCode: 'aborted',
+        },
+      });
+      expect(readIdentity).toHaveBeenCalledTimes(preAborted ? 0 : 1);
+      expect(readHostKey).not.toHaveBeenCalled();
+      expect(createTransport).not.toHaveBeenCalled();
+    }
+  });
+
+  it('forwards cancellation through the SSH adapter and reaps an active command before rejecting', async () => {
+    const { input, dependencies } = await hostFixture();
+    const controller = new AbortController();
+    const run = jest.fn(async (/** @type {Record<string, any>} */ request) => {
+      expect(request.file).toBe('/usr/bin/ssh');
+      expect(request.signal).toBe(controller.signal);
+      const timer = setTimeout(() => controller.abort(), 100);
+      try {
+        // Keep the real transport and process lifecycle, replacing only the
+        // executable so this regression test never connects to a host.
+        return await runLiveDeploymentProcess({
+          ...request,
+          file: process.execPath,
+          args: ['-e', 'setInterval(() => {}, 1000)'],
+          cwd: process.cwd(),
+          env: {},
+          timeoutMs: request.timeoutMs,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+    const host = await createLiveDeploymentHost(
+      { ...input, signal: controller.signal },
+      {
+        ...dependencies,
+        createTransport: createDeploymentOpenSshTransport,
+        run,
+      },
+    );
+    await expect(host.observeResources()).rejects.toMatchObject({
+      diagnostic: {
+        phase: 'host-observe-resources',
+        aborted: true,
+        signal: 'SIGKILL',
+        hostFaultCode: 'aborted',
+      },
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('audits all final physical markers through one bounded pinned command', async () => {
+    const { host, remote } = await hostFixture();
+    await expect(host.readSoakMarkerAudit(288)).resolves.toEqual(
+      Array.from({ length: 288 }, (_, index) => ({
+        sequence: index + 1,
+        digest: 'a'.repeat(64),
+      })),
+    );
+    const command = remote.mock.calls.find(
+      ([request]) => request.argv[3] === 'wharfie-live-soak-marker-audit',
+    )?.[0];
+    expect(command?.argv.slice(4)).toEqual([
+      `/home/wharfie/live-acceptance-${ACCEPTANCE_ID}-soak-`,
+      '288',
+      '60706',
+    ]);
+    expect(command?.argv[2]).toContain('test ! -L "$file"');
+    expect(command?.argv[2]).toContain('-le 16384');
+    expect(command?.timeoutMilliseconds).toBe(30000);
+    remote.mockClear();
+    for (const count of [0, 300, 1.5])
+      await expect(host.readSoakMarkerAudit(count)).rejects.toThrow();
+    expect(remote).not.toHaveBeenCalled();
+  });
+
   it('observes exact uploaded target bytes before the local journal settles them', async () => {
     const { input, dependencies, observed, remote } = await hostFixture();
     const target = createSingleNodeStatusUpdateTarget(

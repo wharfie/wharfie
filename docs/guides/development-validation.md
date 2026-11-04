@@ -18,6 +18,56 @@ in `.nvmrc`/`package.json#devEngines` and npm pin in
 build and load the target-native dependencies is not authoritative for the
 Linux SEA result.
 
+RWX sets `WHARFIE_SERVICE_TEST_TMPDIR=/dev/shm` only for the service-manager
+suite's disposable fixtures. Its ordinary workspace can expose different
+filesystem device IDs within a service tree, which the production purge guard
+correctly refuses. The fixture override keeps these lifecycle tests on one
+filesystem; the purge guard and its cross-device refusal assertion remain
+enabled. Other tests keep the runner's normal temporary directory.
+
+## Production dependency audit
+
+The checked-in lock and the scoped `overrides` in
+[`package.json`](../../package.json) select patched glob and minimatch versions
+for the production dependency graph while preserving the pinned Node/npm
+toolchain. Keep these overrides until the upstream parent packages accept the
+patched versions, and rerun the frozen dependency and packaging checks when
+changing them.
+
+npm applies overrides from the installing project's root manifest. It does not
+apply Wharfie's overrides when Wharfie is installed as a dependency. On
+2026-11-04, the updated checkout's production audit reported zero findings,
+but a fresh consumer of its packed tarball reported 19 moderate dependency
+findings through glob 13.0.6 and minimatch 10.2.6. These are dependency findings,
+not 19 distinct advisories. The ordinary npm consumer path remains a release
+blocker until its dependency graph passes the same audit threshold.
+
+A controlled builder can copy the exact `overrides` object from the repository's
+`package.json` into its own root manifest before resolving dependencies, then
+retain its generated lock. Validate that builder independently. Every candidate
+must also be checked in a fresh consumer without those overrides:
+
+```sh
+npm audit --omit=dev --audit-level=moderate
+```
+
+Run that command from the consumer after installing the candidate. A passing
+repository audit does not establish a passing consumer audit; retain the
+consumer failure instead of lowering the threshold or forcing dependency
+downgrades.
+
+Preview publication now enforces this separate release gate in the shared
+publisher before any GitHub or npm mutation, including finalization and recovery.
+It installs the exact core tarball alone into a new consumer with an empty root
+manifest, isolated npm configuration and cache, and no inherited overrides or
+lock. Install failures, audit failures, and malformed audit results block the
+release. The publisher verifies and retains a private read-only copy of the core
+tarball before installation, then uses those same bytes for its GitHub asset and
+npm publication; changing the source directory after audit cannot change the
+published package. Pull-request functional consumer checks remain independent,
+so their success does not claim release eligibility or repair the consumer
+dependencies.
+
 ## Failure reports
 
 The Jest runner and real SEA verifier automatically retain a small JSON report
