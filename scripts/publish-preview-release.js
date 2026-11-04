@@ -1,6 +1,7 @@
 import { execFile as nodeExecFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { promises as fsp } from 'node:fs';
+import { constants as fsConstants, promises as fsp } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -1892,6 +1893,7 @@ async function assertNpmPublicationPreflight(candidate, command, mode) {
  * @param {CommandRunner} command - Command boundary.
  * @param {() => Promise<void>} beforeMutation - Fresh remote tag guard.
  * @param {{now: () => number, wait: (milliseconds: number) => Promise<void>}} clock - Visibility observation clock.
+ * @param {string} npmTarballPath - Retained verified package used by the consumer audit.
  * @returns {Promise<void>}
  */
 async function reconcileNpm(
@@ -1900,6 +1902,7 @@ async function reconcileNpm(
   command,
   beforeMutation,
   clock,
+  npmTarballPath,
 ) {
   const registry = await assertNpmPublicationPreflight(
     candidate,
@@ -1938,9 +1941,7 @@ async function reconcileNpm(
   try {
     await command('npm', [
       'publish',
-      candidate.npmArtifact.fileName
-        ? path.join(candidate.artifactDir, candidate.npmArtifact.fileName)
-        : '',
+      npmTarballPath,
       '--access=public',
       `--tag=${QUARANTINE_DIST_TAG}`,
       '--provenance',
@@ -2024,6 +2025,161 @@ async function finalizeGithubRelease(
 }
 
 /**
+ * Keep the audited npm bytes under private ownership through publication.
+ * @template T
+ * @param {PreviewReleaseCandidate} candidate - Validated exact local candidate.
+ * @param {(tarballPath: string, retained: PreviewReleaseCandidate) => Promise<T>} action - Audit and publication work.
+ * @returns {Promise<T>} Publication result.
+ */
+async function withRetainedNpmCandidate(candidate, action) {
+  const root = await fsp.mkdtemp(
+    path.join(os.tmpdir(), 'wharfie-preview-npm-candidate-'),
+  );
+  try {
+    const artifact = candidate.npmArtifact;
+    const tarballPath = path.join(root, artifact.fileName);
+    await fsp.copyFile(
+      path.join(candidate.artifactDir, artifact.fileName),
+      tarballPath,
+      fsConstants.COPYFILE_EXCL,
+    );
+    const bytes = await fsp.readFile(tarballPath);
+    if (
+      bytes.length !== artifact.size ||
+      digest(bytes, 'sha256', 'hex') !== artifact.sha256 ||
+      `sha512-${digest(bytes, 'sha512', 'base64')}` !== artifact.integrity
+    ) {
+      throw new Error(
+        'Retained npm candidate does not match the validated release.',
+      );
+    }
+    await fsp.chmod(tarballPath, 0o400);
+    const retained = {
+      ...candidate,
+      assets: candidate.assets.map((asset) =>
+        asset.name === artifact.fileName
+          ? { ...asset, filePath: tarballPath }
+          : asset,
+      ),
+    };
+    return await action(tarballPath, retained);
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Audit an ordinary core-only consumer before any publication mutation. Root
+ * overrides and the checkout lock do not apply when the tarball is a dependency.
+ * @param {PreviewReleaseCandidate} candidate - Validated exact local candidate.
+ * @param {CommandRunner} command - Process boundary.
+ * @param {string} npmTarballPath - Retained verified package bytes.
+ * @returns {Promise<void>} Resolves only after the consumer passes the policy.
+ */
+async function assertFreshConsumerProductionAudit(
+  candidate,
+  command,
+  npmTarballPath,
+) {
+  const root = await fsp.mkdtemp(
+    path.join(os.tmpdir(), 'wharfie-preview-consumer-audit-'),
+  );
+  try {
+    await fsp.writeFile(
+      path.join(root, 'package.json'),
+      JSON.stringify({ name: 'wharfie-release-audit', private: true }),
+      { mode: 0o600, flag: 'wx' },
+    );
+    for (const name of ['.npmrc', 'user.npmrc', 'global.npmrc']) {
+      await fsp.writeFile(path.join(root, name), '', {
+        mode: 0o600,
+        flag: 'wx',
+      });
+    }
+    const env = {
+      PATH: process.env.PATH,
+      ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+      HOME: root,
+      TMPDIR: root,
+      TMP: root,
+      TEMP: root,
+      CI: 'true',
+      npm_config_cache: path.join(root, 'cache'),
+      npm_config_userconfig: path.join(root, 'user.npmrc'),
+      npm_config_globalconfig: path.join(root, 'global.npmrc'),
+      npm_config_registry: NPM_REGISTRY,
+      npm_config_ignore_scripts: 'true',
+      npm_config_update_notifier: 'false',
+    };
+    const options = { cwd: root, env, timeoutMs: 240_000 };
+    await command(
+      'npm',
+      [
+        'install',
+        '--workspaces=false',
+        '--ignore-scripts',
+        '--omit=dev',
+        '--no-audit',
+        '--no-fund',
+        '--save-exact',
+        `--registry=${NPM_REGISTRY}`,
+        npmTarballPath,
+      ],
+      options,
+    );
+    const lock = JSON.parse(
+      await fsp.readFile(path.join(root, 'package-lock.json'), 'utf8'),
+    );
+    const installed =
+      lock.packages?.[`node_modules/${candidate.manifest.package}`];
+    if (
+      installed?.version !== candidate.manifest.version ||
+      installed?.integrity !== candidate.npmArtifact.integrity
+    ) {
+      throw new Error('Fresh consumer lock does not bind the exact candidate.');
+    }
+    const result = await command(
+      'npm',
+      [
+        'audit',
+        '--workspaces=false',
+        '--omit=dev',
+        '--audit-level=moderate',
+        '--json',
+        `--registry=${NPM_REGISTRY}`,
+      ],
+      options,
+    );
+    const report = JSON.parse(result.stdout);
+    const counts = report?.metadata?.vulnerabilities;
+    const severities = ['info', 'low', 'moderate', 'high', 'critical'];
+    if (
+      report?.auditReportVersion !== 2 ||
+      report.error ||
+      !counts ||
+      ![...severities, 'total'].every(
+        (key) => Number.isSafeInteger(counts[key]) && counts[key] >= 0,
+      ) ||
+      counts.total !== severities.reduce((sum, key) => sum + counts[key], 0) ||
+      counts.moderate !== 0 ||
+      counts.high !== 0 ||
+      counts.critical !== 0
+    ) {
+      throw new Error(
+        'Fresh consumer audit did not pass the moderate threshold.',
+      );
+    }
+  } catch (cause) {
+    throw new Error(
+      'Preview publication blocked: the fresh core-only consumer must pass npm audit --omit=dev --audit-level=moderate. Checkout overrides do not establish release eligibility.',
+      { cause },
+    );
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+/**
  * Converge npm and GitHub on one exact preview release.
  * @param {PreviewPublicationOptions} [options] - Publication options.
  * @param {PreviewPublicationDependencies} [dependencies] - Test seams.
@@ -2040,120 +2196,132 @@ export async function publishPreviewRelease(options = {}, dependencies = {}) {
   const authorize =
     dependencies.authorize || (() => assertPreviewPublishEnvironment());
   await authorize(candidate);
-  const command = dependencies.runCommand || runCommand;
-  /** @type {{now: () => number, wait: (milliseconds: number) => Promise<void>}} */
-  const visibilityClock = {
-    now: dependencies.visibilityNow ?? (() => performance.now()),
-    wait:
-      dependencies.visibilityWait ?? ((milliseconds) => delay(milliseconds)),
-  };
-  const beforeRemoteMutation = async () =>
-    await assertCanonicalSourceAuthority(candidate, command);
+  return await withRetainedNpmCandidate(
+    candidate,
+    async (npmTarballPath, retainedCandidate) => {
+      const command = dependencies.runCommand || runCommand;
+      await assertFreshConsumerProductionAudit(
+        candidate,
+        command,
+        npmTarballPath,
+      );
+      /** @type {{now: () => number, wait: (milliseconds: number) => Promise<void>}} */
+      const visibilityClock = {
+        now: dependencies.visibilityNow ?? (() => performance.now()),
+        wait:
+          dependencies.visibilityWait ??
+          ((milliseconds) => delay(milliseconds)),
+      };
+      const beforeRemoteMutation = async () =>
+        await assertCanonicalSourceAuthority(candidate, command);
 
-  /** @type {Record<string, any>} */
-  let release;
-  if (options.finalizeOnly === true) {
-    const npmPreflight = await assertNpmPublicationPreflight(
-      candidate,
-      command,
-      'finalize',
-    );
-    if (!npmPreflight.version) {
-      throw new TypeError(
-        `Finalize-only requires existing npm ${candidate.manifest.package}@${candidate.manifest.version}.`,
-      );
-    }
-    const existing = await readGithubRelease(candidate, command);
-    if (!existing) {
-      throw new TypeError(
-        `Finalize-only requires existing GitHub release ${candidate.manifest.tag}.`,
-      );
-    }
-    assertGithubReleaseMetadata(existing, candidate);
-    inspectGithubAssets(existing, candidate, true);
-    release = await finalizeGithubRelease(
-      candidate,
-      existing,
-      command,
-      async () => {
-        const freshRegistry = await assertNpmPublicationPreflight(
+      /** @type {Record<string, any>} */
+      let release;
+      if (options.finalizeOnly === true) {
+        const npmPreflight = await assertNpmPublicationPreflight(
           candidate,
           command,
           'finalize',
         );
-        if (!freshRegistry.version) {
+        if (!npmPreflight.version) {
           throw new TypeError(
             `Finalize-only requires existing npm ${candidate.manifest.package}@${candidate.manifest.version}.`,
           );
         }
-        const freshRelease = await readGithubRelease(candidate, command);
-        if (!freshRelease) {
+        const existing = await readGithubRelease(candidate, command);
+        if (!existing) {
           throw new TypeError(
             `Finalize-only requires existing GitHub release ${candidate.manifest.tag}.`,
           );
         }
-        assertGithubReleaseMetadata(freshRelease, candidate);
-        inspectGithubAssets(freshRelease, candidate, true);
-        await beforeRemoteMutation();
-        return freshRelease;
-      },
-    );
-  } else {
-    await assertNpmPublicationPreflight(candidate, command, 'phase-one');
-    release = await ensureGithubRelease(
-      candidate,
-      command,
-      beforeRemoteMutation,
-      visibilityClock,
-    );
-    release = await reconcileGithubAssets(
-      candidate,
-      release,
-      command,
-      beforeRemoteMutation,
-    );
-    await reconcileNpm(
-      candidate,
-      release,
-      command,
-      beforeRemoteMutation,
-      visibilityClock,
-    );
-    await assertCanonicalSourceAuthority(candidate, command);
-    const observed = await readGithubRelease(candidate, command);
-    if (!observed) {
-      throw new TypeError(
-        `GitHub release ${candidate.manifest.tag} disappeared after npm reconciliation.`,
-      );
-    }
-    assertGithubReleaseMetadata(observed, candidate);
-    inspectGithubAssets(observed, candidate, true);
-    if (observed.draft !== true) {
-      const promotedRegistry = await assertNpmPublicationPreflight(
-        candidate,
-        command,
-        'finalize',
-      );
-      if (!promotedRegistry.version) {
+        assertGithubReleaseMetadata(existing, candidate);
+        inspectGithubAssets(existing, candidate, true);
+        release = await finalizeGithubRelease(
+          candidate,
+          existing,
+          command,
+          async () => {
+            const freshRegistry = await assertNpmPublicationPreflight(
+              candidate,
+              command,
+              'finalize',
+            );
+            if (!freshRegistry.version) {
+              throw new TypeError(
+                `Finalize-only requires existing npm ${candidate.manifest.package}@${candidate.manifest.version}.`,
+              );
+            }
+            const freshRelease = await readGithubRelease(candidate, command);
+            if (!freshRelease) {
+              throw new TypeError(
+                `Finalize-only requires existing GitHub release ${candidate.manifest.tag}.`,
+              );
+            }
+            assertGithubReleaseMetadata(freshRelease, candidate);
+            inspectGithubAssets(freshRelease, candidate, true);
+            await beforeRemoteMutation();
+            return freshRelease;
+          },
+        );
+      } else {
+        await assertNpmPublicationPreflight(candidate, command, 'phase-one');
+        release = await ensureGithubRelease(
+          candidate,
+          command,
+          beforeRemoteMutation,
+          visibilityClock,
+        );
+        release = await reconcileGithubAssets(
+          retainedCandidate,
+          release,
+          command,
+          beforeRemoteMutation,
+        );
+        await reconcileNpm(
+          candidate,
+          release,
+          command,
+          beforeRemoteMutation,
+          visibilityClock,
+          npmTarballPath,
+        );
+        await assertCanonicalSourceAuthority(candidate, command);
+        const observed = await readGithubRelease(candidate, command);
+        if (!observed) {
+          throw new TypeError(
+            `GitHub release ${candidate.manifest.tag} disappeared after npm reconciliation.`,
+          );
+        }
+        assertGithubReleaseMetadata(observed, candidate);
+        inspectGithubAssets(observed, candidate, true);
+        if (observed.draft !== true) {
+          const promotedRegistry = await assertNpmPublicationPreflight(
+            candidate,
+            command,
+            'finalize',
+          );
+          if (!promotedRegistry.version) {
+            throw new TypeError(
+              `Final GitHub release ${candidate.manifest.tag} exists without its npm version.`,
+            );
+          }
+        }
+        release = observed;
+      }
+      const finalized = release.draft === false && release.prerelease === true;
+      if (options.finalizeOnly && !finalized) {
         throw new TypeError(
-          `Final GitHub release ${candidate.manifest.tag} exists without its npm version.`,
+          `GitHub release ${candidate.manifest.tag} is not a finalized prerelease.`,
         );
       }
-    }
-    release = observed;
-  }
-  const finalized = release.draft === false && release.prerelease === true;
-  if (options.finalizeOnly && !finalized) {
-    throw new TypeError(
-      `GitHub release ${candidate.manifest.tag} is not a finalized prerelease.`,
-    );
-  }
-  return Object.freeze({
-    tag: candidate.manifest.tag,
-    version: candidate.manifest.version,
-    published: true,
-    finalized,
-  });
+      return Object.freeze({
+        tag: candidate.manifest.tag,
+        version: candidate.manifest.version,
+        published: true,
+        finalized,
+      });
+    },
+  );
 }
 
 /** @param {string[]} [argv] - Command arguments. @returns {Promise<void>} */

@@ -2,11 +2,15 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
+import { jest } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -22,6 +26,7 @@ import {
   PREVIEW_GITHUB_VISIBILITY_TIMEOUT_MS,
   PREVIEW_NPM_VISIBILITY_TIMEOUT_MS,
 } from '../../scripts/publish-preview-release.js';
+import { recoverPreviewRelease } from '../../scripts/recover-preview-release.js';
 
 const COMMIT = 'a'.repeat(40);
 const VERSION = '0.0.15';
@@ -360,8 +365,46 @@ function createFakeCommands(candidate, initial = {}) {
     finalizeReleaseAfterPublish: initial.finalizeReleaseAfterPublish === true,
   };
 
-  async function runCommand(command, args) {
-    state.calls.push({ command, args: [...args] });
+  async function runCommand(command, args, options = {}) {
+    state.calls.push({ command, args: [...args], options });
+    if (command === 'npm' && args[0] === 'install') {
+      state.consumerTarballPath = args.at(-1);
+      if (initial.consumerInstallFailure) throw initial.consumerInstallFailure;
+      writeFileSync(
+        path.join(options.cwd, 'package-lock.json'),
+        JSON.stringify({
+          packages: {
+            [`node_modules/${candidate.manifest.package}`]: {
+              version: candidate.manifest.version,
+              integrity:
+                initial.consumerIntegrity ?? candidate.npmArtifact.integrity,
+            },
+          },
+        }),
+      );
+      return { stdout: '', stderr: '' };
+    }
+    if (command === 'npm' && args[0] === 'audit') {
+      if (initial.consumerAuditFailure) throw initial.consumerAuditFailure;
+      return {
+        stdout:
+          initial.consumerAuditOutput ??
+          JSON.stringify({
+            auditReportVersion: 2,
+            metadata: {
+              vulnerabilities: {
+                info: 0,
+                low: 0,
+                moderate: 0,
+                high: 0,
+                critical: 0,
+                total: 0,
+              },
+            },
+          }),
+        stderr: '',
+      };
+    }
     if (command === 'git' && args[0] === 'fetch') {
       state.authorityFetchCount += 1;
       if (state.authorityFetchCount === state.failAuthorityFetchAt) {
@@ -406,9 +449,10 @@ function createFakeCommands(candidate, initial = {}) {
     if (command === 'gh' && args[1] === 'upload') {
       const filePath = args[3];
       const local = candidate.assets.find(
-        (asset) => asset.filePath === filePath,
+        (asset) => asset.name === path.basename(filePath),
       );
-      state.release.assets.push(remoteAsset(local));
+      expect(hash(readFileSync(filePath), 'sha256')).toBe(local.sha256);
+      state.release.assets.push(remoteAsset({ ...local, filePath }));
       if (
         state.moveTagAfterFinalAssetUpload &&
         state.release.assets.length === candidate.assets.length
@@ -525,12 +569,15 @@ function delayedVisibilityDependencies(fake, settings = {}) {
       const publish = command === 'npm' && args[0] === 'publish';
       let result;
       try {
-        result = await fake.runCommand(command, args);
+        result = await fake.runCommand(command, args, options);
       } finally {
         if (create) createdAt = clock;
         if (publish) publishedAt = clock;
       }
-      if (options.timeoutMs !== undefined) {
+      if (
+        options.timeoutMs !== undefined &&
+        !(command === 'npm' && ['install', 'audit'].includes(args[0]))
+      ) {
         observations.push({
           command,
           args,
@@ -598,6 +645,416 @@ describe('preview publication reconciliation', () => {
       runCommand: fake.runCommand,
     };
   }
+
+  function invokePublication(mode, artifactDir, dependencies) {
+    if (mode !== 'recovery') {
+      return publishPreviewRelease({ artifactDir, [mode]: true }, dependencies);
+    }
+    return recoverPreviewRelease(
+      { artifactDir, tag: `v${VERSION}`, expectedCommit: COMMIT },
+      {
+        env: {
+          WHARFIE_PREVIEW_PUBLISH: '1',
+          WHARFIE_PREVIEW_PUBLISH_ENABLED: 'true',
+          GITHUB_ACTIONS: 'true',
+          GITHUB_EVENT_NAME: 'workflow_dispatch',
+          GITHUB_REPOSITORY: 'wharfie/wharfie',
+          GITHUB_REF: 'refs/heads/master',
+          GITHUB_REF_TYPE: 'branch',
+          GITHUB_REF_NAME: 'master',
+          GITHUB_SHA: 'b'.repeat(40),
+          GITHUB_WORKFLOW_SHA: 'b'.repeat(40),
+          GITHUB_WORKFLOW_REF:
+            'wharfie/wharfie/.github/workflows/recover-preview-release.yml@refs/heads/master',
+        },
+        publish: (options, recoveryDependencies) =>
+          publishPreviewRelease(options, {
+            ...dependencies,
+            ...recoveryDependencies,
+          }),
+      },
+    );
+  }
+
+  it.each(['deferFinalize', 'finalizeOnly', 'recovery'])(
+    'blocks %s before every mutation when the fresh consumer audit fails',
+    async (mode) => {
+      const { artifactDir, candidate } = await fixture();
+      const failure = Object.assign(new Error('19 moderate vulnerabilities'), {
+        code: 1,
+        stdout: JSON.stringify({
+          metadata: { vulnerabilities: { moderate: 19 } },
+        }),
+      });
+      const fake = createFakeCommands(candidate, {
+        release: matchingRelease(candidate),
+        npmVersion: matchingNpmVersion(candidate),
+        tags: { preview: VERSION },
+        consumerAuditFailure: failure,
+      });
+      await expect(
+        invokePublication(mode, artifactDir, publicationDependencies(fake)),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('Preview publication blocked'),
+        cause: failure,
+      });
+      expect(mutationCalls(fake.state)).toEqual([]);
+      expect(fake.state.calls.map(({ args }) => args[0])).toEqual([
+        'install',
+        'audit',
+      ]);
+      expect(existsSync(fake.state.calls[0].options.cwd)).toBe(false);
+      expect(existsSync(path.dirname(fake.state.consumerTarballPath))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(['deferFinalize', 'finalizeOnly', 'recovery'])(
+    'allows %s only after a fresh consumer audit passes',
+    async (mode) => {
+      const { artifactDir, candidate } = await fixture();
+      const fake = createFakeCommands(
+        candidate,
+        mode === 'deferFinalize'
+          ? {}
+          : {
+              release: matchingRelease(candidate),
+              npmVersion: matchingNpmVersion(candidate),
+              tags: { preview: VERSION },
+            },
+      );
+      await expect(
+        invokePublication(mode, artifactDir, publicationDependencies(fake)),
+      ).resolves.toMatchObject({
+        published: true,
+        finalized: mode !== 'deferFinalize',
+      });
+      expect(fake.state.calls.slice(0, 2).map(({ args }) => args[0])).toEqual([
+        'install',
+        'audit',
+      ]);
+      expect(mutationCalls(fake.state).length).toBeGreaterThan(0);
+      expect(existsSync(path.dirname(fake.state.consumerTarballPath))).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([
+    { consumerInstallFailure: new Error('registry unavailable') },
+    { consumerIntegrity: 'sha512-wrong-candidate' },
+    { consumerAuditOutput: 'not json' },
+    { consumerAuditOutput: '{}' },
+    {
+      consumerAuditOutput: JSON.stringify({
+        auditReportVersion: 2,
+        metadata: {
+          vulnerabilities: {
+            info: 0,
+            low: 0,
+            moderate: 0,
+            high: 0,
+            critical: 0,
+            total: 19,
+          },
+        },
+      }),
+    },
+    {
+      consumerAuditOutput: JSON.stringify({
+        auditReportVersion: 2,
+        metadata: {
+          vulnerabilities: {
+            info: 0,
+            low: 0,
+            moderate: 19,
+            high: 0,
+            critical: 0,
+            total: 19,
+          },
+        },
+      }),
+    },
+  ])('fails closed on an unsuccessful consumer check: %j', async (fault) => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate, fault);
+    await expect(
+      publishPreviewRelease(
+        { artifactDir, deferFinalize: true },
+        publicationDependencies(fake),
+      ),
+    ).rejects.toThrow('Preview publication blocked');
+    expect(mutationCalls(fake.state)).toEqual([]);
+    expect(existsSync(fake.state.calls[0].options.cwd)).toBe(false);
+    expect(existsSync(path.dirname(fake.state.consumerTarballPath))).toBe(
+      false,
+    );
+  });
+
+  it('publishes the retained audited bytes when the source tarball changes after audit', async () => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate);
+    const source = path.join(artifactDir, candidate.npmArtifact.fileName);
+    const original = readFileSync(source);
+    const replacement = createPackageTarball({
+      ...corePackageMetadata(),
+      description: 'changed after audit',
+    });
+    let published = false;
+    await expect(
+      publishPreviewRelease(
+        { artifactDir, deferFinalize: true },
+        {
+          ...publicationDependencies(fake),
+          runCommand: async (command, args, options) => {
+            if (command === 'npm' && args[0] === 'publish') {
+              expect(args[1]).toBe(fake.state.consumerTarballPath);
+              expect(args[1]).not.toBe(source);
+              expect(readFileSync(args[1])).toEqual(original);
+              expect(
+                `sha512-${hash(readFileSync(args[1]), 'sha512', 'base64')}`,
+              ).toBe(candidate.npmArtifact.integrity);
+              published = true;
+            }
+            const result = await fake.runCommand(command, args, options);
+            if (command === 'npm' && args[0] === 'audit')
+              writeFileSync(source, replacement);
+            return result;
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ published: true });
+    expect(published).toBe(true);
+    const coreUpload = fake.state.calls.find(
+      ({ command, args }) =>
+        command === 'gh' &&
+        args[1] === 'upload' &&
+        path.basename(args[3]) === candidate.npmArtifact.fileName,
+    );
+    expect(coreUpload.args[3]).toBe(fake.state.consumerTarballPath);
+    expect(readFileSync(source)).toEqual(replacement);
+    expect(existsSync(path.dirname(fake.state.consumerTarballPath))).toBe(
+      false,
+    );
+  });
+
+  it('rejects a source change before staging before any install or remote action', async () => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate);
+    await expect(
+      publishPreviewRelease(
+        { artifactDir, deferFinalize: true },
+        {
+          ...publicationDependencies(fake),
+          authorize: async () => {
+            writeFileSync(
+              path.join(artifactDir, candidate.npmArtifact.fileName),
+              createPackageTarball({
+                ...corePackageMetadata(),
+                description: 'changed before staging',
+              }),
+            );
+          },
+        },
+      ),
+    ).rejects.toThrow('Retained npm candidate does not match');
+    expect(fake.state.calls).toEqual([]);
+  });
+
+  it.each(['deferFinalize', 'finalizeOnly', 'recovery'])(
+    'removes retained bytes after a later %s failure without relabeling it as an audit failure',
+    async (mode) => {
+      const { artifactDir, candidate } = await fixture();
+      const failure = new Error('registry preflight unavailable');
+      const fake = createFakeCommands(candidate, { npmViewFailure: failure });
+      await expect(
+        invokePublication(mode, artifactDir, publicationDependencies(fake)),
+      ).rejects.toBe(failure);
+      expect(existsSync(path.dirname(fake.state.consumerTarballPath))).toBe(
+        false,
+      );
+      expect(mutationCalls(fake.state)).toEqual([]);
+    },
+  );
+
+  it('audits only the exact core tarball without inherited npm configuration or overrides', async () => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate);
+    const injected = {
+      NPM_CONFIG_AUDIT_LEVEL: 'critical',
+      npm_config_omit: 'prod',
+      npm_config_registry: 'https://untrusted.invalid',
+      npm_config_userconfig: '/untrusted/npmrc',
+      NODE_OPTIONS: '--require=/untrusted/hook.js',
+      NPM_TOKEN: 'must-not-reach-the-consumer',
+    };
+    const previous = Object.fromEntries(
+      Object.keys(injected).map((key) => [key, process.env[key]]),
+    );
+    Object.assign(process.env, injected);
+    try {
+      await publishPreviewRelease(
+        { artifactDir, deferFinalize: true },
+        {
+          ...publicationDependencies(fake),
+          runCommand: async (command, args, options) => {
+            if (command === 'npm' && ['install', 'audit'].includes(args[0])) {
+              expect(options.env.NODE_OPTIONS).toBeUndefined();
+              expect(options.env.NPM_TOKEN).toBeUndefined();
+              expect(options.env.NPM_CONFIG_AUDIT_LEVEL).toBeUndefined();
+              expect(options.env.npm_config_omit).toBeUndefined();
+              expect(options.env.npm_config_registry).toBe(
+                'https://registry.npmjs.org',
+              );
+              expect(
+                readFileSync(options.env.npm_config_userconfig, 'utf8'),
+              ).toBe('');
+              expect(
+                readFileSync(options.env.npm_config_globalconfig, 'utf8'),
+              ).toBe('');
+              expect(
+                JSON.parse(
+                  readFileSync(path.join(options.cwd, 'package.json'), 'utf8'),
+                ),
+              ).toEqual({
+                name: 'wharfie-release-audit',
+                private: true,
+              });
+              if (args[0] === 'install') {
+                expect(
+                  existsSync(path.join(options.cwd, 'package-lock.json')),
+                ).toBe(false);
+                const tarballs = args.filter((arg) => arg.endsWith('.tgz'));
+                expect(tarballs).toHaveLength(1);
+                expect(tarballs[0]).not.toBe(
+                  path.join(artifactDir, candidate.npmArtifact.fileName),
+                );
+                expect(
+                  hash(readFileSync(tarballs[0]), 'sha512', 'base64'),
+                ).toBe(candidate.npmArtifact.integrity.slice('sha512-'.length));
+                expect(statSync(tarballs[0]).mode & 0o777).toBe(0o400);
+                expect(statSync(path.dirname(tarballs[0])).mode & 0o777).toBe(
+                  0o700,
+                );
+                expect(args).toEqual(
+                  expect.arrayContaining(['--ignore-scripts', '--omit=dev']),
+                );
+              } else {
+                expect(args).toEqual(
+                  expect.arrayContaining([
+                    '--omit=dev',
+                    '--audit-level=moderate',
+                  ]),
+                );
+              }
+            }
+            return fake.runCommand(command, args, options);
+          },
+        },
+      );
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('keeps a real npm install and audit selection outside an ambient ancestor workspace', async () => {
+    const { artifactDir, candidate } = await fixture();
+    const fake = createFakeCommands(candidate);
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'wharfie-audit-parent-'));
+    roots.push(parent);
+    const scratch = path.join(parent, 'scratch');
+    mkdirSync(scratch);
+    const parentFiles = {
+      'package.json': JSON.stringify({
+        name: 'ambient-workspace',
+        private: true,
+        workspaces: ['scratch/*'],
+        overrides: { '@wharfie/wharfie': '0.0.0' },
+      }),
+      'package-lock.json': JSON.stringify({
+        name: 'ambient-workspace',
+        lockfileVersion: 3,
+        packages: { '': { name: 'ambient-workspace' } },
+      }),
+      '.npmrc': 'audit-level=critical\n',
+    };
+    for (const [name, bytes] of Object.entries(parentFiles)) {
+      writeFileSync(path.join(parent, name), bytes);
+    }
+    const previousTmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = scratch;
+    // Node's builtin reads the real process environment outside Jest's sandbox.
+    const temporaryDirectory = jest
+      .spyOn(os, 'tmpdir')
+      .mockReturnValue(scratch);
+    try {
+      await publishPreviewRelease(
+        { artifactDir, deferFinalize: true },
+        {
+          ...publicationDependencies(fake),
+          runCommand: async (command, args, options) => {
+            if (command === 'npm' && ['install', 'audit'].includes(args[0])) {
+              expect(path.dirname(options.cwd)).toBe(scratch);
+              expect(args).toContain('--workspaces=false');
+              const selection = args.filter(
+                (arg) => arg === '--workspaces=false',
+              );
+              const execution = {
+                cwd: options.cwd,
+                env: options.env,
+                encoding: 'utf8',
+                timeout: 30_000,
+              };
+              const prefix = execFileSync(
+                'npm',
+                ['prefix', ...selection],
+                execution,
+              ).trim();
+              expect(realpathSync(prefix)).toBe(realpathSync(options.cwd));
+              expect(
+                execFileSync(
+                  'npm',
+                  ['config', 'get', 'audit-level', ...selection],
+                  execution,
+                ).trim(),
+              ).toBe('null');
+              if (args[0] === 'install') {
+                const stdout = execFileSync(
+                  'npm',
+                  [...args, '--offline'],
+                  execution,
+                );
+                fake.state.calls.push({ command, args: [...args], options });
+                const lock = JSON.parse(
+                  readFileSync(
+                    path.join(options.cwd, 'package-lock.json'),
+                    'utf8',
+                  ),
+                );
+                expect(
+                  lock.packages['node_modules/@wharfie/wharfie'].integrity,
+                ).toBe(candidate.npmArtifact.integrity);
+                return { stdout, stderr: '' };
+              }
+            }
+            return fake.runCommand(command, args, options);
+          },
+        },
+      );
+      for (const [name, bytes] of Object.entries(parentFiles)) {
+        expect(readFileSync(path.join(parent, name), 'utf8')).toBe(bytes);
+      }
+      expect(existsSync(path.join(parent, 'node_modules'))).toBe(false);
+    } finally {
+      temporaryDirectory.mockRestore();
+      if (previousTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpdir;
+    }
+  });
 
   it('parses only the bounded artifact-directory option', () => {
     expect(() => parsePreviewPublicationArgs([])).toThrow(/exactly one/u);
@@ -866,9 +1323,12 @@ describe('preview publication reconciliation', () => {
       ),
     ).toBe(true);
     const publish = npmCalls.find(({ args }) => args[0] === 'publish');
+    const installedTarball = npmCalls
+      .find(({ args }) => args[0] === 'install')
+      .args.at(-1);
     expect(publish.args).toEqual([
       'publish',
-      path.join(artifactDir, candidate.npmArtifact.fileName),
+      installedTarball,
       '--access=public',
       '--tag=preview-candidate',
       '--provenance',

@@ -56,6 +56,18 @@ repository audit does not establish a passing consumer audit; retain the
 consumer failure instead of lowering the threshold or forcing dependency
 downgrades.
 
+Preview publication now enforces this separate release gate in the shared
+publisher before any GitHub or npm mutation, including finalization and recovery.
+It installs the exact core tarball alone into a new consumer with an empty root
+manifest, isolated npm configuration and cache, and no inherited overrides or
+lock. Install failures, audit failures, and malformed audit results block the
+release. The publisher verifies and retains a private read-only copy of the core
+tarball before installation, then uses those same bytes for its GitHub asset and
+npm publication; changing the source directory after audit cannot change the
+published package. Pull-request functional consumer checks remain independent,
+so their success does not claim release eligibility or repair the consumer
+dependencies.
+
 ## Failure reports
 
 The Jest runner and real SEA verifier automatically retain a small JSON report
