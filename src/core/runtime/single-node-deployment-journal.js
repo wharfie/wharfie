@@ -58,6 +58,11 @@ export const SINGLE_NODE_DEPLOYMENT_JOURNAL_RECOVERY_RECORD_RESERVE = 32;
 
 const SINGLE_NODE_DEPLOYMENT_RELEASE_UPDATE_RECORDS = 3;
 
+// Only complete, successfully validated documents enter this private set.
+// Their canonical trees are detached from caller input and deeply frozen.
+// Disk reads still parse and validate fresh objects on every operation.
+const VALIDATED_JOURNAL_DOCUMENTS = new WeakSet();
+
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PRIVATE_FILE_MODE = 0o600;
 const DEPLOYMENTS_DIRECTORY_NAME = 'single-node-deployments';
@@ -1425,6 +1430,13 @@ export function validateSingleNodeDeploymentJournal(
   value,
   valuePath = 'singleNodeDeploymentJournal',
 ) {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    VALIDATED_JOURNAL_DOCUMENTS.has(value)
+  ) {
+    return /** @type {Readonly<Record<string, any>>} */ (value);
+  }
   const document = cloneBoundedJsonObject(
     value,
     SINGLE_NODE_DEPLOYMENT_JOURNAL_MAX_BYTES,
@@ -1443,6 +1455,7 @@ export function validateSingleNodeDeploymentJournal(
   if (sealed.journalId !== document.journalId) {
     throw new Error(`${valuePath}.journalId does not match its exact payload.`);
   }
+  VALIDATED_JOURNAL_DOCUMENTS.add(sealed);
   return sealed;
 }
 

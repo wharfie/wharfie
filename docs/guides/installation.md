@@ -1,22 +1,27 @@
 # Installation
 
-Wharfie is experimental and is not ready for production use. There is no
-stable release-ready binary installer. Tagged previews are deliberately kept
-off npm's `latest` channel. After the first preview completes reviewed
-promotion, install the Node-hosted CLI explicitly from that channel:
+Wharfie **v0.0.15** is published for evaluation on npm's `preview` channel and
+as a [GitHub prerelease](https://github.com/wharfie/wharfie/releases/tag/v0.0.15).
+It is experimental and not ready for production use. Start with the
+[build, share, and persistent-host guide](recipient-preview.md) for one complete
+tested journey. To install its exact Node-hosted builder version:
 
 ```bash
-npm install --save-dev @wharfie/wharfie@preview
-npx wharfie --help
+npm install --save-dev @wharfie/wharfie@0.0.15
+./node_modules/.bin/wharfie --help
 ```
 
-The `preview` tag moves only after the matching registry bytes and provenance
-have passed the release proof and a maintainer has approved promotion.
+Use `@wharfie/wharfie@preview` when you deliberately want the current preview
+channel instead of a pinned version. The channel moves only after matching
+registry bytes and provenance pass the release proof and a maintainer approves
+promotion. Preview publication does not move npm's `latest` tag.
 
 The exact preview package and provider-free Linux x64 glibc standalone builder
 binary release contract is documented in
-[Preview releases](./preview-release.md). A source checkout remains the
-authoritative fallback:
+[Preview releases](./preview-release.md). v0.0.15 records source commit
+`aae74e0de018fe340564c08c0c820ff590de1894`; later changes on `master`, including
+the journal performance work in PR168, are not part of those published bytes.
+For development against current source instead:
 
 ```bash
 git clone https://github.com/wharfie/wharfie.git
@@ -25,23 +30,24 @@ npm ci
 node ./bin/wharfie --help
 ```
 
-Consumers must use the Node range declared in `package.json#engines`.
-Contributors use the exact Node version in `.nvmrc` and the npm version declared
-in `package.json#packageManager`.
+The npm builder requires Node `>=24.13.1 <25`. The handoff recipe and
+contributors use Node 24.13.1 and npm 11.12.0, the exact toolchain pins declared
+by this release. Recipients of generated application executables do not need
+Node, npm, a source checkout, or the builder's dependencies.
 
-Wharfie's builder currently runs through Node from a source checkout or a
-locally packed npm tarball. The abandoned v1 source, documentation site, and
-self-hosting app prototype have been retired. Preview publication is guarded
-and never targets `latest`; the sealed provider-free standalone Wharfie binary
-is currently Linux x64 glibc only. Generated application SEAs remain the
-portable application deliverable and do not require Node on the target machine.
+The Node-hosted builder can be installed from the published package, verified
+release tarball, or a development checkout. The separate provider-free
+standalone Wharfie CLI download is Linux x64 glibc only; adding a companion
+beside that finished binary cannot change its capabilities. Generated
+application executables are the portable deliverable for recipients.
 
-The shortest packaged candidate is the
+The smallest application example is the
 [magnetic hello-world starter](../../examples/hello-world/README.md). Its
 repository gate copies only that starter, installs Wharfie's freshly packed npm
 tarball, hides the disposable builder, and proves relocated Node-absent
-execution plus named durable resumption. This remains release-candidate evidence
-until the same gate passes against a published preview.
+execution plus named durable resumption. The v0.0.15 publication gates also ran
+the matching public-registry consumer proof. For the service and fresh-controller
+journey, use the single [recipient handoff guide](recipient-preview.md).
 
 The deeper tarball-based workflow for the completed service preview is the
 [single-host developer preview](./developer-preview.md). The tarball also
@@ -65,11 +71,16 @@ The core `@wharfie/wharfie` production install deliberately contains no AWS SDK
 or Smithy packages. Local `app` and `ops` commands, AWS-provider-free application
 builds, and deployment help need only the core package. AWS deployment
 operations use the one version-matched `@wharfie/aws` companion. A source
-checkout receives it through `npm ci`; a clean tarball consumer installs the
-matching companion tarball next to core. Tagged previews quarantine core on
-npm before registry proof and reviewed promotion to the `preview` channel.
-They attach the checksummed companion tarball to the matching GitHub
-prerelease; the preview workflow does not publish the companion to npm.
+checkout receives it through `npm ci`; a clean consumer installs the matching
+companion tarball next to core. The preview workflow publishes core on npm and
+attaches the checksummed companion to the matching GitHub prerelease; it does
+not publish the companion to npm. For v0.0.15, download and verify
+[wharfie-aws-0.0.15.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.15/wharfie-aws-0.0.15.tgz)
+using that release's manifest and checksums, then install the exact pair:
+
+```bash
+npm install --save-dev @wharfie/wharfie@0.0.15 /absolute/handoff/wharfie-aws-0.0.15.tgz
+```
 
 If the companion is absent, malformed, or version-incompatible, a deployment
 operation stops before Wharfie creates or mutates local state or contacts AWS,

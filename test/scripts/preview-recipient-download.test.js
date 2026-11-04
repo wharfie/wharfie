@@ -346,6 +346,105 @@ test('explicit draft mode lists releases and restricts its token to the pinned A
     );
 });
 
+test('accepts GitHub temporary draft browser URLs while downloading and rechecking only canonical API assets', async () => {
+  const candidate = fixture({
+    draft: true,
+    mutateRelease: (release) => {
+      for (const asset of release.assets)
+        asset.browser_download_url = `${REPOSITORY}/releases/download/untagged-f7c6e77780a3f51698be/${asset.name}`;
+    },
+  });
+  const http = transport(candidate, { redirectAssets: true });
+  const result = await downloadPreviewRecipientRelease(
+    options({ draft: true, token: TOKEN }),
+    http,
+  );
+  expect(result.receipt).toMatchObject({
+    tag: TAG,
+    commit: COMMIT,
+    draft: true,
+    metadataRechecked: true,
+  });
+  expect(result.receipt.assets).toHaveLength(6);
+  expect(
+    http.calls
+      .filter(({ url }) => url.startsWith(`${API}/releases/assets/`))
+      .map(({ url }) => url)
+      .sort(),
+  ).toEqual(candidate.release.assets.map(({ url }) => url).sort());
+  expect(http.calls.some(({ url }) => url.includes('/untagged-'))).toBe(false);
+  expect(http.calls.at(-1).url).toBe(`${API}/releases/42`);
+  for (const call of http.calls)
+    expect(call.headers.get('authorization')).toBe(
+      call.url.startsWith(`${API}/`) ? `Bearer ${TOKEN}` : null,
+    );
+});
+
+test.each([
+  'https://attacker.invalid/payload',
+  'https://api.github.com/repos/another/repo/releases/assets/123',
+])(
+  'never follows or sends credentials to an unused draft browser URL %s',
+  async (browserUrl) => {
+    const candidate = fixture({
+      draft: true,
+      mutateRelease: (release) => {
+        release.assets[0].browser_download_url = browserUrl;
+      },
+    });
+    const http = transport(candidate, { redirectAssets: true });
+    const result = await downloadPreviewRecipientRelease(
+      options({ draft: true, token: TOKEN }),
+      http,
+    );
+    expect(result.receipt.metadataRechecked).toBe(true);
+    expect(http.calls.some(({ url }) => url === browserUrl)).toBe(false);
+    for (const call of http.calls)
+      expect(call.headers.get('authorization')).toBe(
+        call.url.startsWith(`${API}/`) ? `Bearer ${TOKEN}` : null,
+      );
+  },
+);
+
+test.each([
+  [
+    'release API host',
+    (release) => {
+      release.url = 'https://attacker.invalid/releases/42';
+    },
+  ],
+  [
+    'release API ID',
+    (release) => {
+      release.url = `${API}/releases/43`;
+    },
+  ],
+  [
+    'asset API host',
+    (release) => {
+      release.assets[0].url = 'https://attacker.invalid/releases/assets/100';
+    },
+  ],
+  [
+    'asset API ID',
+    (release) => {
+      release.assets[0].url = `${API}/releases/assets/999`;
+    },
+  ],
+])(
+  'still rejects a mismatched draft %s before asset requests',
+  async (_name, mutateRelease) => {
+    const { calls, failure } = await rejectsDownload(
+      fixture({ draft: true, mutateRelease }),
+      {},
+      { draft: true, token: TOKEN },
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(`${API}/releases?per_page=100&page=1`);
+    expect(failure.diagnostic.phase).toBe('release-metadata');
+  },
+);
+
 test('draft selection scans bounded canonical pages and ignores arbitrary Link URLs', async () => {
   const candidate = fixture({ draft: true });
   const http = transport(candidate, {
@@ -492,6 +591,12 @@ test.each([
     (release) => {
       release.assets[0].browser_download_url =
         'https://attacker.invalid/payload';
+    },
+  ],
+  [
+    'temporary untagged public download URL',
+    (release) => {
+      release.assets[0].browser_download_url = `${REPOSITORY}/releases/download/untagged-f7c6e77780a3f51698be/${release.assets[0].name}`;
     },
   ],
   [

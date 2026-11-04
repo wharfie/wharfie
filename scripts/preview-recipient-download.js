@@ -107,10 +107,13 @@ function releaseProjection(
         asset.size <= maximum,
     );
     assert.equal(asset.url, `${API}/releases/assets/${assetId}`);
-    assert.equal(
-      asset.browser_download_url,
-      `${REPOSITORY}/releases/download/${tag}/${asset.name}`,
-    );
+    // Draft browser URLs can use a temporary untagged path. Draft downloads
+    // use only the exact API asset URL above; public downloads use this URL.
+    if (!draft)
+      assert.equal(
+        asset.browser_download_url,
+        `${REPOSITORY}/releases/download/${tag}/${asset.name}`,
+      );
     assert.ok(
       typeof asset.digest === 'string' &&
         /^sha256:[a-f0-9]{64}$/.test(asset.digest),

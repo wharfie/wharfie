@@ -1,0 +1,80 @@
+name: Preview feedback
+description: Tell us what happened while building, sharing, or running the Wharfie preview.
+title: '[Preview] '
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use the [preview handoff](https://github.com/wharfie/wharfie/blob/master/docs/guides/recipient-preview.md). A partial attempt is useful; report where you stopped.
+
+        This is a public issue. Include only sample data and a short redacted diagnostic. Do not attach credentials, SSH keys, deployment journals, controller archives, or unredacted application output.
+  - type: input
+    id: version
+    attributes:
+      label: Version and source
+      description: Copy the version and source commit from preview-release.json; include the AWS companion version if used.
+      placeholder: 'v0.0.15 / aae74e0de018fe340564c08c0c820ff590de1894 / AWS companion 0.0.15'
+    validations:
+      required: true
+  - type: textarea
+    id: platforms
+    attributes:
+      label: Builder and recipient
+      description: Include OS, architecture, builder Node version, and whether Node was installed on the recipient. Say if you only acted as a recipient.
+      placeholder: |
+        Builder: macOS arm64, Node 24.13.1
+        Recipient: Ubuntu 24.04 x64, no Node installed
+    validations:
+      required: true
+  - type: dropdown
+    id: route
+    attributes:
+      label: Host route
+      options:
+        - Local CLI or package only
+        - Existing Linux server
+        - AWS
+        - Hetzner
+    validations:
+      required: true
+  - type: textarea
+    id: timings
+    attributes:
+      label: Time and resources
+      description: Estimates are fine. Leave anything unmeasured as "unknown".
+      placeholder: |
+        Setup / install:
+        Package duration and artifact size:
+        Time to first ordinary CLI result:
+        Time to durable completion:
+        Builder memory, if measured:
+  - type: checkboxes
+    id: completed
+    attributes:
+      label: Steps completed
+      description: Check only what you observed. Leaving boxes empty is fine.
+      options:
+        - label: Verified the download and transfer checksums.
+        - label: Ran ordinary CLI input on the recipient.
+        - label: Started a durable run and closed the submitting shell.
+        - label: Reconnected and observed the same completed run.
+        - label: Removed the service or cloud resources and checked cleanup.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Last successful step and what happened next
+      description: Include any help or command changes you needed. If you finished, say whether the guide alone was enough.
+      placeholder: "Last successful step: …\nExpected: …\nObserved: …"
+    validations:
+      required: true
+  - type: textarea
+    id: clarity
+    attributes:
+      label: Confusing wording or missing information
+      description: Link to the guide section or paste a short sentence that caused trouble.
+  - type: textarea
+    id: diagnostic
+    attributes:
+      label: Bounded failure diagnostic, if any
+      description: Paste only the failed phase, duration, redacted command, and exit status or signal from a retained report, if available. Review it for secrets first; do not attach a full workspace or raw logs.
+      render: text

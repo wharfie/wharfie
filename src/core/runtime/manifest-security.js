@@ -91,15 +91,14 @@ function hasDeclaredValue(value) {
  * @returns {boolean} - Whether a URL carries inline credentials.
  */
 function isCredentialBearingUrl(value) {
-  try {
-    const parsed = new URL(value);
-    if (parsed.username || parsed.password) return true;
+  // Most manifest strings are not URLs. Preserve WHATWG URL semantics without
+  // constructing an exception for each ordinary identifier or state value.
+  const parsed = URL.parse(value);
+  if (parsed === null) return false;
+  if (parsed.username || parsed.password) return true;
 
-    for (const name of parsed.searchParams.keys()) {
-      if (isSecretLikeFieldName(name)) return true;
-    }
-  } catch {
-    return false;
+  for (const name of parsed.searchParams.keys()) {
+    if (isSecretLikeFieldName(name)) return true;
   }
 
   return false;

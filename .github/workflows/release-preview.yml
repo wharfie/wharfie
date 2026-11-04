@@ -153,7 +153,7 @@ jobs:
       vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
     needs: [attest, consumer]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment: npm-preview
     permissions:
       contents: write
@@ -231,8 +231,10 @@ jobs:
     runs-on: ubuntu-latest
     # Include the bounded 15-minute download before the full candidate proof.
     timeout-minutes: 120
+    # Draft listings require push access; the verifier strips credentials
+    # before building or running any downloaded candidate.
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:

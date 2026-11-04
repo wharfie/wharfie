@@ -223,7 +223,7 @@ describe('preview release contract', () => {
     expect(registryConsumerJob).not.toContain('GH_TOKEN');
     expect(draftRecipientJob).toContain('needs: publish');
     expect(draftRecipientJob).toContain('timeout-minutes: 120');
-    expect(jobPermissions(draftRecipientJob)).toEqual(['contents: read']);
+    expect(jobPermissions(draftRecipientJob)).toEqual(['contents: write']);
     expect(draftRecipientJob).toContain('GH_TOKEN: ${{ github.token }}');
     expect(draftRecipientJob).toContain('--tag "$GITHUB_REF_NAME" --draft');
     expect(draftRecipientJob).not.toContain('actions/download-artifact');
@@ -258,7 +258,6 @@ describe('preview release contract', () => {
       expect(recipientJob).toContain('if: ${{ always() }}');
       expect(recipientJob).not.toContain('publish-preview-release.js');
       expect(recipientJob).not.toContain('id-token: write');
-      expect(recipientJob).not.toContain('contents: write');
     }
     const selfHostIndex = ci.indexOf('\n  preview-self-host:');
     const recipientIndex = ci.indexOf('\n  preview-recipient:');
