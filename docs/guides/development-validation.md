@@ -18,6 +18,13 @@ in `.nvmrc`/`package.json#devEngines` and npm pin in
 build and load the target-native dependencies is not authoritative for the
 Linux SEA result.
 
+RWX sets `WHARFIE_SERVICE_TEST_TMPDIR=/dev/shm` only for the service-manager
+suite's disposable fixtures. Its ordinary workspace can expose different
+filesystem device IDs within a service tree, which the production purge guard
+correctly refuses. The fixture override keeps these lifecycle tests on one
+filesystem; the purge guard and its cross-device refusal assertion remain
+enabled. Other tests keep the runner's normal temporary directory.
+
 ## Production dependency audit
 
 The checked-in lock and the scoped `overrides` in

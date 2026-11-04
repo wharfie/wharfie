@@ -44,6 +44,8 @@ const TARGET = Object.freeze({
   architecture: 'x64',
   libc: 'glibc',
 });
+// CI can place these small, non-executing fixtures on a single-device filesystem.
+const SERVICE_TEST_TMPDIR = process.env.WHARFIE_SERVICE_TEST_TMPDIR || tmpdir();
 const itOnLinux = process.platform === 'linux' ? it : it.skip;
 /** @type {string[]} */
 const roots = [];
@@ -79,7 +81,7 @@ async function createTestControlDBClient(adapterName, options) {
  */
 async function createHarness(options = {}) {
   const root = await fsp.mkdtemp(
-    path.join(tmpdir(), 'wharfie-systemd-user-manager-'),
+    path.join(SERVICE_TEST_TMPDIR, 'wharfie-systemd-user-manager-'),
   );
   roots.push(root);
   const artifactPath = path.join(root, 'source-artifact');
@@ -2361,7 +2363,7 @@ describe('systemd user service manager', () => {
 
   it('keeps the complete service lifecycle under a custom packaged data root', async () => {
     const customParent = await fsp.mkdtemp(
-      path.join(tmpdir(), 'wharfie-custom-packaged-root-'),
+      path.join(SERVICE_TEST_TMPDIR, 'wharfie-custom-packaged-root-'),
     );
     roots.push(customParent);
     const customDataRoot = path.join(customParent, 'durable');
@@ -2435,7 +2437,7 @@ describe('systemd user service manager', () => {
     });
 
     const conflictParent = await fsp.mkdtemp(
-      path.join(tmpdir(), 'wharfie-conflicting-packaged-root-'),
+      path.join(SERVICE_TEST_TMPDIR, 'wharfie-conflicting-packaged-root-'),
     );
     roots.push(conflictParent);
     const conflictingDataRoot = path.join(conflictParent, 'must-not-exist');
@@ -4194,6 +4196,54 @@ describe('systemd user service manager', () => {
     ).resolves.toMatchObject({
       outcome: 'already-purged',
     });
+  });
+
+  it('refuses a cross-device purge entry while retaining its contents and retry marker', async () => {
+    let crossDevicePath = '';
+    const fsOps = /** @type {typeof fsp} */ (
+      Object.assign(Object.create(fsp), {
+        async lstat(/** @type {import('node:fs').PathLike} */ entryPath) {
+          const stats = await fsp.lstat(entryPath);
+          if (String(entryPath) === crossDevicePath) stats.dev += 1;
+          return stats;
+        },
+      })
+    );
+    const harness = await createHarness({ fsOps });
+    await harness.operator.install();
+    await harness.operator.uninstall();
+    const installationBefore = await fsp.readFile(
+      harness.layout.installationPath,
+      'utf8',
+    );
+    const tombstonePath = path.join(
+      path.dirname(harness.layout.serviceRoot),
+      `.wharfie-service-purge-v1.${APP_ID}`,
+    );
+    crossDevicePath = path.join(tombstonePath, 'installation.json');
+
+    await expect(
+      harness.operator.purge({ confirmation: APP_ID }),
+    ).rejects.toMatchObject({
+      code: 'systemd-user-service-purge-incomplete',
+      cause: {
+        message: 'Systemd user-service purge refuses a cross-filesystem entry.',
+      },
+    });
+    await expect(fsp.readFile(crossDevicePath, 'utf8')).resolves.toBe(
+      installationBefore,
+    );
+    await expect(fsp.readdir(tombstonePath)).resolves.toEqual(
+      expect.arrayContaining([
+        '.purging.json',
+        'installation.json',
+        'releases',
+        'state',
+      ]),
+    );
+    await expect(
+      fsp.readFile(path.join(tombstonePath, '.purging.json'), 'utf8'),
+    ).resolves.toContain('wharfie.systemd-user-service.purge-marker');
   });
 
   it('closes each directory enumeration before deleting its selected purge batch', async () => {
