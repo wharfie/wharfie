@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import https, { get } from 'node:https';
 import http from 'node:http';
-import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import {
+  createReadStream,
+  createWriteStream,
+  existsSync,
+  promises as fsp,
+} from 'node:fs';
 import {
   mkdir,
-  rename,
+  mkdtemp,
   readFile,
   writeFile,
   readdir,
@@ -57,7 +62,7 @@ async function sha256File(filePath) {
  */
 async function replaceFileAtomically(temporaryPath, finalPath) {
   try {
-    await rename(temporaryPath, finalPath);
+    await fsp.rename(temporaryPath, finalPath);
   } catch (error) {
     const code =
       error && typeof error === 'object' && 'code' in error ? error.code : '';
@@ -69,7 +74,7 @@ async function replaceFileAtomically(temporaryPath, finalPath) {
     // downloaded bytes are already complete and verified at this point, so the
     // fallback can safely remove the old file before placing the new one.
     await rm(finalPath, { force: true });
-    await rename(temporaryPath, finalPath);
+    await fsp.rename(temporaryPath, finalPath);
   }
 }
 
@@ -670,23 +675,32 @@ class NodeBinary extends BaseResource {
     const verifiedArchive =
       await this.verifyArchiveBeforeExtraction(downloadedArchive);
     const binaryPath = await this.getBinaryPath();
-    const extractionPath = `${verifiedArchive.path}-extract`;
+    let extractionPath;
+    let published = false;
 
     try {
+      // The download directory and persistent cache can be on different devices.
+      // Extract privately on the destination filesystem before publishing by rename.
+      extractionPath = await mkdtemp(
+        join(dirname(binaryPath), '.node-extract-'),
+      );
       const extractedBinary =
         this.get('platform') === 'win32'
-          ? await this.extractWindowsZip(verifiedArchive.path)
-          : await this.extractUnixTar(verifiedArchive.path);
+          ? await this.extractWindowsZip(verifiedArchive.path, extractionPath)
+          : await this.extractUnixTar(verifiedArchive.path, extractionPath);
 
       await replaceFileAtomically(extractedBinary, binaryPath);
+      published = true;
       await this.writeIntegrityReceipt(verifiedArchive, binaryPath);
     } catch (error) {
-      await this.removeCachedBinary(binaryPath);
+      if (published) await this.removeCachedBinary(binaryPath);
       throw error;
     } finally {
       await Promise.all([
         rm(verifiedArchive.path, { force: true }),
-        rm(extractionPath, { force: true, recursive: true }),
+        ...(extractionPath
+          ? [rm(extractionPath, { force: true, recursive: true })]
+          : []),
       ]);
     }
   }
@@ -695,16 +709,16 @@ class NodeBinary extends BaseResource {
    * Extract a .zip for Windows, returning path to the 'node.exe'.
    * Uses JSZip for in-memory extraction.
    * @param {string} archivePath - archivePath.
+   * @param {string} [extractDir] - Private destination-filesystem staging directory.
    * @returns {Promise<string>} - Path to the extracted 'node.exe' binary.
    */
-  async extractWindowsZip(archivePath) {
+  async extractWindowsZip(archivePath, extractDir = `${archivePath}-extract`) {
     const zipData = await readFile(archivePath);
     const jszip = new JSZip();
     const zip = await jszip.loadAsync(zipData);
 
     // Typically: node-v22.0.0-win-x64/node.exe
     let nodeExePath = '';
-    const extractDir = `${archivePath}-extract`;
     await mkdir(extractDir, { recursive: true });
 
     // Iterate through zip files
@@ -733,11 +747,11 @@ class NodeBinary extends BaseResource {
   /**
    * Extract a .tar.xz and return the path to the extracted 'node' binary.
    * @param {string} archivePath - archivePath.
+   * @param {string} [extractDir] - Private destination-filesystem staging directory.
    * @returns {Promise<string>} - Path to the extracted 'node' binary.
    */
-  async extractUnixTar(archivePath) {
+  async extractUnixTar(archivePath, extractDir = `${archivePath}-extract`) {
     // Extract to a new folder
-    const extractDir = `${archivePath}-extract`;
     await mkdir(extractDir, { recursive: true });
 
     await _extract({

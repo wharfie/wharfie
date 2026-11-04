@@ -7,6 +7,7 @@ import { existsSync, promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Readable } from 'node:stream';
+import JSZip from 'jszip';
 import { c } from 'tar';
 
 import NodeBinary from '../../../src/core/resources/builds/node-binary.js';
@@ -57,6 +58,74 @@ function makeLinuxBinary(onDownloadProgress) {
       architecture: 'x64',
     },
   });
+}
+
+/** @param {'linux'|'win32'} [platform] */
+async function createExtractionFixture(platform = 'linux') {
+  const root = await fsp.mkdtemp(
+    path.join(os.tmpdir(), 'wharfie-node-extraction-'),
+  );
+  NodeBinary.versions = [
+    makeLinuxVersionMetadata(['linux-x64', 'win-x64-zip']),
+  ];
+  NodeBinary.BINARIES_DIR = path.join(root, 'cache');
+  NodeBinary.TEMP_DIR = path.join(root, 'downloads');
+  await fsp.mkdir(NodeBinary.TEMP_DIR);
+  const binary = new NodeBinary({
+    name: 'node-extraction',
+    properties: { version: '24.13.1', platform, architecture: 'x64' },
+  });
+  const binaryPath = await binary.getBinaryPath();
+  const fileName = await binary.getOfficialArchiveFileName();
+  const archivePath = path.join(NodeBinary.TEMP_DIR, fileName);
+  const bytes = Buffer.from('complete verified node binary');
+  if (platform === 'win32') {
+    const zip = new JSZip();
+    zip.file('node-v24.13.1-win-x64/node.exe', bytes);
+    await fsp.writeFile(
+      archivePath,
+      await zip.generateAsync({ type: 'nodebuffer' }),
+    );
+  } else {
+    const source = path.join(root, 'source');
+    const relative = 'node-v24.13.1-linux-x64/bin/node';
+    await fsp.mkdir(path.dirname(path.join(source, relative)), {
+      recursive: true,
+    });
+    await fsp.writeFile(path.join(source, relative), bytes, { mode: 0o755 });
+    await c({ cwd: source, gzip: true, file: archivePath }, [
+      'node-v24.13.1-linux-x64',
+    ]);
+  }
+  const archive = {
+    path: archivePath,
+    fileName,
+    sha256: sha256(await fsp.readFile(archivePath)),
+    version: TEST_VERSION,
+  };
+  const previous = Buffer.from('previous verified cache entry');
+  await fsp.writeFile(binaryPath, previous);
+  await binary.writeIntegrityReceipt(
+    { ...archive, sha256: sha256('prior archive') },
+    binaryPath,
+  );
+  const receiptPath = await binary.getIntegrityReceiptPath(binaryPath);
+  const previousReceipt = await fsp.readFile(receiptPath);
+  const unrelated = await fsp.mkdtemp(
+    path.join(NodeBinary.BINARIES_DIR, '.node-extract-'),
+  );
+  await fsp.writeFile(path.join(unrelated, 'another-invocation'), 'untouched');
+  return {
+    root,
+    binary,
+    binaryPath,
+    receiptPath,
+    archive,
+    bytes,
+    previous,
+    previousReceipt,
+    unrelated,
+  };
 }
 
 describe('NodeBinary', () => {
@@ -366,6 +435,137 @@ describe('NodeBinary', () => {
     );
     await fsp.rm(tmpRoot, { recursive: true, force: true });
   });
+
+  it.each(['linux', 'win32'])(
+    'publishes %s extraction atomically when downloads and the cache are on different filesystems',
+    async (platform) => {
+      const fixture = await createExtractionFixture(
+        /** @type {'linux'|'win32'} */ (platform),
+      );
+      const rename = fsp.rename.bind(fsp);
+      let staging = '';
+      jest
+        .spyOn(fsp, 'rename')
+        .mockImplementation(async (source, destination) => {
+          // Model the Ubuntu runner's separate /tmp and /home mounts at the
+          // actual filesystem rename boundary while exercising real extraction.
+          if (
+            String(source).startsWith(`${NodeBinary.TEMP_DIR}${path.sep}`) &&
+            String(destination).startsWith(
+              `${NodeBinary.BINARIES_DIR}${path.sep}`,
+            )
+          ) {
+            throw Object.assign(new Error('cross-device link not permitted'), {
+              code: 'EXDEV',
+            });
+          }
+          if (destination === fixture.binaryPath) {
+            staging = path.join(
+              NodeBinary.BINARIES_DIR,
+              path
+                .relative(NodeBinary.BINARIES_DIR, String(source))
+                .split(path.sep)[0],
+            );
+            expect(path.basename(staging)).toMatch(/^\.node-extract-/);
+            expect((await fsp.stat(staging)).mode & 0o777).toBe(0o700);
+            await expect(fsp.readFile(fixture.binaryPath)).resolves.toEqual(
+              fixture.previous,
+            );
+            await expect(fsp.readFile(fixture.receiptPath)).resolves.toEqual(
+              fixture.previousReceipt,
+            );
+            await expect(fsp.readFile(source)).resolves.toEqual(fixture.bytes);
+          }
+          return rename(source, destination);
+        });
+      try {
+        await fixture.binary.extract(fixture.archive);
+        await expect(fsp.readFile(fixture.binaryPath)).resolves.toEqual(
+          fixture.bytes,
+        );
+        await expect(fixture.binary.validateCachedBinary()).resolves.toBe(true);
+        expect(staging).not.toBe('');
+        expect(existsSync(staging)).toBe(false);
+        expect(existsSync(fixture.archive.path)).toBe(false);
+        await expect(
+          fsp.readFile(
+            path.join(fixture.unrelated, 'another-invocation'),
+            'utf8',
+          ),
+        ).resolves.toBe('untouched');
+        if (platform === 'linux')
+          expect((await fsp.stat(fixture.binaryPath)).mode & 0o111).toBe(0o111);
+      } finally {
+        await fsp.rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['extraction', 'publication', 'receipt'])(
+    'cleans only owned staging after %s failure and retains any unpublished cache entry',
+    async (failureAt) => {
+      const fixture = await createExtractionFixture();
+      const failure = Object.assign(new Error(`${failureAt} failed`), {
+        code: 'EIO',
+      });
+      if (failureAt === 'extraction') {
+        jest
+          .spyOn(fixture.binary, 'extractUnixTar')
+          .mockImplementation(async (_archive, staging) => {
+            await fsp.writeFile(
+              path.join(/** @type {string} */ (staging), 'partial-node'),
+              'partial',
+            );
+            throw failure;
+          });
+      } else if (failureAt === 'publication') {
+        const rename = fsp.rename.bind(fsp);
+        jest
+          .spyOn(fsp, 'rename')
+          .mockImplementation(async (source, destination) => {
+            if (destination === fixture.binaryPath) throw failure;
+            return rename(source, destination);
+          });
+      } else {
+        jest
+          .spyOn(fixture.binary, 'writeIntegrityReceipt')
+          .mockRejectedValue(failure);
+      }
+      try {
+        await expect(fixture.binary.extract(fixture.archive)).rejects.toBe(
+          failure,
+        );
+        if (failureAt === 'receipt') {
+          expect(existsSync(fixture.binaryPath)).toBe(false);
+          expect(existsSync(fixture.receiptPath)).toBe(false);
+        } else {
+          await expect(fsp.readFile(fixture.binaryPath)).resolves.toEqual(
+            fixture.previous,
+          );
+          await expect(fsp.readFile(fixture.receiptPath)).resolves.toEqual(
+            fixture.previousReceipt,
+          );
+          await expect(fixture.binary.validateCachedBinary()).resolves.toBe(
+            true,
+          );
+        }
+        expect(existsSync(fixture.archive.path)).toBe(false);
+        expect(
+          (await fsp.readdir(NodeBinary.BINARIES_DIR)).filter((entry) =>
+            entry.startsWith('.node-extract-'),
+          ),
+        ).toEqual([path.basename(fixture.unrelated)]);
+        await expect(
+          fsp.readFile(
+            path.join(fixture.unrelated, 'another-invocation'),
+            'utf8',
+          ),
+        ).resolves.toBe('untouched');
+      } finally {
+        await fsp.rm(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('accepts an archive only when its bytes match the official checksum entry', async () => {
     const tmpRoot = await fsp.mkdtemp(

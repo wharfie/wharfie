@@ -8,7 +8,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  rmSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,8 +20,11 @@ import {
   REPO_ROOT,
   runCommand,
 } from './package-verification.js';
+import {
+  cleanupMagneticFirstRun,
+  MAGNETIC_PROOF_PREFIX,
+} from './magnetic-first-run-cleanup.js';
 
-const PROOF_PREFIX = 'wharfie-magnetic-first-run-';
 const PACKAGE_NAME = '@wharfie/wharfie';
 const CANONICAL_NPM_REGISTRY = 'https://registry.npmjs.org';
 const DEPENDENCY_PACKAGE_BUDGET = 170;
@@ -77,16 +79,6 @@ function parsePackageSpec() {
 }
 
 /**
- * @param {string} root - Candidate proof root.
- */
-function removeProofRoot(root) {
-  const resolved = path.resolve(root);
-  assert.equal(path.dirname(resolved), path.resolve(os.tmpdir()));
-  assert.ok(path.basename(resolved).startsWith(PROOF_PREFIX));
-  rmSync(resolved, { recursive: true, force: true });
-}
-
-/**
  * @param {string} packageSpec - Exact published package spec.
  * @param {string} root - Disposable proof root.
  * @param {string} npmCache - Isolated npm cache.
@@ -135,11 +127,14 @@ if (packageSpec !== null && packageSpec !== exactPublishedSpec) {
   );
 }
 
-const proofRoot = mkdtempSync(path.join(os.tmpdir(), PROOF_PREFIX));
+const proofRoot = mkdtempSync(path.join(os.tmpdir(), MAGNETIC_PROOF_PREFIX));
 const unpackedRoot = path.join(proofRoot, 'unpacked-package');
 const starterRoot = path.join(proofRoot, 'hello-world');
 const npmCache = path.join(proofRoot, 'npm-cache');
+/** @type {ReturnType<typeof createPackageTarball>|undefined} */
 let localPackage;
+/** @type {{error: unknown}|undefined} */
+let failure;
 
 try {
   const packed =
@@ -292,7 +287,13 @@ try {
       2,
     )}\n`,
   );
+} catch (error) {
+  failure = { error };
+  throw error;
 } finally {
-  localPackage?.cleanup();
-  removeProofRoot(proofRoot);
+  cleanupMagneticFirstRun({
+    root: proofRoot,
+    cleanupPackage: () => localPackage?.cleanup(),
+    failure,
+  });
 }
