@@ -9,6 +9,8 @@ import {
   rebootLiveDeploymentInChild,
   rebootLiveDeploymentProvider,
 } from '../../scripts/live-deployment-reboot-child.js';
+import { runLiveDeploymentProcess } from '../../scripts/live-deployment-package.js';
+import { createDeploymentOpenSshTransport } from '../../src/core/runtime/deployment-openssh-transport.js';
 import { SINGLE_NODE_BOOTSTRAP_IDENTITY_PATH } from '../../src/core/runtime/single-node-cloud-init.js';
 import { prepareSingleNodeDeploymentReleaseUpdate } from '../../src/core/runtime/single-node-deployment-journal.js';
 import { getSingleNodeRemoteArtifactPaths } from '../../src/core/runtime/single-node-remote-activation.js';
@@ -236,6 +238,114 @@ describe('live acceptance pinned host operations', () => {
     const error = await host.observeResources().catch((failure) => failure);
     expect(error.diagnostic.phase).toBe('host-observe-resources');
     expect(JSON.stringify(error)).not.toContain('private malformed probe');
+  });
+
+  it.each(['service-status', 'resource-probe'])(
+    'stops resource observation immediately when cancellation follows %s',
+    async (boundary) => {
+      const { input, dependencies, remote } = await hostFixture();
+      const controller = new AbortController();
+      const original = remote.getMockImplementation();
+      if (!original) throw new Error('Missing fixture transport.');
+      remote.mockImplementation(async (request) => {
+        const result = await original(request);
+        const selected =
+          boundary === 'service-status'
+            ? request.argv.includes('service')
+            : request.argv[3] === 'wharfie-live-soak-resources';
+        if (selected) controller.abort(new Error('private abort reason'));
+        return result;
+      });
+      const host = await createLiveDeploymentHost(
+        { ...input, signal: controller.signal },
+        dependencies,
+      );
+      const failure = await host.observeResources().catch((error) => error);
+      expect(failure.diagnostic).toMatchObject({
+        phase: 'host-observe-resources',
+        aborted: true,
+        hostFaultCode: 'aborted',
+      });
+      expect(JSON.stringify(failure)).not.toContain('private abort reason');
+      const last = remote.mock.calls.at(-1)?.[0].argv;
+      if (boundary === 'service-status') expect(last).toContain('service');
+      else expect(last?.[3]).toBe('wharfie-live-soak-resources');
+      const commands = remote.mock.calls.length;
+      await expect(host.observe()).rejects.toMatchObject({
+        diagnostic: { aborted: true, hostFaultCode: 'aborted' },
+      });
+      expect(remote).toHaveBeenCalledTimes(commands);
+    },
+  );
+
+  it('does not read host authority after cancellation before or during identity initialization', async () => {
+    const { input, dependencies } = await hostFixture();
+    for (const preAborted of [true, false]) {
+      const controller = new AbortController();
+      if (preAborted) controller.abort();
+      const readIdentity = jest.fn(async () => {
+        controller.abort();
+        return fixture.sshIdentity;
+      });
+      const readHostKey = jest.fn(async () => journal.sshHost);
+      const createTransport = jest.fn();
+      await expect(
+        createLiveDeploymentHost(
+          { ...input, signal: controller.signal },
+          { ...dependencies, readIdentity, readHostKey, createTransport },
+        ),
+      ).rejects.toMatchObject({
+        diagnostic: {
+          phase: 'host-initialize',
+          aborted: true,
+          hostFaultCode: 'aborted',
+        },
+      });
+      expect(readIdentity).toHaveBeenCalledTimes(preAborted ? 0 : 1);
+      expect(readHostKey).not.toHaveBeenCalled();
+      expect(createTransport).not.toHaveBeenCalled();
+    }
+  });
+
+  it('forwards cancellation through the SSH adapter and reaps an active command before rejecting', async () => {
+    const { input, dependencies } = await hostFixture();
+    const controller = new AbortController();
+    const run = jest.fn(async (/** @type {Record<string, any>} */ request) => {
+      expect(request.file).toBe('/usr/bin/ssh');
+      expect(request.signal).toBe(controller.signal);
+      const timer = setTimeout(() => controller.abort(), 100);
+      try {
+        // Keep the real transport and process lifecycle, replacing only the
+        // executable so this regression test never connects to a host.
+        return await runLiveDeploymentProcess({
+          ...request,
+          file: process.execPath,
+          args: ['-e', 'setInterval(() => {}, 1000)'],
+          cwd: process.cwd(),
+          env: {},
+          timeoutMs: request.timeoutMs,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    });
+    const host = await createLiveDeploymentHost(
+      { ...input, signal: controller.signal },
+      {
+        ...dependencies,
+        createTransport: createDeploymentOpenSshTransport,
+        run,
+      },
+    );
+    await expect(host.observeResources()).rejects.toMatchObject({
+      diagnostic: {
+        phase: 'host-observe-resources',
+        aborted: true,
+        signal: 'SIGKILL',
+        hostFaultCode: 'aborted',
+      },
+    });
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('audits all final physical markers through one bounded pinned command', async () => {

@@ -76,7 +76,9 @@ To perform just one observation from a scheduler, add `--step` to `--resume`.
 
 Keep the observing computer awake, online, and at the permitted public address,
 or arrange periodic resume invocations from that same controller environment.
-A gap exceeding two observation intervals fails the proof and triggers cleanup.
+An idle gap exceeding two observation intervals, measured from the previous
+resource sample to the next observation's start, fails the proof and triggers
+cleanup. Active observation work has its separate five-minute deadline.
 The application runs under the guest's resident service between observations;
 the observing process is responsible for scheduling the next workflow.
 
@@ -105,7 +107,12 @@ Each observation verifies one committed attempt and one physical execution per
 activity, expected workflow output, and the original and most recent retained
 histories. The final observation audits every physical activity marker file. Samples track
 resident identity, RSS, cumulative CPU ticks, application/state/payload disk use,
-available disk space, and approximate user journal size. Reports are bounded and
+available disk space, and approximate user journal size. Samples retain their
+observation start and resource collection times. `maximumSampleGapMs` reports
+the actual gap between resource samples; `maximumObserverIdleGapMs` reports
+the inactive portion checked against the two-interval limit. Older checkpoints
+without observation start times retain the stricter sample-to-sample check.
+Reports are bounded and
 contain no raw application payloads or environment dumps. Resource guards fail
 the proof when fixed memory or disk limits are crossed; measured growth still needs
 review even when the guards pass.

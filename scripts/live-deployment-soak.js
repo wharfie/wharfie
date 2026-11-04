@@ -254,16 +254,36 @@ export function validateLiveDeploymentSoakCheckpoint(checkpoint, state) {
       /** @type {Record<string, any>} */ sample,
       /** @type {number} */ index,
     ) => {
-      exact(sample, ['sequence', 'observedAt', 'resource']);
+      const hasObservationStart = Object.hasOwn(sample, 'observationStartedAt');
+      exact(sample, [
+        'sequence',
+        ...(hasObservationStart ? ['observationStartedAt'] : []),
+        'observedAt',
+        'resource',
+      ]);
       assert.equal(sample.sequence, Math.min(index + 1, expectedRuns));
       integer(sample.observedAt, previousAt);
+      // Legacy samples retain their stricter finish-to-finish coverage check.
+      const observationStartedAt = hasObservationStart
+        ? sample.observationStartedAt
+        : sample.observedAt;
+      integer(observationStartedAt, previousAt);
+      assert.ok(observationStartedAt <= sample.observedAt);
       assert.ok(
-        sample.observedAt - previousAt <= 2 * checkpoint.intervalMs,
+        sample.observedAt - observationStartedAt <=
+          LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
+        'Soak active observation exceeded its budget.',
+      );
+      assert.ok(
+        observationStartedAt - previousAt <= 2 * checkpoint.intervalMs,
         'Soak observation coverage has a gap exceeding two intervals.',
       );
       assertResources(sample.resource);
-      if (index < checkpoint.completed.length)
-        assert.ok(sample.observedAt >= checkpoint.completed[index].completedAt);
+      if (index < checkpoint.completed.length) {
+        const completedAt = checkpoint.completed[index].completedAt;
+        assert.ok(sample.observedAt >= completedAt);
+        if (hasObservationStart) assert.ok(observationStartedAt <= completedAt);
+      }
       if (index > 0) {
         const previous = checkpoint.samples[index - 1].resource;
         for (const key of [
@@ -376,6 +396,15 @@ export function summarizeLiveDeploymentSoak(checkpoint) {
           ),
         )
       : 0,
+    maximumObserverIdleGapMs: samples.length
+      ? Math.max(
+          ...samples.map(
+            (sample, index) =>
+              (sample.observationStartedAt ?? sample.observedAt) -
+              (index ? samples[index - 1].observedAt : checkpoint.startedAt),
+          ),
+        )
+      : 0,
     metrics,
   };
 }
@@ -424,6 +453,9 @@ function physicalExecution(markers, bootId) {
  */
 export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
   let stage = 'scope';
+  /** @type {NodeJS.Timeout|undefined} */
+  let tickTimer;
+  let tickTimeoutFault = /** @type {SoakGuardError|null} */ (null);
   try {
     const ports = {
       createHost: createLiveDeploymentHost,
@@ -482,8 +514,23 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
       options.phase ?? (async (_name, operation) => await operation());
     const receipt = options.receipt ?? (() => {});
     stage = 'host';
+    const observationStartedAt = ports.wallNow();
     const tickStarted = ports.now();
     const deadline = tickStarted + LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS;
+    const tickController = new AbortController();
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, tickController.signal])
+      : tickController.signal;
+    tickTimer = setTimeout(() => {
+      if (signal.aborted) return;
+      tickTimeoutFault = new SoakGuardError(
+        'tick-deadline',
+        ports.now() - tickStarted,
+        LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
+        'ms',
+      );
+      tickController.abort(tickTimeoutFault);
+    }, LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS);
     const selectors = [
       '--deployment-instance',
       state.deploymentInstanceId,
@@ -491,7 +538,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
       options.dataRoot,
     ];
     const check = () => {
-      options.signal?.throwIfAborted();
+      signal.throwIfAborted();
       guard(
         ports.now() < deadline,
         'tick-deadline',
@@ -501,7 +548,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
       );
     };
     check();
-    const host = await ports.createHost(options);
+    const host = await ports.createHost({ ...options, signal });
     check();
     /** @param {string} name @param {string[]} args */
     const exec = async (name, args) => {
@@ -619,7 +666,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
           await ports.wait(
             Math.min(1000, Math.max(1, deadline - ports.now())),
             undefined,
-            { signal: options.signal },
+            { signal },
           );
         }
         const ledgerDigest = completedRun(view, checkpoint);
@@ -718,6 +765,7 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
       check();
       checkpoint.samples.push({
         sequence: checkpoint.completed.length,
+        observationStartedAt,
         observedAt: ports.wallNow(),
         resource,
       });
@@ -766,21 +814,25 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
     return { checkpoint, complete: checkpoint.complete, nextAt: nextAt() };
   } catch (error) {
     const source = /** @type {Record<string, any>} */ (error);
+    const guardFault =
+      error instanceof SoakGuardError ? error : tickTimeoutFault;
     throw Object.assign(new Error('Live soak observation failed.'), {
       diagnostic: {
         ...source?.diagnostic,
+        ...guardFault?.diagnostic,
         soakFaultStage: stage,
-        soakFaultCode:
-          error instanceof SoakGuardError
-            ? error.diagnostic.soakFaultCode
-            : source?.code === 'ERR_ASSERTION'
-              ? 'assertion'
-              : source?.name === 'SyntaxError'
-                ? 'invalid-json'
-                : source?.name === 'AbortError' || options.signal?.aborted
-                  ? 'aborted'
-                  : 'operation-failed',
+        soakFaultCode: guardFault
+          ? guardFault.diagnostic.soakFaultCode
+          : source?.code === 'ERR_ASSERTION'
+            ? 'assertion'
+            : source?.name === 'SyntaxError'
+              ? 'invalid-json'
+              : source?.name === 'AbortError' || options.signal?.aborted
+                ? 'aborted'
+                : 'operation-failed',
       },
     });
+  } finally {
+    clearTimeout(tickTimer);
   }
 }

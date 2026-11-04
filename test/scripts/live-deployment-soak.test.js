@@ -1,5 +1,5 @@
 /* eslint-disable jsdoc/require-param, jsdoc/require-returns -- Offline acceptance fixtures. */
-import { describe, expect, test } from '@jest/globals';
+import { describe, expect, jest, test } from '@jest/globals';
 import { createHash } from 'node:crypto';
 
 import {
@@ -354,6 +354,97 @@ describe('bounded periodic live soak', () => {
     expect(f.checkpoint.endAt).toBe(1_900_000);
   });
 
+  test('accepts a 299-second middle observation without counting active work as observer inactivity', async () => {
+    const f = fixture();
+    let result = await f.tick();
+    f.setWall(result.nextAt);
+    f.settings.resourceDurationMs = 299_000;
+    result = await f.tick();
+    expect(f.checkpoint.samples[1]).toMatchObject({
+      observationStartedAt: f.checkpoint.startedAt + 240_000,
+      observedAt: f.checkpoint.startedAt + 539_000,
+    });
+    expect(f.receipts['soak-progress.json'].observations).toMatchObject({
+      maximumSampleGapMs: 539_000,
+      maximumObserverIdleGapMs: 240_000,
+    });
+    f.settings.resourceDurationMs = 0;
+    // The next scheduled submission is already due after the slow observation.
+    result = await f.tick();
+    f.setWall(result.nextAt);
+    expect((await f.tick()).complete).toBe(true);
+    expect(f.starts).toBe(3);
+  });
+
+  test('accepts a 61-second final rehearsal observation after the scheduled seven-minute idle gap', async () => {
+    const f = fixture();
+    for (let index = 0; index < 3; index++) {
+      const result = await f.tick();
+      f.setWall(result.nextAt);
+    }
+    f.settings.resourceDurationMs = 61_000;
+    expect((await f.tick()).complete).toBe(true);
+    expect(f.receipts['soak-progress.json'].observations).toMatchObject({
+      maximumSampleGapMs: 481_000,
+      maximumObserverIdleGapMs: 420_000,
+    });
+    expect(f.checkpoint.samples).toHaveLength(4);
+    expect(f.checkpoint.endAt).toBe(1_900_000);
+  });
+
+  test('rejects invalid observation starts, backwards time, over-budget work, and a synthetic start that hides an idle gap', async () => {
+    const f = fixture();
+    const result = await f.tick();
+    f.setWall(result.nextAt);
+    await f.tick();
+    const mutations =
+      /** @type {Array<(sample: Record<string, any>, previousAt: number) => void>} */ ([
+        (sample) => {
+          sample.observationStartedAt = null;
+        },
+        (sample, previousAt) => {
+          sample.observationStartedAt = previousAt - 1;
+        },
+        (sample) => {
+          sample.observationStartedAt = sample.observedAt + 1;
+        },
+        (sample) => {
+          sample.observedAt += 2;
+          sample.observationStartedAt = sample.observedAt - 1;
+        },
+        (sample) => {
+          sample.observedAt = sample.observationStartedAt + 300_001;
+        },
+        (sample, previousAt) => {
+          sample.observedAt = previousAt + 480_000 + 300_001;
+          sample.observationStartedAt = sample.observedAt - 300_000;
+        },
+      ]);
+    for (const mutate of mutations) {
+      const checkpoint = structuredClone(f.checkpoint);
+      mutate(checkpoint.samples[1], checkpoint.samples[0].observedAt);
+      expect(() =>
+        validateLiveDeploymentSoakCheckpoint(checkpoint, f.state),
+      ).toThrow();
+    }
+  });
+
+  test('keeps legacy checkpoint coverage strict when observation start times were not retained', async () => {
+    const f = fixture();
+    const result = await f.tick();
+    f.setWall(result.nextAt);
+    await f.tick();
+    const checkpoint = structuredClone(f.checkpoint);
+    for (const sample of checkpoint.samples) delete sample.observationStartedAt;
+    expect(validateLiveDeploymentSoakCheckpoint(checkpoint, f.state)).toEqual(
+      checkpoint,
+    );
+    checkpoint.samples[1].observedAt += 299_000;
+    expect(() =>
+      validateLiveDeploymentSoakCheckpoint(checkpoint, f.state),
+    ).toThrow('gap exceeding two intervals');
+  });
+
   test('refuses a late final run before guest commands when its full observation window is unavailable', async () => {
     const f = fixture();
     for (let index = 0; index < 2; index++) {
@@ -443,6 +534,79 @@ describe('bounded periodic live soak', () => {
     expect(f.checkpoint.completed).toHaveLength(0);
     expect(f.starts).toBe(1);
   });
+
+  test.each(['deadline', 'caller', 'deadline-then-caller'])(
+    'interrupts a stalled resource observation on %s cancellation',
+    async (cancellation) => {
+      jest.useFakeTimers();
+      try {
+        const f = fixture();
+        const caller = new AbortController();
+        const timedOut = cancellation !== 'caller';
+        let now = 0;
+        let entered = () => {};
+        const resourceEntered = new Promise((resolve) => {
+          entered = () => resolve(undefined);
+        });
+        const createHost = f.dependencies.createHost;
+        f.dependencies.now = () => now;
+        const dependencies = {
+          ...f.dependencies,
+          createHost: async (/** @type {Record<string, any>} */ options) => ({
+            ...(await createHost()),
+            observeResources: async () => {
+              entered();
+              await new Promise((_resolve, reject) => {
+                options.signal.addEventListener(
+                  'abort',
+                  () => {
+                    if (cancellation === 'deadline-then-caller') caller.abort();
+                    reject(
+                      Object.assign(new Error('Host operation aborted.'), {
+                        name: 'AbortError',
+                      }),
+                    );
+                  },
+                  { once: true },
+                );
+              });
+              throw new Error('An aborted observation must not continue.');
+            },
+          }),
+        };
+        const result = advanceLiveDeploymentSoak(
+          { ...f.options(), signal: caller.signal },
+          dependencies,
+        ).catch((error) => error);
+        await resourceEntered;
+        if (timedOut) {
+          now = LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS;
+          await jest.advanceTimersByTimeAsync(now);
+        } else {
+          caller.abort();
+        }
+        expect((await result).diagnostic).toMatchObject({
+          soakFaultStage: 'resources',
+          soakFaultCode: timedOut ? 'tick-deadline' : 'aborted',
+          ...(timedOut
+            ? {
+                timedOut: true,
+                soakObservedMs: LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
+                soakLimitMs: LIVE_DEPLOYMENT_SOAK_TICK_BUDGET_MS,
+              }
+            : {}),
+        });
+        expect(caller.signal.aborted).toBe(cancellation !== 'deadline');
+        expect(f.checkpoint.completed).toHaveLength(0);
+        expect(f.checkpoint.samples).toHaveLength(0);
+        expect(f.checkpoint.pending.runId).not.toBeNull();
+        expect(f.receipts).toEqual({});
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    },
+  );
 
   test('classifies a resource observation over five minutes without committing or retrying its work', async () => {
     const f = fixture({ resourceDurationMs: 300_001 });

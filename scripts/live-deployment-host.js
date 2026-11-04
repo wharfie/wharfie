@@ -272,6 +272,16 @@ function processIdentity(bytes, pid) {
 export async function createLiveDeploymentHost(input, dependencies = {}) {
   return await guarded('host-initialize', async () => {
     const { state, dataRoot, env, signal } = input;
+    // A tick can expire between commands, including after a successful response.
+    // Retain only cancellation metadata, never the caller's abort reason.
+    const checkActive = () => {
+      if (signal?.aborted) {
+        throw Object.assign(new Error('Live host operation was aborted.'), {
+          diagnostic: { aborted: true },
+        });
+      }
+    };
+    checkActive();
     const journal = validateSingleNodeDeploymentJournal(input.journal);
     const selection = input.release ?? 'current';
     assert.ok(['current', 'target'].includes(selection));
@@ -313,6 +323,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
     const runProcess = {
       /** @param {Record<string, any>} request */
       async run(request) {
+        checkActive();
         const result = await run({
           file: request.file,
           args: request.args,
@@ -325,6 +336,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
             ? {}
             : { stdin: request.stdin.toString('utf8') }),
         });
+        checkActive();
         assert.ok(
           Buffer.byteLength(result.stdout) <= request.maximumStdoutBytes,
         );
@@ -354,6 +366,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
           }))
       )(),
     );
+    checkActive();
     const cloudInit = await hostBoundary('initialize-bootstrap-binding', () => {
       const value = createSingleNodeCloudInit({
         deploymentInstanceId: journal.deploymentInstanceId,
@@ -364,6 +377,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       sameJson(value.digest, journal.providerIntent.intent.cloudInitDigest);
       return value;
     });
+    checkActive();
     await hostBoundary('initialize-host-pin', async () => {
       const hostKey = await (
         dependencies.readHostKey ?? readDeploymentSshHostKey
@@ -373,6 +387,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
       });
       sameJson(hostKey, journal.sshHost);
     });
+    checkActive();
     const transport = await hostBoundary('initialize-transport', () =>
       (dependencies.createTransport ?? createDeploymentOpenSshTransport)({
         address: journal.sshHost.address,
@@ -381,6 +396,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
         runProcess,
       }),
     );
+    checkActive();
     const remotePath =
       selection === 'target'
         ? getSingleNodeRemoteArtifactPaths(desired, journal.incarnationId)
@@ -388,6 +404,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
         : release.activation.artifact.remotePath;
     /** @param {string[]} argv @param {Buffer|null} [stdin] @param {number} [timeoutMilliseconds] */
     const remote = async (argv, stdin = null, timeoutMilliseconds = 30_000) => {
+      checkActive();
       const result = await transport.runRemoteArgv({
         argv,
         stdin,
@@ -395,6 +412,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
         maximumStdoutBytes: MAX_BYTES,
         maximumStderrBytes: 8192,
       });
+      checkActive();
       assert.equal(result.status, 'exited');
       assert.equal(result.exitCode, 0);
       assert.ok(!result.timedOut && result.signal === null);
