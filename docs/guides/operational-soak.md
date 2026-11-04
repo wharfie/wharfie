@@ -11,6 +11,31 @@ Use the controller prerequisites and narrow SSH access described in
 `wharfie` profile in the examples below. A Hetzner token must be available as
 `HCLOUD_TOKEN`. Credentials stay on the controller.
 
+## September 2026 campaign result
+
+The terminal reports for `wharfie-soak-20260915-stable-v6` were recovered and
+verified on November 4, 2026. Both fifteen-minute rehearsals passed. The full
+AWS run completed 62 of 288 workflows and the Hetzner run completed 61 of 288
+before both aborted after approximately fifteen hours. Neither is a passing
+72-hour soak.
+
+The retained failures report cancellation during AWS history inspection
+(`SIGKILL`) and Hetzner workflow observation (`SIGTERM`). Both supervisor
+observer exits were 124. These records do not establish a workload defect or
+identify what triggered cancellation. The scheduled controller stop happened
+on September 18, after the campaign had already settled on September 16.
+
+All four runs exported successful guest cleanup and workspace-removal receipts.
+Fresh November 4 checks independently found both providers' guest resources
+absent. Controller teardown is a separate operation: a stopped controller can
+still retain its disk, allocated IP, credentials, and proof archive.
+
+The campaign tested published v0.0.15 from source `aae74e0`, before the journal
+performance change in PR #168. Acceptance remains open and requires a new,
+complete candidate-bound run; a cleaned failed run cannot be resumed into a
+passing result. [PR #165](https://github.com/wharfie/wharfie/pull/165) tracks this
+gate.
+
 ## Rehearse, then run
 
 Start with `--soak-hours 0.25` for a fifteen-minute rehearsal. After it passes,
