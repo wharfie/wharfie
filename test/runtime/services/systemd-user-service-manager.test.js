@@ -2418,9 +2418,9 @@ describe('systemd user service manager', () => {
     await expect(harness.operator.uninstall()).resolves.toMatchObject({
       health: 'absent',
     });
-    await expect(
-      harness.operator.purge({ confirmation: APP_ID }),
-    ).resolves.toMatchObject({
+    // Await directly so failures retain their underlying filesystem cause.
+    const purged = await harness.operator.purge({ confirmation: APP_ID });
+    expect(purged).toMatchObject({
       outcome: 'purged',
     });
     await expect(fsp.stat(harness.layout.serviceRoot)).rejects.toMatchObject({
