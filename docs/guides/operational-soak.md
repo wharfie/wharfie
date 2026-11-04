@@ -27,8 +27,14 @@ on September 18, after the campaign had already settled on September 16.
 
 All four runs exported successful guest cleanup and workspace-removal receipts.
 Fresh November 4 checks independently found both providers' guest resources
-absent. Controller teardown is a separate operation: a stopped controller can
-still retain its disk, allocated IP, credentials, and proof archive.
+absent. The abandoned controller stack, root disk, allocated IP, security group,
+IAM and scheduler resources, and campaign token copy were then removed and
+independently verified absent. The private S3 proof archive and verified local
+copies remain. The controller no longer retained the September journal, so its
+inspection did not establish the cancellation trigger.
+
+Controller teardown is a separate operation: stopping a controller alone can
+leave its disk, allocated IP, credentials, and proof archive behind.
 
 The campaign tested published v0.0.15 from source `aae74e0`, before the journal
 performance change in PR #168. Acceptance remains open and requires a new,

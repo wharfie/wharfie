@@ -49,6 +49,11 @@ import {
   createIsolatedAuthoredAppFixture,
 } from '../../helpers/isolated-authored-app.js';
 
+// These integration cases perform real revision bundling, filesystem publication,
+// and subprocess execution. Give instrumented builds time to settle before
+// afterEach restores the filesystem and actor spies shared within this suite.
+jest.setTimeout(30_000);
+
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(testDir, '../../..');
 const authoredHelloWorldDir = path.join(
