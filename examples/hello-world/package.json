@@ -15,6 +15,6 @@
     "package": "wharfie app package ./app --output-dir ./dist"
   },
   "devDependencies": {
-    "@wharfie/wharfie": "0.0.15"
+    "@wharfie/wharfie": "0.0.16"
   }
 }

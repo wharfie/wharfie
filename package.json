@@ -1,6 +1,6 @@
 {
   "name": "@wharfie/wharfie",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "description": "Experimental toolkit for building TypeScript CLIs and packaging them as portable Node SEA executables",
   "private": false,
   "type": "module",
@@ -236,14 +236,13 @@
     }
   },
   "devDependencies": {
-    "@wharfie/aws": "0.0.15",
+    "@wharfie/aws": "0.0.16",
     "@babel/eslint-parser": "^7.28.5",
     "@babel/plugin-syntax-import-attributes": "^7.27.1",
     "@jest/globals": "^30.4.1",
     "@types/diff": "^5.2.1",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
-    "@types/npmcli__arborist": "^6.3.1",
     "eslint": "^8.45.0",
     "eslint-config-prettier": "^8.8.0",
     "eslint-config-standard": "^17.1.0",
@@ -253,40 +252,19 @@
     "eslint-plugin-n": "^16.0.0",
     "jest": "^30.4.2",
     "prettier": "^3.7.4",
-    "typescript": "^5.0.4"
+    "typescript": "^5.0.4",
+    "npm-install-checks": "8.0.0"
   },
   "peerDependencies": {
-    "@wharfie/aws": "0.0.15"
+    "@wharfie/aws": "0.0.16"
   },
   "peerDependenciesMeta": {
     "@wharfie/aws": {
       "optional": true
     }
   },
-  "overrides": {
-    "@npmcli/arborist": {
-      "minimatch": "11.0.4"
-    },
-    "@npmcli/map-workspaces": {
-      "glob": "14.0.3",
-      "minimatch": "11.0.4"
-    },
-    "@npmcli/package-json": {
-      "glob": "14.0.3"
-    },
-    "@tufjs/models": {
-      "minimatch": "11.0.4"
-    },
-    "cacache": {
-      "glob": "14.0.3"
-    },
-    "ignore-walk": {
-      "minimatch": "11.0.4"
-    }
-  },
   "dependencies": {
     "@babel/parser": "^7.28.5",
-    "@npmcli/arborist": "^9.9.0",
     "@paralleldrive/cuid2": "^2.2.2",
     "chalk": "^4.1.0",
     "commander": "^12.1.0",
@@ -296,7 +274,6 @@
     "esbuild": "0.25.1",
     "jszip": "^3.10.1",
     "lmdb": "^3.4.0",
-    "pacote": "^21.5.1",
     "postject": "^1.0.0-alpha.6",
     "semver": "^7.6.3",
     "tar": "^7.5.20"

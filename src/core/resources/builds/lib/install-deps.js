@@ -9,12 +9,12 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 
-import pacote from 'pacote';
 import { extract as extractTar, list as listTar } from 'tar';
 
 import { compareCanonicalStrings } from '../../../runtime/canonical-order.js';
 import { createFrozenDependencyClosurePlan } from './frozen-dependency-closure.js';
 import { verifyExtractedPackageManifest } from './frozen-dependency-closure-plan.js';
+import { downloadLockedTarball } from './locked-tarball.js';
 
 /**
  * @typedef {import('node:process')['platform']} TargetPlatform
@@ -386,7 +386,8 @@ async function verifyMaterializedClosure(buildRoot, plan) {
  *   buildTarget: BuildTarget,
  *   dependencyLock: unknown,
  *   externals: ExternalDep[] | undefined,
- *   tmpBuildDir: string
+ *   tmpBuildDir: string,
+ *   signal?: AbortSignal
  * }} params - Exact closure inputs.
  * @returns {Promise<{ dependencyLockInput: import('../../../runtime/application-revision.js').LockedInputDescriptor, closureDigest: import('../../../runtime/application-revision.js').Sha256Digest, plan: Readonly<Record<string, any>> } | null>} - Materialized closure receipt.
  */
@@ -396,8 +397,10 @@ async function installForTarget({
   dependencyLock,
   externals,
   tmpBuildDir,
+  signal,
 }) {
   if (!externals?.length) return null;
+  signal?.throwIfAborted();
 
   const closure = await createFrozenDependencyClosurePlan({
     activity,
@@ -405,6 +408,7 @@ async function installForTarget({
     dependencyLock,
     externals,
   });
+  signal?.throwIfAborted();
   await rmSafe(path.join(tmpBuildDir, 'node_modules'), {
     recursive: true,
     force: true,
@@ -432,20 +436,23 @@ async function installForTarget({
   );
 
   for (const packageEntry of closure.plan.packages) {
+    signal?.throwIfAborted();
     const destination = resolvePackageDestination(
       tmpBuildDir,
       packageEntry.location,
     );
     await mkdir(path.dirname(destination), { recursive: true });
     try {
-      // eslint-disable-next-line import/no-named-as-default-member
-      const tarball = await pacote.tarball(packageEntry.resolved, {
+      const tarball = await downloadLockedTarball(packageEntry.resolved, {
         integrity: packageEntry.integrity,
+        signal,
       });
       if (!Buffer.isBuffer(tarball) || tarball.length === 0) {
         throw new TypeError('Locked package URL did not return tar bytes.');
       }
+      signal?.throwIfAborted();
       await validatePackageTarball(tarball, packageEntry.location);
+      signal?.throwIfAborted();
       await extractPackageTarball(tarball, destination);
     } catch (error) {
       await rmSafe(destination, { recursive: true, force: true });

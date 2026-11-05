@@ -207,6 +207,274 @@ describe('frozen dependency closure planning', () => {
     expect(linux.digest).not.toEqual(darwin.digest);
   });
 
+  it('resolves scoped nested packages through their physical parent before the root', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0', adapter: '2.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          dependencies: { '@tools/parent': '1.0.0' },
+        }),
+        'node_modules/alpha/node_modules/@tools/parent': registryPackage(
+          '@tools/parent',
+          '1.0.0',
+          {
+            dependencies: { child: '^1.0.0' },
+            peerDependencies: { adapter: '^1.0.0' },
+          },
+        ),
+        'node_modules/alpha/node_modules/child': registryPackage(
+          'child',
+          '1.2.0',
+        ),
+        'node_modules/alpha/node_modules/adapter': registryPackage(
+          'adapter',
+          '1.1.0',
+        ),
+        'node_modules/adapter': registryPackage('adapter', '2.0.0'),
+      },
+    );
+
+    const result = await plan(lock);
+    expect(result.plan.packages).toHaveLength(4);
+    expect(
+      result.plan.packages.find(
+        (/** @type {any} */ entry) => entry.name === '@tools/parent',
+      ).edges,
+    ).toEqual([
+      {
+        name: 'adapter',
+        type: 'peer',
+        spec: '^1.0.0',
+        location: 'node_modules/alpha/node_modules/adapter',
+      },
+      {
+        name: 'child',
+        type: 'prod',
+        spec: '^1.0.0',
+        location: 'node_modules/alpha/node_modules/child',
+      },
+    ]);
+  });
+
+  it('rejects the nearest incompatible version instead of selecting a matching ancestor', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0', shared: '2.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          dependencies: { shared: '^2.0.0' },
+        }),
+        'node_modules/alpha/node_modules/shared': registryPackage(
+          'shared',
+          '1.0.0',
+        ),
+        'node_modules/shared': registryPackage('shared', '2.0.0'),
+      },
+    );
+    await expect(plan(lock)).rejects.toThrow(
+      "invalid prod dependency 'shared'",
+    );
+  });
+
+  it.each([false, true])(
+    'rejects an internally installed peer even with a valid ancestor (optional=%s)',
+    async (optional) => {
+      const lock = createLock(
+        { dependencies: { alpha: '1.0.0', adapter: '1.0.0' } },
+        {
+          'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+            peerDependencies: { adapter: '1.0.0' },
+            peerDependenciesMeta: { adapter: { optional } },
+          }),
+          'node_modules/alpha/node_modules/adapter': registryPackage(
+            'adapter',
+            '1.0.0',
+          ),
+          'node_modules/adapter': registryPackage('adapter', '1.0.0'),
+        },
+      );
+      await expect(plan(lock)).rejects.toThrow(
+        `invalid ${optional ? 'peerOptional' : 'peer'} dependency 'adapter'`,
+      );
+    },
+  );
+
+  it('keeps cycle and self-peer resolution finite while excluding transitive dev dependencies', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          dependencies: { beta: '1.0.0' },
+          peerDependencies: { alpha: '1.0.0' },
+          devDependencies: { absent: '1.0.0' },
+        }),
+        'node_modules/beta': registryPackage('beta', '1.0.0', {
+          dependencies: { alpha: '1.0.0' },
+        }),
+      },
+    );
+    const result = await plan(lock);
+    expect(
+      result.plan.packages.map((/** @type {any} */ entry) => entry.name),
+    ).toEqual(['alpha', 'beta']);
+    expect(result.plan.packages[0].edges).toEqual([
+      {
+        name: 'alpha',
+        type: 'peer',
+        spec: '1.0.0',
+        location: 'node_modules/alpha',
+      },
+      {
+        name: 'beta',
+        type: 'prod',
+        spec: '1.0.0',
+        location: 'node_modules/beta',
+      },
+    ]);
+  });
+
+  it('preserves optional-over-production-over-peer dependency precedence', async () => {
+    const lock = createLock(
+      { optionalDependencies: { alpha: '1.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          dependencies: { child: '^1.0.0' },
+          optionalDependencies: { child: '^2.0.0' },
+          peerDependencies: { child: '^3.0.0' },
+        }),
+        'node_modules/child': registryPackage('child', '2.0.0'),
+      },
+    );
+    const result = await plan(lock);
+    expect(result.plan.packages[0].edges).toEqual([
+      {
+        name: 'child',
+        type: 'optional',
+        spec: '^2.0.0',
+        location: 'node_modules/child',
+      },
+    ]);
+  });
+
+  it('omits the nearest incompatible optional target without choosing an ancestor copy', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0', native: '1.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          optionalDependencies: { native: '1.0.0' },
+        }),
+        'node_modules/alpha/node_modules/native': registryPackage(
+          'native',
+          '1.0.0',
+          { cpu: ['arm64'] },
+        ),
+        'node_modules/native': registryPackage('native', '1.0.0', {
+          cpu: ['x64'],
+        }),
+      },
+    );
+    const result = await plan(lock);
+    expect(result.plan.packages).toHaveLength(1);
+    expect(result.plan.packages[0].edges).toEqual([
+      {
+        name: 'native',
+        type: 'optional',
+        spec: '1.0.0',
+        location: null,
+        omission: 'target-incompatible',
+      },
+    ]);
+  });
+
+  it('rejects a prerelease that is outside the locked dependency range', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          dependencies: { child: '^1.0.0' },
+        }),
+        'node_modules/child': registryPackage('child', '1.1.0-beta.1'),
+      },
+    );
+    await expect(plan(lock)).rejects.toThrow("invalid prod dependency 'child'");
+  });
+
+  it.each([
+    ['workspace link', { link: true }, 'is a link'],
+    ['package alias', { name: 'different-package' }, 'is an npm alias'],
+    ['bundled node', { inBundle: true }, 'bundled inside another package'],
+  ])(
+    'rejects a selected %s from sealed metadata',
+    async (_label, metadata, message) => {
+      const lock = createLock(
+        { dependencies: { alpha: '1.0.0' } },
+        { 'node_modules/alpha': registryPackage('alpha', '1.0.0', metadata) },
+      );
+      await expect(plan(lock)).rejects.toThrow(message);
+    },
+  );
+
+  it('keeps the plan identical when the lock entries are reordered', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0' } },
+      {
+        'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+          dependencies: { child: '1.0.0' },
+        }),
+        'node_modules/child': registryPackage('child', '1.0.0'),
+      },
+    );
+    const reordered = {
+      ...lock,
+      packages: Object.fromEntries(Object.entries(lock.packages).reverse()),
+    };
+    expect(await plan(reordered)).toEqual(await plan(lock));
+  });
+
+  it.each(['@node_modules/alpha', '@own-node_modules/alpha'])(
+    'preserves a scope containing the node_modules suffix: %s',
+    async (name) => {
+      const lock = createLock(
+        { dependencies: { [name]: '1.0.0' } },
+        {
+          [`node_modules/${name}`]: registryPackage(name, '1.0.0', {
+            dependencies: { '@node_modules/child': '1.0.0' },
+          }),
+          [`node_modules/${name}/node_modules/@node_modules/child`]:
+            registryPackage('@node_modules/child', '1.0.0'),
+        },
+      );
+      const result = await plan(lock, {
+        externals: [{ name, version: '1.0.0' }],
+      });
+      expect(result.plan.roots[0]).toEqual({
+        name,
+        version: '1.0.0',
+        location: `node_modules/${name}`,
+      });
+      expect(result.plan.packages[0].edges[0].location).toBe(
+        `node_modules/${name}/node_modules/@node_modules/child`,
+      );
+    },
+  );
+
+  it.each([{ alpha: '2.0.0' }, { alpha: { child: '^2.0.0' } }])(
+    'rejects root override semantics that are absent from frozen manifest contracts: %j',
+    async (overrides) => {
+      const lock = createLock(
+        { dependencies: { alpha: '1.0.0' }, overrides },
+        {
+          'node_modules/alpha': registryPackage('alpha', '1.0.0', {
+            dependencies: { child: '^1.0.0' },
+          }),
+          'node_modules/child': registryPackage('child', '1.0.0'),
+        },
+      );
+      await expect(plan(lock)).rejects.toThrow(
+        'root overrides are unsupported',
+      );
+    },
+  );
+
   it('accepts npm string constraints and a sole any constraint', async () => {
     const lock = createLock(
       { dependencies: { alpha: '1.0.0' } },
