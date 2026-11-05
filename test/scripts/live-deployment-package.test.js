@@ -44,7 +44,7 @@ import awsMetadata from '../../packages/aws/package.json' with { type: 'json' };
 
 /** @type {string[]} */
 const directories = [];
-const VERSION = '0.0.15';
+const VERSION = packageMetadata.version;
 const RELEASE_COMMIT = 'a'.repeat(40);
 const NATIVE_TARGET = Object.freeze({
   platform: 'darwin',
@@ -519,9 +519,9 @@ describe('live deployment installed-candidate boundary', () => {
 
   test.each([
     [CORE, null, 'aws'],
-    [CORE, { ...AWS, version: '0.0.16' }, 'aws'],
+    [CORE, { ...AWS, version: '999.0.0' }, 'aws'],
     [CORE, { ...AWS, peerDependencies: {} }, 'aws'],
-    [{ ...CORE, version: '0.0.16' }, AWS, 'aws'],
+    [{ ...CORE, version: '999.0.0' }, AWS, 'aws'],
     [{ ...CORE, peerDependencies: {} }, AWS, 'aws'],
     [CORE, AWS, 'hetzner'],
   ])(
@@ -848,7 +848,7 @@ describe('live deployment public package evidence', () => {
 
   test('rejects a sidecar from another package version', async () => {
     const fixture = await artifactFixture();
-    fixture.record.provenance.builder.version = '0.0.16';
+    fixture.record.provenance.builder.version = '999.0.0';
     await writeFile(fixture.recordPath, JSON.stringify(fixture.record));
     await expect(
       verifyLiveDeploymentPackageOutput(

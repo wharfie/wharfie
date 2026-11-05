@@ -13,9 +13,9 @@ import {
 } from '../../src/core/runtime/aws-provider-module.js';
 
 const INCOMPATIBLE_MESSAGE =
-  "AWS deployment support is incompatible. Install matching '@wharfie/aws@0.0.15' and '@wharfie/wharfie@0.0.15' packages and retry.";
+  "AWS deployment support is incompatible. Install matching '@wharfie/aws@0.0.16' and '@wharfie/wharfie@0.0.16' packages and retry.";
 const MISSING_MESSAGE =
-  "AWS deployment support is not installed. Install '@wharfie/aws@0.0.15' next to '@wharfie/wharfie@0.0.15' and retry.";
+  "AWS deployment support is not installed. Install '@wharfie/aws@0.0.16' next to '@wharfie/wharfie@0.0.16' and retry.";
 
 /** @returns {ReturnType<typeof providerNamespace.getAwsSdkBindings>} */
 function actualBindings() {

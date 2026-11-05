@@ -29,7 +29,7 @@ import {
 import { recoverPreviewRelease } from '../../scripts/recover-preview-release.js';
 
 const COMMIT = 'a'.repeat(40);
-const VERSION = '0.0.15';
+const VERSION = '0.0.16';
 const TARGET = Object.freeze({
   nodeVersion: '24.13.1',
   platform: 'linux',
@@ -54,7 +54,7 @@ function makeNpmNotFoundFailure() {
     stdout: JSON.stringify({
       error: {
         code: 'E404',
-        summary: 'No match found for version 0.0.15',
+        summary: 'No match found for version 0.0.16',
       },
     }),
     stderr: '',
@@ -529,7 +529,7 @@ function createFakeCommands(candidate, initial = {}) {
         state.failPublishAfterMutation = false;
         throw makeCommandFailure('publish response lost');
       }
-      return { stdout: '+ @wharfie/wharfie@0.0.15\n', stderr: '' };
+      return { stdout: '+ @wharfie/wharfie@0.0.16\n', stderr: '' };
     }
     throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
   }
@@ -1146,7 +1146,7 @@ describe('preview publication reconciliation', () => {
       },
       {
         options: { names: { core: 'wharfie-wharfie.tgz' } },
-        error: /filename must be exactly wharfie-wharfie-0\.0\.15\.tgz/u,
+        error: /filename must be exactly wharfie-wharfie-0\.0\.16\.tgz/u,
       },
     ];
     for (const testCase of cases) {
@@ -1260,7 +1260,7 @@ describe('preview publication reconciliation', () => {
       (metadata) => delete metadata.private,
       (metadata) => (metadata.engines.node = '>=20'),
       (metadata) => (metadata.repository.directory = 'packages/not-aws'),
-      (metadata) => (metadata.peerDependencies['@wharfie/wharfie'] = '^0.0.15'),
+      (metadata) => (metadata.peerDependencies['@wharfie/wharfie'] = '^0.0.16'),
     ];
     for (const mutateCompanionPackage of cases) {
       const artifactDir = writeCandidate({ mutateCompanionPackage });
@@ -1304,8 +1304,8 @@ describe('preview publication reconciliation', () => {
         publicationDependencies(fake),
       ),
     ).resolves.toEqual({
-      tag: 'v0.0.15',
-      version: '0.0.15',
+      tag: 'v0.0.16',
+      version: '0.0.16',
       published: true,
       finalized: false,
     });
@@ -1365,7 +1365,7 @@ describe('preview publication reconciliation', () => {
         '--force',
         '--no-write-fetch-head',
         'https://github.com/wharfie/wharfie.git',
-        '+refs/tags/v0.0.15:refs/wharfie-preview-authority/tag',
+        '+refs/tags/v0.0.16:refs/wharfie-preview-authority/tag',
         '+refs/heads/master:refs/wharfie-preview-authority/master',
       ]);
       expect(
@@ -1516,7 +1516,7 @@ describe('preview publication reconciliation', () => {
 
     const staleMaximum = createFakeCommands(candidate, {
       tags: { preview: '0.0.14' },
-      versions: ['0.0.14', '0.0.16'],
+      versions: ['0.0.14', '999.0.0'],
     });
     await expect(
       publishPreviewRelease(
@@ -1528,7 +1528,7 @@ describe('preview publication reconciliation', () => {
 
     const absentTag = createFakeCommands(candidate, {
       previewTagOutput: '\n',
-      versions: ['0.0.14', '0.0.15-rc.1'],
+      versions: ['0.0.14', '0.0.16-rc.1'],
     });
     await expect(
       publishPreviewRelease(
@@ -1543,7 +1543,7 @@ describe('preview publication reconciliation', () => {
     const newerPreview = createFakeCommands(candidate, {
       release: matchingRelease(candidate),
       npmVersion: matchingNpmVersion(candidate),
-      tags: { preview: '0.0.16', 'preview-candidate': VERSION },
+      tags: { preview: '999.0.0', 'preview-candidate': VERSION },
       versions: [VERSION],
     });
     await expect(
@@ -1558,7 +1558,7 @@ describe('preview publication reconciliation', () => {
       release: matchingRelease(candidate),
       npmVersion: matchingNpmVersion(candidate),
       tags: { 'preview-candidate': VERSION },
-      versions: [VERSION, '0.0.16'],
+      versions: [VERSION, '999.0.0'],
     });
     await expect(
       publishPreviewRelease(
@@ -1971,7 +1971,7 @@ describe('preview publication reconciliation', () => {
       'noncanonical provenance host',
       (npmVersion) => {
         npmVersion.dist.attestations.url =
-          'https://example.com/-/npm/v1/attestations/%40wharfie%2Fwharfie@0.0.15';
+          'https://example.com/-/npm/v1/attestations/%40wharfie%2Fwharfie@0.0.16';
       },
       /does not match preview-release\.json/u,
     ],

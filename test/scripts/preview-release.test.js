@@ -45,8 +45,8 @@ function jobPermissions(job) {
 describe('preview release contract', () => {
   it('binds publishable metadata to the exact standalone target', () => {
     expect(assertPreviewReleaseMetadata(packageMetadata, appManifest)).toEqual({
-      version: '0.0.15',
-      tag: 'v0.0.15',
+      version: packageMetadata.version,
+      tag: `v${packageMetadata.version}`,
     });
     expect(PREVIEW_TARGET).toEqual({
       nodeVersion: '24.13.1',

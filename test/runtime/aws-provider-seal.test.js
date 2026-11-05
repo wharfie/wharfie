@@ -5,7 +5,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 const BOUNDARY_IMPORT = '../../src/core/runtime/aws-provider-module.js';
 const NOT_EMBEDDED_MESSAGE =
-  "AWS deployment support was not embedded. Install matching '@wharfie/aws@0.0.15' beside '@wharfie/wharfie@0.0.15' in the builder, rebuild the application, and retry.";
+  "AWS deployment support was not embedded. Install matching '@wharfie/aws@0.0.16' beside '@wharfie/wharfie@0.0.16' in the builder, rebuild the application, and retry.";
 
 describe('sealed provider-free AWS boundary', () => {
   it('cannot discover or register a companion after sealing', async () => {
