@@ -52,9 +52,7 @@ export const ARTIFACT_PROVENANCE_BUILDER_NAME = '@wharfie/wharfie';
 const require = createRequire(import.meta.url);
 const TOOLCHAIN_PACKAGE_NAMES = Object.freeze([
   '@babel/parser',
-  '@npmcli/arborist',
   'esbuild',
-  'pacote',
   'postject',
   'semver',
   'tar',
@@ -76,12 +74,8 @@ function loadToolchainPackageManifest(packageName) {
   switch (packageName) {
     case '@babel/parser':
       return require('@babel/parser/package.json');
-    case '@npmcli/arborist':
-      return require('@npmcli/arborist/package.json');
     case 'esbuild':
       return require('esbuild/package.json');
-    case 'pacote':
-      return require('pacote/package.json');
     case 'postject':
       return require('postject/package.json');
     case 'semver':

@@ -105,9 +105,6 @@ async function loadInstaller(lock, onTarball) {
         },
       ]),
   );
-  const manifest = jest.fn(() => {
-    throw new Error('Mutable manifest resolution must not run.');
-  });
   /**
    * @param {string} resolved
    * @param {Record<string, any>} options
@@ -165,11 +162,12 @@ async function loadInstaller(lock, onTarball) {
     return Buffer.concat(chunks);
   }
   const tarball = jest.fn(tarballImpl);
-  await jest.unstable_mockModule('pacote', () => ({
-    default: { tarball, manifest },
-  }));
+  await jest.unstable_mockModule(
+    '../../../src/core/resources/builds/lib/locked-tarball.js',
+    () => ({ downloadLockedTarball: tarball }),
+  );
   const { installForTarget } = await import(INSTALL_DEPS_IMPORT);
-  return { installForTarget, tarball, manifest };
+  return { installForTarget, tarball };
 }
 
 afterEach(async () => {
@@ -194,7 +192,7 @@ describe('installForTarget', () => {
         'node_modules/child': registryPackage('child', '1.0.1'),
       },
     );
-    const { installForTarget, tarball, manifest } = await loadInstaller(lock);
+    const { installForTarget, tarball } = await loadInstaller(lock);
     const buildDirectory = await createBuildDirectory();
     const dependencyLock = await createLockHandle(lock);
 
@@ -206,7 +204,6 @@ describe('installForTarget', () => {
       tmpBuildDir: buildDirectory,
     });
 
-    expect(manifest).not.toHaveBeenCalled();
     expect(tarball).toHaveBeenCalledTimes(2);
     expect(tarball.mock.calls.map((call) => call[0])).toEqual([
       lock.packages['node_modules/alpha'].resolved,
@@ -287,7 +284,7 @@ describe('installForTarget', () => {
       { dependencies: { alpha: '1.0.0' } },
       { 'node_modules/alpha': registryPackage('alpha', '1.0.0') },
     );
-    const { installForTarget, tarball, manifest } = await loadInstaller(
+    const { installForTarget, tarball } = await loadInstaller(
       lock,
       async () => {
         throw new Error('integrity mismatch');
@@ -304,7 +301,64 @@ describe('installForTarget', () => {
       }),
     ).rejects.toThrow('integrity mismatch');
     expect(tarball).toHaveBeenCalledTimes(1);
-    expect(manifest).not.toHaveBeenCalled();
+  });
+
+  it('rejects a real download digest mismatch before archive parsing or extraction', async () => {
+    jest.unstable_unmockModule(
+      '../../../src/core/resources/builds/lib/locked-tarball.js',
+    );
+    const { installForTarget } = await import(INSTALL_DEPS_IMPORT);
+    const fetchRequest = jest
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(
+        new Response('tampered bytes that are not a tar archive'),
+      );
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0' } },
+      { 'node_modules/alpha': registryPackage('alpha', '1.0.0') },
+    );
+    const buildDirectory = await createBuildDirectory();
+    await expect(
+      installForTarget({
+        activity: 'integrity',
+        buildTarget: target,
+        dependencyLock: await createLockHandle(lock),
+        externals: [{ name: 'alpha', version: '1.0.0' }],
+        tmpBuildDir: buildDirectory,
+      }),
+    ).rejects.toThrow('SHA-512 integrity mismatch');
+    expect(fetchRequest).toHaveBeenCalledTimes(1);
+    expect(existsSync(path.join(buildDirectory, 'node_modules', 'alpha'))).toBe(
+      false,
+    );
+  });
+
+  it('preserves existing build files and makes no request after cancellation', async () => {
+    const lock = createLock(
+      { dependencies: { alpha: '1.0.0' } },
+      { 'node_modules/alpha': registryPackage('alpha', '1.0.0') },
+    );
+    const { installForTarget, tarball } = await loadInstaller(lock);
+    const buildDirectory = await createBuildDirectory();
+    const previousModules = path.join(buildDirectory, 'node_modules');
+    await fsp.mkdir(previousModules);
+    await fsp.writeFile(path.join(previousModules, 'previous'), 'keep');
+    const controller = new AbortController();
+    controller.abort(new Error('cancelled install'));
+    await expect(
+      installForTarget({
+        activity: 'cancelled',
+        buildTarget: target,
+        dependencyLock: await createLockHandle(lock),
+        externals: [{ name: 'alpha', version: '1.0.0' }],
+        tmpBuildDir: buildDirectory,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('cancelled install');
+    expect(tarball).not.toHaveBeenCalled();
+    expect(
+      await fsp.readFile(path.join(previousModules, 'previous'), 'utf8'),
+    ).toBe('keep');
   });
 
   it('rejects an extracted package with the wrong identity', async () => {
@@ -583,7 +637,7 @@ describe('installForTarget', () => {
 
   it('does no lock or network work when an activity has no externals', async () => {
     const lock = createLock({}, {});
-    const { installForTarget, tarball, manifest } = await loadInstaller(lock);
+    const { installForTarget, tarball } = await loadInstaller(lock);
 
     await expect(
       installForTarget({
@@ -595,6 +649,5 @@ describe('installForTarget', () => {
       }),
     ).resolves.toBeNull();
     expect(tarball).not.toHaveBeenCalled();
-    expect(manifest).not.toHaveBeenCalled();
   });
 });

@@ -28,10 +28,13 @@ regular-file bytes, parses and canonically orders its JSON value, and checks the
 resulting SHA-256 digest against the owning `ApplicationRevisionV1` before
 planning or fetching a package.
 
-Wharfie copies those canonical bytes into a private directory and uses
-Arborist's `loadVirtual()` only to interpret npm's locked physical layout and
-peer edges. It never constructs an ideal tree, consults package manifests to
+Wharfie interprets the validated lock's physical `node_modules` locations and
+dependency declarations directly. Dependency lookup follows the recorded parent
+locations, and peer edges must resolve outside the dependent package's own
+children. It never constructs an ideal tree, consults registry metadata to
 resolve a range, updates the lock, or treats an ambient install as an input.
+Explicit nonempty root override maps are unsupported: each selected physical
+package must satisfy the dependency ranges recorded in the sealed lock.
 
 Each activity external is an explicitly authored exact `{ name, version }`
 pair (or `name@version` shorthand). Bare package names are rejected rather than
@@ -65,8 +68,11 @@ private-registry authentication. Supporting normal npm credential chains later
 requires an explicit locator/authentication design that keeps secrets out of
 revisions, plans, receipts, archives, and logs.
 
-Wharfie fetches each exact locked tarball into memory with pacote and verifies
-its SRI. Before extracting those same bytes, it requires canonical `package/`
+Wharfie fetches each exact locked tarball with a bounded native HTTPS request
+and verifies its SHA-512 SRI before parsing the archive. Each transfer has a
+240-second deadline and a 256 MiB archive limit. Redirects and HTTP content
+encoding are rejected; the response must contain the exact locked archive
+bytes. Before extracting those same bytes, it requires canonical `package/`
 paths, rejects traversal, duplicates, embedded `node_modules`, links,
 hardlinks, and special entries, and permits only regular files and directories.
 It then extracts those same validated bytes at the exact locked physical

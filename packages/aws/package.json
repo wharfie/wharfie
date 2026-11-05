@@ -1,6 +1,6 @@
 {
   "name": "@wharfie/aws",
-  "version": "0.0.15",
+  "version": "0.0.16",
   "private": false,
   "description": "Version-matched AWS deployment companion for Wharfie",
   "type": "module",
@@ -27,7 +27,7 @@
     "src/"
   ],
   "peerDependencies": {
-    "@wharfie/wharfie": "0.0.15"
+    "@wharfie/wharfie": "0.0.16"
   },
   "peerDependenciesMeta": {
     "@wharfie/wharfie": {

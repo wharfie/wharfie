@@ -27,34 +27,29 @@ enabled. Other tests keep the runner's normal temporary directory.
 
 ## Production dependency audit
 
-The checked-in lock and the scoped `overrides` in
-[`package.json`](../../package.json) select patched glob and minimatch versions
-for the production dependency graph while preserving the pinned Node/npm
-toolchain. Keep these overrides until the upstream parent packages accept the
-patched versions, and rerun the frozen dependency and packaging checks when
-changing them.
+npm applies overrides from the installing project's root manifest, so a passing
+checkout audit does not establish a passing consumer audit. On November 4, 2026,
+the checkout passed while a fresh tarball consumer reported 19 moderate
+dependency findings through glob and minimatch. These were dependency findings,
+not 19 distinct advisories.
 
-npm applies overrides from the installing project's root manifest. It does not
-apply Wharfie's overrides when Wharfie is installed as a dependency. On
-2026-11-04, the updated checkout's production audit reported zero findings,
-but a fresh consumer of its packed tarball reported 19 moderate dependency
-findings through glob 13.0.6 and minimatch 10.2.6. These are dependency findings,
-not 19 distinct advisories. The ordinary npm consumer path remains a release
-blocker until its dependency graph passes the same audit threshold.
+The core package no longer depends on Arborist or pacote, which introduced those
+paths. Frozen dependency planning reads the authenticated lock directly, and
+tarball fetching uses bounded HTTPS with SHA-512 verification. The pinned
+Node/npm toolchain and the frozen dependency contract remain unchanged. No
+consumer override or release lifecycle hook is required.
 
-A controlled builder can copy the exact `overrides` object from the repository's
-`package.json` into its own root manifest before resolving dependencies, then
-retain its generated lock. Validate that builder independently. Every candidate
-must also be checked in a fresh consumer without those overrides:
+Every candidate must pass the production audit both in the checkout and in a
+fresh core-only consumer without inherited overrides, lock, or workspace:
 
 ```sh
 npm audit --omit=dev --audit-level=moderate
 ```
 
-Run that command from the consumer after installing the candidate. A passing
-repository audit does not establish a passing consumer audit; retain the
+Run that command from the consumer after installing the candidate. Retain any
 consumer failure instead of lowering the threshold or forcing dependency
-downgrades.
+downgrades. Rerun the frozen dependency, native packaging, and provider-boundary
+checks whenever changing this dependency graph.
 
 Preview publication now enforces this separate release gate in the shared
 publisher before any GitHub or npm mutation, including finalization and recovery.

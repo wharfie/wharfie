@@ -1,12 +1,7 @@
-/* eslint-disable jsdoc/valid-types -- Arborist's runtime graph types are not published as stable TypeScript declarations. */
-
 import { constants as fsConstants } from 'node:fs';
-import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { open } from 'node:fs/promises';
 import path from 'node:path';
 
-// eslint-disable-next-line import/no-named-as-default
-import Arborist from '@npmcli/arborist';
 import semver from 'semver';
 
 import {
@@ -154,7 +149,7 @@ async function readStableRegularFile(filePath, valuePath) {
 /**
  * Validate and consume the exact sealed npm lock named by a revision.
  * @param {unknown} value - Internal dependency-lock handle.
- * @returns {Promise<{ handle: DependencyLockHandle, lock: Record<string, any>, canonicalText: string }>} - Exact parsed lock.
+ * @returns {Promise<{ handle: DependencyLockHandle, lock: Record<string, any> }>} - Exact parsed lock.
  */
 async function consumeDependencyLock(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -221,7 +216,6 @@ async function consumeDependencyLock(value) {
   return {
     handle: { path: candidate.path, input },
     lock,
-    canonicalText,
   };
 }
 
@@ -255,7 +249,7 @@ function normalizeConstraintList(value, valuePath) {
 }
 
 /**
- * @param {any} node - Arborist virtual node.
+ * @param {any} node - Exact locked physical node.
  * @param {import('../../../runtime/build-target.js').BuildTarget} target - Canonical target.
  * @returns {boolean} - Whether one locked package applies to the target.
  */
@@ -534,7 +528,7 @@ export function verifyExtractedPackageManifest(manifest, packageEntry) {
 
 /**
  * Validate a canonical package location beneath node_modules.
- * @param {unknown} value - Candidate Arborist location.
+ * @param {unknown} value - Candidate locked location.
  * @param {string} valuePath - Human-readable path.
  * @returns {string} - Canonical POSIX lock location.
  */
@@ -608,7 +602,7 @@ function validateRegistryLocator(value, valuePath) {
 
 /**
  * Validate one registry-backed virtual package and build its stable fields.
- * @param {any} node - Arborist virtual node.
+ * @param {any} node - Exact locked physical node.
  * @param {Record<string, any>} lockedPackage - Exact lockfile package entry.
  * @returns {Record<string, any>} - Canonical package plan fields.
  */
@@ -731,27 +725,172 @@ function validateExternals(value) {
 }
 
 /**
- * Resolve one virtual tree from a private exact copy of already-validated lock
- * bytes. Arborist is used only for npm's locked physical layout and peer-edge
- * semantics; no ideal-tree or metadata resolution is permitted here.
- * @param {string} canonicalLockText - Exact canonical package lock.
- * @returns {Promise<any>} - Arborist virtual root.
+ * Interpret only the sealed lock's physical node_modules layout. Resolution
+ * checks the requesting package's children, then each containing package, and
+ * never searches past an incompatible nearest node. A peer installed inside
+ * its requestor is invalid, even when another copy exists higher in the tree.
+ * No filesystem, registry, workspace expansion, or package metadata is read.
+ * @param {Record<string, any>} lock - Already authenticated package lock.
+ * @returns {any} - Locked root with lazily resolved dependency edges.
  */
-async function loadExactVirtualTree(canonicalLockText) {
-  const workspace = await mkdtemp(
-    path.join(os.tmpdir(), 'wharfie-frozen-lock-'),
-  );
-  try {
-    await writeFile(
-      path.join(workspace, 'package-lock.json'),
-      `${canonicalLockText}\n`,
-      { flag: 'wx', mode: 0o600 },
-    );
-    const arborist = new Arborist({ path: workspace });
-    return await arborist.loadVirtual();
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
+function loadExactLockedTree(lock) {
+  /** @type {Map<string, any>} */
+  const nodes = new Map();
+
+  /**
+   * @param {string} location - Canonical locked package location.
+   * @returns {string} - Containing package or the root.
+   */
+  function parentLocation(location) {
+    const separator = location.lastIndexOf('/node_modules/');
+    return separator < 0 ? '' : location.slice(0, separator);
   }
+
+  /**
+   * @param {string} location - Exact lock entry, including the empty root.
+   * @returns {any} - Locked node, or undefined for true absence.
+   */
+  function readNode(location) {
+    if (nodes.has(location)) return nodes.get(location);
+    if (!Object.hasOwn(lock.packages, location)) return undefined;
+    const entry = lock.packages[location];
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new TypeError(`Locked package '${location}' must be an object.`);
+    }
+    const parent = parentLocation(location);
+    const name = location
+      ? location.slice(parent.length + (parent ? 14 : 13))
+      : entry.name;
+    /** @type {Map<string, any> | undefined} */
+    let edges;
+    /** @type {Record<string, any>} */
+    const node = {
+      location,
+      name,
+      version: entry.version,
+      packageName: entry.name ?? name,
+      package: entry,
+      resolved: entry.resolved,
+      integrity: entry.integrity,
+      isLink: Boolean(entry.link),
+      inBundle: Boolean(entry.inBundle),
+      get edgesOut() {
+        edges ??= readEdges(node);
+        return edges;
+      },
+    };
+    nodes.set(location, node);
+    return node;
+  }
+
+  /**
+   * @param {any} node - Requesting locked node.
+   * @param {string} name - Canonical dependency name.
+   * @returns {any} - First physical match, or undefined.
+   */
+  function resolve(node, name) {
+    let location = node.location;
+    while (true) {
+      const found = readNode(
+        `${location ? `${location}/` : ''}node_modules/${name}`,
+      );
+      if (found) return found;
+      if (!location) return undefined;
+      location = parentLocation(location);
+    }
+  }
+
+  /**
+   * @param {any} node - Requesting locked node.
+   * @returns {Map<string, any>} - Effective npm edges, preserving precedence.
+   */
+  function readEdges(node) {
+    const entry = node.package;
+    const valuePath = `Locked package '${node.location}'`;
+    const peers = normalizeDependencyMap(
+      entry.peerDependencies,
+      `${valuePath}.peerDependencies`,
+    );
+    const peerMeta = normalizePeerDependenciesMeta(
+      entry.peerDependenciesMeta,
+      peers,
+      `${valuePath}.peerDependenciesMeta`,
+    );
+    /** @type {Map<string, any>} */
+    const edges = new Map();
+    /** @type {Array<[string, Record<string, string> | undefined]>} */
+    const groups = [
+      ['peer', peers],
+      [
+        'prod',
+        normalizeDependencyMap(entry.dependencies, `${valuePath}.dependencies`),
+      ],
+      [
+        'optional',
+        normalizeDependencyMap(
+          entry.optionalDependencies,
+          `${valuePath}.optionalDependencies`,
+        ),
+      ],
+      // npm loads development edges only for the project root, after the
+      // production maps. Selected transitive packages never acquire dev edges.
+      [
+        'dev',
+        node.location === ''
+          ? normalizeDependencyMap(
+              entry.devDependencies,
+              `${valuePath}.devDependencies`,
+            )
+          : undefined,
+      ],
+    ];
+    for (const [kind, dependencies] of groups) {
+      for (const [name, spec] of Object.entries(dependencies || {})) {
+        const type =
+          kind === 'peer' && peerMeta?.[name]?.optional === true
+            ? 'peerOptional'
+            : kind;
+        const to = resolve(node, name);
+        const peerLocal =
+          (type === 'peer' || type === 'peerOptional') &&
+          node.location !== '' &&
+          to?.location === `${node.location}/node_modules/${name}`;
+        edges.set(name, {
+          name,
+          type,
+          spec,
+          to,
+          valid: Boolean(
+            to &&
+            !peerLocal &&
+            typeof to.version === 'string' &&
+            semver.validRange(spec) !== null &&
+            semver.satisfies(to.version, spec),
+          ),
+        });
+      }
+    }
+    return edges;
+  }
+
+  const root = readNode('');
+  if (!root)
+    throw new TypeError(
+      'dependency lock.packages must contain its root entry.',
+    );
+  const overrides = root.package.overrides;
+  if (
+    overrides !== undefined &&
+    (!overrides ||
+      typeof overrides !== 'object' ||
+      Array.isArray(overrides) ||
+      Object.keys(overrides).length > 0)
+  ) {
+    throw new TypeError(
+      'dependency lock root overrides are unsupported; every selected dependency must satisfy its recorded manifest range.',
+    );
+  }
+  return root;
 }
 
 /**
@@ -769,7 +908,7 @@ export async function createFrozenDependencyClosurePlan(options) {
   const target = validateBuildTarget(options.buildTarget, 'buildTarget');
   const externals = validateExternals(options.externals);
   const consumed = await consumeDependencyLock(options.dependencyLock);
-  const tree = await loadExactVirtualTree(consumed.canonicalText);
+  const tree = loadExactLockedTree(consumed.lock);
 
   /** @type {Array<{name: string, version: string, location: string}>} */
   const roots = [];

@@ -16,7 +16,7 @@ import {
 } from '../../src/core/lib/esbuild.js';
 
 const INCOMPATIBLE_MESSAGE =
-  "AWS deployment support is incompatible. Install matching '@wharfie/aws@0.0.15' and '@wharfie/wharfie@0.0.15' packages and retry.";
+  "AWS deployment support is incompatible. Install matching '@wharfie/aws@0.0.16' and '@wharfie/wharfie@0.0.16' packages and retry.";
 const GENERATED_ENTRY = `
 import runtimeOperatorCli from './operator.js';
 const ledgerServiceCmd = {};
@@ -83,7 +83,7 @@ describe('AWS provider SEA embedding boundary', () => {
   it.each([
     [
       'wrong package name',
-      { name: '@wharfie/not-aws', version: '0.0.15' },
+      { name: '@wharfie/not-aws', version: '0.0.16' },
       '/tmp/wharfie-provider/src/index.js',
     ],
     [
@@ -93,7 +93,7 @@ describe('AWS provider SEA embedding boundary', () => {
     ],
     [
       'entrypoint outside package root',
-      { name: '@wharfie/aws', version: '0.0.15' },
+      { name: '@wharfie/aws', version: '0.0.16' },
       '/tmp/other-provider/index.js',
     ],
   ])(
@@ -279,7 +279,7 @@ describe('AWS provider SEA embedding boundary', () => {
         ),
         fsp.writeFile(
           path.join(root, 'snapshot', 'package.json'),
-          `${JSON.stringify({ version: '0.0.15' })}\n`,
+          `${JSON.stringify({ version: '0.0.16' })}\n`,
         ),
         fsp.writeFile(
           path.join(root, 'operator.js'),
@@ -293,7 +293,7 @@ describe('AWS provider SEA embedding boundary', () => {
           path.join(fakeProviderRoot, 'package.json'),
           `${JSON.stringify({
             name: '@wharfie/aws',
-            version: '0.0.15',
+            version: '0.0.16',
             type: 'module',
             exports: './index.js',
           })}\n`,
@@ -303,7 +303,7 @@ describe('AWS provider SEA embedding boundary', () => {
           [
             "import { writeFileSync } from 'node:fs';",
             'writeFileSync(process.env.WHARFIE_PROVIDER_IMPORT_MARKER, "imported");',
-            'export const WHARFIE_AWS_PROVIDER_PACKAGE_VERSION = "0.0.15";',
+            'export const WHARFIE_AWS_PROVIDER_PACKAGE_VERSION = "0.0.16";',
             'export const WHARFIE_AWS_PROVIDER_CONTRACT_VERSION = 1;',
             'export const getAwsSdkBindings = () => Object.freeze({});',
             '',
@@ -355,7 +355,7 @@ describe('AWS provider SEA embedding boundary', () => {
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(1);
       expect(`${result.stdout}${result.stderr}`.trim()).toBe(
-        "AWS deployment support was not embedded. Install matching '@wharfie/aws@0.0.15' beside '@wharfie/wharfie@0.0.15' in the builder, rebuild the application, and retry.",
+        "AWS deployment support was not embedded. Install matching '@wharfie/aws@0.0.16' beside '@wharfie/wharfie@0.0.16' in the builder, rebuild the application, and retry.",
       );
       await expect(fsp.access(providerImportMarker)).rejects.toMatchObject({
         code: 'ENOENT',

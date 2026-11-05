@@ -21,9 +21,10 @@ import * as clientSTS from '@aws-sdk/client-sts';
 import * as credentialProviders from '@aws-sdk/credential-providers';
 import * as libDynamoDB from '@aws-sdk/lib-dynamodb';
 import * as utilRetry from '@smithy/util-retry';
+import packageMetadata from '../package.json' with { type: 'json' };
 
 export const WHARFIE_AWS_PROVIDER_CONTRACT_VERSION = 1;
-export const WHARFIE_AWS_PROVIDER_PACKAGE_VERSION = '0.0.15';
+export const WHARFIE_AWS_PROVIDER_PACKAGE_VERSION = packageMetadata.version;
 
 /** @type {AwsSdkBindings} */
 const BINDINGS = Object.freeze({

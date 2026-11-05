@@ -543,6 +543,14 @@ describe('execution-ledger local owner cancellation operator', () => {
       });
       expect(host.receivedRunIds).toEqual([inactiveRunId, activeRunId]);
 
+      // The owner response acknowledges signal delivery. The abort listener's
+      // asynchronous ledger read completes before the runner settles, so wait
+      // for that boundary before inspecting its captured pre-terminal view.
+      await expect(host.runner).resolves.toMatchObject({
+        run: { status: RunStatus.CANCELLED },
+        invocation: { status: InvocationStatus.CANCELLED },
+        attempt: { status: AttemptStatus.CANCELLED },
+      });
       const abortView = host.getAbortView();
       expect(abortView).toMatchObject({
         run: {
@@ -581,12 +589,6 @@ describe('execution-ledger local owner cancellation operator', () => {
       expect(serialized).not.toContain('must-not-leave-owner');
       expect(serialized).not.toContain(host.ownerSessionId);
       expect(serialized).not.toContain(host.ownerCommandEndpoint);
-
-      await expect(host.runner).resolves.toMatchObject({
-        run: { status: RunStatus.CANCELLED },
-        invocation: { status: InvocationStatus.CANCELLED },
-        attempt: { status: AttemptStatus.CANCELLED },
-      });
     } finally {
       await host?.stop();
       await db.close();
