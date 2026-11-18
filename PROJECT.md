@@ -1,6 +1,6 @@
 # Wharfie project charter
 
-**Status:** active project reset · **Last updated:** 2026-09-02
+**Status:** active project reset · **Last updated:** 2026-11-18
 
 ## One sentence
 

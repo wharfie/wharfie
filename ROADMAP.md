@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-09-02
+**Last updated:** 2026-11-18
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -142,14 +142,17 @@ The repository has substantial foundations:
   work, all fifteen update/rollback/source-restoration crash cases,
   history/output reads, uninstall, prune, and complete owned-host cleanup;
   two additional actual packaged-resident kills prove both partial-handoff
-  stages with the fixed systemd unit stopped; and
+  stages with the fixed systemd unit stopped;
 - packaged AWS and Hetzner single-node read-only preview and status plus
   apply/update/recover/exec/destroy commands, recoverable provider mutations,
   automated recovery proofs, and live packaged
   apply/activate/adopt/restart/destroy proofs with independent owned-resource
   cleanup. Journal-bound `exec` reaches only the exact active remote application
-  through pinned SSH, although that command has not yet received a new
-  live-provider proof.
+  through pinned SSH. The live acceptance runs described under
+  [Since September 2](#since-september-2) now exercise it on both providers;
+- crashed-resident recovery through the packaged deployment CLI, repeatable
+  live AWS and Hetzner acceptance, bounded operational soaks, and a preview
+  release path with a recipient handoff, all described below.
 
 That closes Outcome 1's bounded single-machine product proof. The split
 `steady-file` run carried the same waiting durable timer across two controller
@@ -200,36 +203,119 @@ credentialed lifecycle through healthy guest service and independently
 verified owned-resource cleanup on AWS and Hetzner. The broader ADR 0035
 acceptance artifact remains partial.
 
-The validation baseline recorded for `origin/master` at `60dbbba` passed 360
-active suites and 8,132 active tests, with 1 suite and 5 tests skipped under the
-existing policy. All configured global coverage thresholds passed; source,
-app, test, and SEA-verifier typechecks passed; the package verifier accepted
-382 package files; the provider boundary stayed within its package and byte
-budgets with zero provider SDK graph inputs; and the production audit reported
-0 vulnerabilities. That baseline's replacement-input lane passed 19 suites and
-347 tests in 47.836 seconds, and its three then-current process-death suites
-passed 6 tests under `--detectOpenHandles` in 12.342 seconds.
+The last validation baseline recorded on `master` is the hosted CI run for
+PR #172: all nine GitHub jobs and RWX passed, with 386 suites and 8,988 tests
+passed and one suite and two tests skipped. The earlier September 2 numbers
+(19-suite replacement-input lane, 107-test LMDB suite, 382-file package
+verifier) are in the
+[successor-repair checkpoint](llm/checkpoints/2026-09-02-successor-authority-partial-hydration-repair.md).
 
-The successor-repair branch passes its expanded replacement-input lane at 19
-suites and 397 tests in 167.007 seconds and its dedicated process-death lane at
-4 suites and 23 tests in 67.106 seconds. The adapted LMDB unit suite passes all
-107 tests; the partial-hydration real-process suite passes all 17 tests. Lint,
-format checking, all four typecheck targets, the 382-file package verifier, and
-the provider boundary pass. The provider boundary contains 158 production
-packages against a 170-package cap, 59,869,240 logical bytes against an
-89,128,960-byte cap, and zero provider SDK graph inputs. The configured
-moderate production-audit gate passes with one low-severity
-`postcss-selector-parser` advisory reported by the registry.
+Local full runs on Darwin can abort in the native allocator before reporting
+results. PR #172 records this and relies on hosted Linux for the complete
+suite. It is not classified yet. Hosted CI is the merge authority.
 
-Repository-wide instrumented runs on this Darwin host still expose unrelated,
-unchanged five-second integration-test deadlines under aggregate load. The two
-unchanged suites from the two-worker attempt pass together at 46 tests, and the
-unchanged ready-work suite from the serial attempt passes all 40 tests alone
-under coverage instrumentation. Normal pull-request CI remains the aggregate
-merge authority.
 Prior locally packed magnetic evidence passed explicit inspected takeover, and
 the prior Darwin SEA verification passed at 155,538,992 bytes with SHA-256
 `1e085d1f20b43e6bdfef481beef54d26fff4f236b97fc7d9e7ba2ac385265cf2`.
+
+### Since September 2
+
+The work below merged after the successor-repair checkpoint. It is
+single-node product hardening and release preparation. None of it changes the
+internal-only status of coordinator replacement.
+
+- **Remote recovery
+  ([#160](https://github.com/wharfie/wharfie/pull/160)).** A crashed resident
+  can keep `ACTIVE` coordinator authority while `deployment exec` needs a
+  healthy resident. `deployment coordinator inspect` and explicitly confirmed
+  `takeover` now act on the journal-pinned host and installed release, including
+  right after a crash. The existing `deployment recover` then restores the
+  service. The [remote recovery guide](docs/guides/remote-recovery.md) has the
+  procedure.
+- **Live acceptance on AWS and Hetzner
+  ([#161](https://github.com/wharfie/wharfie/pull/161),
+  [#162](https://github.com/wharfie/wharfie/pull/162),
+  [#163](https://github.com/wharfie/wharfie/pull/163)).**
+  `npm run verify:deployment:live` packages a self-deployable app from a fresh
+  installed candidate, provisions one host, and destroys it with independent
+  absence checks. It now also follows one durable workflow across controller
+  exit, resident `SIGKILL`, packaged recovery, and a provider-requested reboot,
+  then proves an A→B release update, an interrupted B→A restoration, and
+  retained history. Each PR records a passing live run on both providers. The
+  [live acceptance guide](docs/guides/live-deployment-acceptance.md) describes
+  the runner. Abrupt disk or power loss is not covered. A permanent
+  launch-rejection path found while building #161 (it reports a generic
+  provisioning timeout and replays the prepared launch during destruction) was
+  recorded there as needing a separate fix; this refresh did not check whether
+  it has since been fixed.
+- **Preview release path
+  ([#164](https://github.com/wharfie/wharfie/pull/164),
+  [#166](https://github.com/wharfie/wharfie/pull/166),
+  [#167](https://github.com/wharfie/wharfie/pull/167)).** A recipient proof
+  installs the exact core and AWS packages, packages the starter, retires the
+  builder, and moves only the executable, artifact record, and input to an
+  isolated Linux account that runs durable work under a lingering user
+  service. Release downloads are bound to an exact tag and source commit and
+  are verified before execution. Missing LMDB files are now created with
+  exclusive `0600` permissions. A guarded recovery dispatch can finish an
+  existing immutable candidate, and draft downloads accept GitHub's temporary
+  browser URLs. See the [preview release guide](docs/guides/preview-release.md)
+  and [recipient guide](docs/guides/recipient-preview.md).
+- **Bounded operational soaks
+  ([#165](https://github.com/wharfie/wharfie/pull/165)).** A soak runs one
+  disposable host per provider for 48 or 72 hours with durable submission
+  identities, bounded observations, physical-execution checks, and independent
+  cleanup audits. Preview publication also requires a fresh core-only
+  consumer audit at the moderate threshold. The [soak
+  guide](docs/guides/operational-soak.md) records that the September runs
+  stopped after about fifteen hours for a reason that was never established.
+  No 48- or 72-hour soak has completed.
+- **Journal capacity
+  ([#168](https://github.com/wharfie/wharfie/pull/168)).** Deployment journal
+  validation near the 4,096-record limit is about 4.8× faster on a focused
+  local benchmark, and a local near-limit acceptance run passed with provider
+  operations injected. Every disk read still validates the full history. This
+  is a measurement; journal checkpoint or epoch rollover is not built. See the
+  [capacity guide](docs/guides/deployment-journal-capacity.md).
+- **Tester handoff and docs hosting
+  ([#169](https://github.com/wharfie/wharfie/pull/169)).** A guide pinned to
+  the published v0.0.15 preview covers build → share → persistent service →
+  reconnect → cleanup, with a feedback form. CloudFront and S3 hosting
+  templates, a bundle helper, and an HTTPS route verifier are in the
+  repository (see the [docs site runbook](docs/guides/docs-site.md)). The
+  merged text records that the public DNS cutover was still pending and that
+  issue #137 stayed open. [PR #171](https://github.com/wharfie/wharfie/pull/171)
+  is a separate open draft for hosting; it is not merged.
+- **Repository cleanup
+  ([#159](https://github.com/wharfie/wharfie/pull/159)).** The source
+  `wharfie deployment` command and the `@wharfie/wharfie/deployment-profile`
+  export were removed. Packaged AWS and Hetzner deployment is unchanged.
+  Maintained test applications moved to `test/fixtures/apps`, and failed Jest
+  and SEA runs now leave bounded reports under `.wharfie/validation-failures/`.
+- **Consumer dependencies and 0.0.16
+  ([#172](https://github.com/wharfie/wharfie/pull/172)).** Two runtime tooling
+  dependencies that caused 19 moderate findings in fresh core-only installs
+  were removed. The package version on `master` is 0.0.16.
+
+### Release state at 2026-11-18
+
+- npm `@wharfie/wharfie` dist-tags: `latest` 0.0.14, `preview` 0.0.15,
+  `preview-candidate` 0.0.15, `next` 0.0.13-0. The GitHub prerelease is
+  v0.0.15.
+- Tag `v0.0.16` exists on `6739bb92` (PR #172). Version 0.0.16 was never
+  published. The next release is 0.0.17.
+- **Hetzner is broken in 0.0.15 and 0.0.16.** Hetzner removed the `deprecated`
+  field from image responses on 2026-11-02
+  ([Hetzner changelog](https://docs.hetzner.cloud/changelog)). The image
+  decoder on `master` (`decodeHetznerImage` in
+  `src/core/runtime/providers/hetzner/api-documents.js`) still requires that
+  field, so `preview` fails with "Hetzner API response document is invalid."
+  before anything is created. The fix is in progress and is not merged.
+- The November soak campaign for 0.0.16 failed at its Hetzner rehearsal for
+  that reason. Its AWS rehearsal passed. Its controller was removed and
+  verified absent on 2026-11-18. The campaign stays recorded as failed.
+- The release plan and handoff are in the
+  [November checkpoint](llm/checkpoints/2026-11-18-release-recovery.md).
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -682,10 +768,17 @@ capability.
 1. Complete the remaining ADR 0035 evidence in one repeatable, redacted
    two-provider harness, including live packaged preview, packaged remote
    durable work, guest audit, reboot, fault injection, and bounded proof
-   receipts.
+   receipts. `verify:deployment:live` now covers packaged remote durable work,
+   resident crash, provider-requested reboot, and release update and
+   interruption on both providers (#161–#163). The 48- or 72-hour soak (#165)
+   has never completed, and the November 0.0.16 attempt stopped at the Hetzner
+   rehearsal because of the image-decoding defect described under
+   [Release state](#release-state-at-2026-11-18). Abrupt disk or power loss is
+   not covered.
 2. Add authenticated journal checkpoint/epoch rollover before treating one
    coordinator as indefinitely evolving; v3 currently reserves terminal
-   records for recovery and destruction, then refuses further updates.
+   records for recovery and destruction, then refuses further updates. PR #168
+   measured behavior near the 4,096-record limit but did not build rollover.
 3. Decide and implement an explicit retained-data capability before making any
    durability claim beyond the current root-disk lifecycle.
 4. Delete or quarantine provider abstractions that do not help this one
