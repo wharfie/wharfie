@@ -252,7 +252,7 @@ function createAction(kind, dependsOn, context) {
  * @param {string} name - Requested location.
  * @returns {any} - Exact location.
  */
-function selectLocation(locations, name) {
+export function selectLocation(locations, name) {
   const matches = locations.filter((location) => location.name === name);
   if (matches.length !== 1) {
     throw new Error(
@@ -269,7 +269,7 @@ function selectLocation(locations, name) {
  * @param {any} location - Exact selected location.
  * @returns {any} - Selected server type.
  */
-function selectServerType(serverTypes, location) {
+export function selectServerType(serverTypes, location) {
   for (const name of HETZNER_SMALL_SERVER_TYPE_CANDIDATES) {
     const candidates = serverTypes.filter(
       (serverType) =>
@@ -308,7 +308,7 @@ function selectServerType(serverTypes, location) {
  * @param {Readonly<any[]>} images - Provider observations.
  * @returns {any} - Exact current Ubuntu image.
  */
-function selectImage(images) {
+export function selectImage(images) {
   const matches = images.filter(
     (image) =>
       image.name === UBUNTU_IMAGE_NAME &&
@@ -317,7 +317,7 @@ function selectImage(images) {
       image.architecture === EXPECTED_ARCHITECTURE &&
       image.osFlavor === 'ubuntu' &&
       image.osVersion === '24.04' &&
-      image.deprecatedAt === null,
+      image.deprecation === null,
   );
   if (matches.length !== 1) {
     throw new Error(

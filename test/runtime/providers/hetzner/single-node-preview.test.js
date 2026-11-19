@@ -165,7 +165,7 @@ function image() {
     osFlavor: 'ubuntu',
     osVersion: '24.04',
     rapidDeploy: true,
-    deprecatedAt: null,
+    deprecation: null,
   };
 }
 
@@ -267,7 +267,6 @@ describe('Hetzner single-node provider preview', () => {
               cores: 2,
               memory: 4,
               disk: 40,
-              deprecated: false,
               deprecation: null,
               locations: [
                 {
@@ -293,7 +292,7 @@ describe('Hetzner single-node provider preview', () => {
               os_flavor: 'ubuntu',
               os_version: '24.04',
               rapid_deploy: true,
-              deprecated: null,
+              deprecation: null,
             },
           ]);
         }

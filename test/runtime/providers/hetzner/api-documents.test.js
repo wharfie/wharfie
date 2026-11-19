@@ -3,6 +3,7 @@ import {
   decodeHetznerAction,
   decodeHetznerFirewall,
   decodeHetznerImage,
+  decodeHetznerImagesResponse,
   decodeHetznerLocation,
   decodeHetznerPagination,
   decodeHetznerPrimaryIp,
@@ -19,6 +20,59 @@ function location(overrides = {}) {
     city: 'Ashburn, VA',
     country: 'US',
     network_zone: 'us-east',
+    ...overrides,
+  };
+}
+
+// GET /images?name=ubuntu-24.04&type=system&architecture=x86 as returned by
+// the production API on 2026-11-10, after Hetzner removed `deprecated`.
+const PRODUCTION_IMAGES_RESPONSE = Object.freeze({
+  images: [
+    {
+      id: 161547269,
+      name: 'ubuntu-24.04',
+      architecture: 'x86',
+      bound_to: null,
+      created: '2024-04-25T13:26:27Z',
+      created_from: null,
+      deleted: null,
+      deprecation: null,
+      description: 'Ubuntu 24.04',
+      disk_size: 5,
+      image_size: null,
+      labels: {},
+      os_flavor: 'ubuntu',
+      os_version: '24.04',
+      protection: { delete: false },
+      rapid_deploy: true,
+      status: 'available',
+      type: 'system',
+    },
+  ],
+  meta: {
+    pagination: {
+      last_page: 1,
+      next_page: null,
+      page: 1,
+      per_page: 50,
+      previous_page: null,
+      total_entries: 1,
+    },
+  },
+});
+
+function image(overrides = {}) {
+  return {
+    id: 4,
+    name: 'ubuntu-24.04',
+    description: 'Ubuntu 24.04',
+    type: 'system',
+    status: 'available',
+    architecture: 'x86',
+    os_flavor: 'ubuntu',
+    os_version: '24.04',
+    rapid_deploy: true,
+    deprecation: null,
     ...overrides,
   };
 }
@@ -94,7 +148,6 @@ describe('Hetzner API response documents', () => {
         cores: 2,
         memory: 4,
         disk: 40,
-        deprecated: false,
         deprecation: null,
         locations: [
           {
@@ -145,18 +198,14 @@ describe('Hetzner API response documents', () => {
       ],
     });
     expect(
-      decodeHetznerImage({
-        id: 4,
-        name: 'ubuntu-24.04',
-        description: 'Ubuntu 24.04',
-        type: 'system',
-        status: 'available',
-        architecture: 'x86',
-        os_flavor: 'ubuntu',
-        os_version: '24.04',
-        rapid_deploy: true,
-        deprecated: '2026-10-01T00:00:00+00:00',
-      }),
+      decodeHetznerImage(
+        image({
+          deprecation: {
+            announced: '2026-10-01T00:00:00+00:00',
+            unavailable_after: '2026-12-31T00:00:00+00:00',
+          },
+        }),
+      ),
     ).toMatchObject({
       id: 4,
       name: 'ubuntu-24.04',
@@ -164,8 +213,47 @@ describe('Hetzner API response documents', () => {
       osFlavor: 'ubuntu',
       osVersion: '24.04',
       rapidDeploy: true,
-      deprecatedAt: '2026-10-01T00:00:00+00:00',
+      deprecation: {
+        announced: '2026-10-01T00:00:00+00:00',
+        unavailableAfter: '2026-12-31T00:00:00+00:00',
+      },
     });
+  });
+
+  it('decodes the production image response that no longer carries `deprecated`', () => {
+    const [result] = decodeHetznerImagesResponse(PRODUCTION_IMAGES_RESPONSE);
+
+    expect(result).toEqual({
+      id: 161547269,
+      name: 'ubuntu-24.04',
+      description: 'Ubuntu 24.04',
+      type: 'system',
+      status: 'available',
+      architecture: 'x86',
+      osFlavor: 'ubuntu',
+      osVersion: '24.04',
+      rapidDeploy: true,
+      deprecation: null,
+    });
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it('ignores the removed legacy `deprecated` field when an older response still has it', () => {
+    expect(
+      decodeHetznerImage(
+        image({
+          deprecated: null,
+          deprecation: {
+            announced: '2026-10-01T00:00:00+00:00',
+            unavailable_after: '2026-12-31T00:00:00+00:00',
+          },
+        }),
+      ),
+    ).not.toHaveProperty('deprecated');
+    expect(
+      decodeHetznerImage(image({ deprecated: '2026-10-01T00:00:00+00:00' }))
+        .deprecation,
+    ).toBeNull();
   });
 
   it('projects ownership and address evidence from mutable resources', () => {
@@ -447,6 +535,29 @@ describe('Hetzner API response documents', () => {
 
   it.each([
     ['location without an ID', () => decodeHetznerLocation({ name: 'ash' })],
+    [
+      'image without deprecation evidence',
+      () => {
+        const { deprecation: _omitted, ...withoutDeprecation } = image();
+        return decodeHetznerImage(withoutDeprecation);
+      },
+    ],
+    [
+      'image with only the removed legacy deprecation field',
+      () => {
+        const { deprecation: _omitted, ...legacy } = image({
+          deprecated: null,
+        });
+        return decodeHetznerImage(legacy);
+      },
+    ],
+    [
+      'image with malformed deprecation evidence',
+      () =>
+        decodeHetznerImage(
+          image({ deprecation: { announced: '2026-10-01T00:00:00+00:00' } }),
+        ),
+    ],
     [
       'server with malformed labels',
       () => decodeHetznerServer(server({ labels: { owner: 7 } })),

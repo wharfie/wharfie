@@ -58,7 +58,7 @@ const IMAGE = Object.freeze({
   osFlavor: 'ubuntu',
   osVersion: '24.04',
   rapidDeploy: true,
-  deprecatedAt: null,
+  deprecation: null,
 });
 const IDS = /** @type {Readonly<Record<string, number>>} */ (
   Object.freeze({ firewall: 101, primaryIp: 102, server: 103 })

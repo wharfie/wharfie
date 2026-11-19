@@ -61,7 +61,7 @@ const IMAGE = Object.freeze({
   osFlavor: 'ubuntu',
   osVersion: '24.04',
   rapidDeploy: true,
-  deprecatedAt: null,
+  deprecation: null,
 });
 const PUBLIC_IPV4 = '192.0.2.44';
 const HOST_FINGERPRINT = `SHA256:${Buffer.alloc(32, 29)

@@ -48,7 +48,7 @@ const IMAGE = Object.freeze({
   osFlavor: 'ubuntu',
   osVersion: '24.04',
   rapidDeploy: true,
-  deprecatedAt: null,
+  deprecation: null,
 });
 const IDS = Object.freeze({ firewall: 10, primaryIp: 11, server: 12 });
 

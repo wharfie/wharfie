@@ -197,7 +197,7 @@ function syntheticProviderApi() {
         osFlavor: 'ubuntu',
         osVersion: '24.04',
         rapidDeploy: true,
-        deprecatedAt: null,
+        deprecation: null,
       },
     ],
     listFirewalls: async () => [],

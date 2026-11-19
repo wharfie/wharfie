@@ -157,7 +157,7 @@ function image() {
     osFlavor: 'ubuntu',
     osVersion: '24.04',
     rapidDeploy: true,
-    deprecatedAt: null,
+    deprecation: null,
   };
 }
 
@@ -303,7 +303,13 @@ describe('Hetzner single-node read-only plan', () => {
       'image',
       {
         listImages: jest.fn(async () => [
-          { ...image(), deprecatedAt: '2026-01-01T00:00:00Z' },
+          {
+            ...image(),
+            deprecation: {
+              announced: '2026-01-01T00:00:00Z',
+              unavailableAfter: '2026-12-31T00:00:00Z',
+            },
+          },
         ]),
       },
       /exactly one current image/iu,
