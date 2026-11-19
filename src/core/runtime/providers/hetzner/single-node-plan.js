@@ -317,7 +317,7 @@ function selectImage(images) {
       image.architecture === EXPECTED_ARCHITECTURE &&
       image.osFlavor === 'ubuntu' &&
       image.osVersion === '24.04' &&
-      image.deprecatedAt === null,
+      image.deprecation === null,
   );
   if (matches.length !== 1) {
     throw new Error(

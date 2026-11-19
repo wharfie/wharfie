@@ -48,6 +48,15 @@ and cleanup commands. For an SSO profile, refresh its session first with
 Credentials are not command arguments and are not copied into the application
 or guest. Keep the same provider authority available until cleanup is confirmed.
 
+Before a Hetzner run or a release tag, check that the catalog reads behind
+`deployment preview` still decode against the live API. The check uses only
+GET requests, creates nothing, and fails if the location, a small server type,
+or exactly one current Ubuntu 24.04 image cannot be selected:
+
+```sh
+HCLOUD_TOKEN="$HETZNER_TOKEN" npm run verify:hetzner:contract -- --location fsn1
+```
+
 ## Run one provider
 
 From the checkout, substitute your controller's public IPv4 `/32`:

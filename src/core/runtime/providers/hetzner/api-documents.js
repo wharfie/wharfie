@@ -163,14 +163,16 @@ export function decodeHetznerServerType(value) {
 }
 
 /**
+ * Hetzner removed the image `deprecated` timestamp on 2026-11-02; `deprecation`
+ * is the only deprecation evidence, and its absence is not proof of currency.
  * @param {unknown} value - Candidate image.
- * @returns {Readonly<{id: number, name: string|null, description: string, type: string, status: string, architecture: string, osFlavor: string, osVersion: string|null, rapidDeploy: boolean, deprecatedAt: string|null}>} - Image.
+ * @returns {Readonly<{id: number, name: string|null, description: string, type: string, status: string, architecture: string, osFlavor: string, osVersion: string|null, rapidDeploy: boolean, deprecation: Readonly<{announced: string, unavailableAfter: string}>|null}>} - Image.
  */
 export function decodeHetznerImage(value) {
   if (
     !isObject(value) ||
     typeof value.rapid_deploy !== 'boolean' ||
-    !Object.hasOwn(value, 'deprecated')
+    !Object.hasOwn(value, 'deprecation')
   ) {
     throw new TypeError(INVALID_DOCUMENT);
   }
@@ -184,7 +186,7 @@ export function decodeHetznerImage(value) {
     osFlavor: nonEmptyString(value.os_flavor),
     osVersion: optionalString(value.os_version),
     rapidDeploy: value.rapid_deploy,
-    deprecatedAt: optionalString(value.deprecated),
+    deprecation: deprecation(value.deprecation),
   });
 }
 

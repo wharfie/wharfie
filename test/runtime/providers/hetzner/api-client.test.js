@@ -67,7 +67,6 @@ function serverType(overrides = {}) {
     cores: 2,
     memory: 4,
     disk: 40,
-    deprecated: false,
     deprecation: null,
     locations: [
       {
@@ -93,7 +92,7 @@ function image(overrides = {}) {
     os_flavor: 'ubuntu',
     os_version: '24.04',
     rapid_deploy: true,
-    deprecated: null,
+    deprecation: null,
     ...overrides,
   };
 }
