@@ -28,7 +28,7 @@ python3 ops.py prepare --state /absolute/private/new-campaign \
   --campaign wharfie-soak-YYYYMMDD-vXYZ
 ```
 
-Inspect the frozen `campaign.json`, `cloudformation.json`, operations hashes, soak length, controller deadline, and source identity. `campaign.json` records a SHA-256 for every operations file. Every command except `prepare` and `status` refuses if any of them changed, so run every command from one checkout, preferably a worktree at the candidate's tagged commit, and keep it unchanged until teardown. `apply` checks the account and AMI, creates one exact CloudFormation stack, and persists its identity before creation. Lost responses reconcile that exact stack; they never recreate a campaign.
+Inspect the frozen `campaign.json`, `cloudformation.json`, operations hashes, soak length, controller deadline, and source identity. `campaign.json` records a SHA-256 for every operations file. Every command except `prepare` and `status` refuses if any of them changed, so run every command from one checkout, preferably a worktree at the candidate's tagged commit, and keep it unchanged until teardown. A later `purge-proofs` needs a checkout at that same commit. `apply` checks the account and AMI, creates one exact CloudFormation stack, and persists its identity before creation. Lost responses reconcile that exact stack; they never recreate a campaign.
 
 ```sh
 python3 ops.py apply --state /absolute/private/new-campaign
