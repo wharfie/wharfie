@@ -197,7 +197,7 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
         export_again.assert_not_called()
 
     def test_retained_workspace_or_attempted_apply_still_requires_packaged_cleanup(self):
-        for name, files, workspace in (('workspace', evidence(), True),
+        for name, files, workspace in (('workspace', evidence('aws'), True),
                                        ('apply attempted', apply_failure(evidence()), False)):
             with self.subTest(name):
                 label = 'soak-aws'
@@ -225,6 +225,12 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertIs(result['neverCreated'], False)
         self.assertIs(result['cleanupVerifiedAbsent'], False)
+
+    def test_evidence_must_name_the_provider_of_the_run_label(self):
+        run_dir = self.write_run('rehearsal-hetzner', evidence('aws'))
+        self.assertFalse(supervisor.never_created(run_dir))
+        aws_dir = self.write_run('rehearsal-aws', evidence('aws'))
+        self.assertTrue(supervisor.never_created(aws_dir))
 
     def test_never_created_rehearsal_failure_still_blocks_both_soaks(self):
         campaign = self.campaign()
@@ -350,6 +356,8 @@ class NeverCreatedTeardownTests(unittest.TestCase):
             'uncollected retirement': (self.never_created_hetzner(missing), 'not-collected'),
             'passed outcome': (passed_claim, 'not-never-created'),
             'outcome provider mismatch': (foreign_outcome, 'not-never-created'),
+            'evidence names another provider': (self.never_created_hetzner(evidence('aws')),
+                                                 'not-never-created'),
             'unsettled apply failure': (({'status': 'failed', 'cleanupVerifiedAbsent': False,
                                           'proofExported': True}, apply_failure(evidence())),
                                         'recover-guest-authority'),
@@ -376,11 +384,16 @@ class NeverCreatedTeardownTests(unittest.TestCase):
                     operator.teardown()
                 operator.delete_controller.assert_not_called()
 
-    def test_refuses_teardown_after_an_operations_file_changes(self):
+    def test_every_campaign_command_refuses_after_an_operations_file_changes(self):
         operator = self.operator({'rehearsal-hetzner': self.never_created_hetzner()})
         operator.config['operationsFiles'] = {**operator.config['operationsFiles'], 'ops.py': '0' * 64}
-        with self.assertRaisesRegex(RuntimeError, 'reviewed-operations-files-changed'):
-            operator.teardown()
+        operator.aws = Mock(side_effect=AssertionError('unexpected AWS call'))
+        operator.remote_json = Mock(side_effect=AssertionError('unexpected evidence read'))
+        for command in ('apply', 'stage_inputs', 'token', 'start', 'authorize', 'collect',
+                        'teardown', 'abort_setup', 'purge_proofs', 'verify_local_bundle'):
+            with self.subTest(command):
+                with self.assertRaisesRegex(RuntimeError, 'reviewed-operations-files-changed'):
+                    getattr(operator, command)()
         operator.identity.assert_not_called()
         operator.delete_controller.assert_not_called()
 

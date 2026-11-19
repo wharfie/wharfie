@@ -23,6 +23,23 @@ class OperatorCliTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.operator = ops.Operator.__new__(ops.Operator)
         self.operator.root = self.root
+        # The operator always names profile `wharfie`. Give the real CLI parser
+        # that profile from a private config with no credentials, instead of
+        # the developer's (or runner's) real AWS configuration.
+        aws_temporary = tempfile.TemporaryDirectory(prefix='wharfie-cli-aws-config-')
+        self.addCleanup(aws_temporary.cleanup)
+        aws_config = Path(aws_temporary.name) / 'config'
+        aws_config.write_text('[profile wharfie]\nregion = us-east-2\n')
+        aws_credentials = Path(aws_temporary.name) / 'credentials'
+        aws_credentials.write_text('')
+        environment = mock.patch.dict(os.environ, {
+            'AWS_CONFIG_FILE': str(aws_config),
+            'AWS_SHARED_CREDENTIALS_FILE': str(aws_credentials)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        for name in ('AWS_PROFILE', 'AWS_DEFAULT_PROFILE', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+                     'AWS_SESSION_TOKEN'):
+            os.environ.pop(name, None)
 
     @unittest.skipUnless(shutil.which('aws'), 'AWS CLI parser is not installed')
     def test_streaming_get_passes_real_cli_parser_without_any_remote_endpoint(self):
@@ -117,6 +134,7 @@ class OperatorCliTests(unittest.TestCase):
     def assert_start(self, state, expected, success=True):
         self.operator.config = {}
         self.operator.ownership = {'tokenStored': True, 'outputs': {'ControllerId': 'i-test'}}
+        self.operator.verify_operations_files = lambda: None
         self.operator.identity = lambda: None
         self.operator.wait_stack = lambda _: None
         self.operator.verify_deadman = lambda: None

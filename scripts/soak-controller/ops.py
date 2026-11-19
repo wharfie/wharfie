@@ -254,8 +254,8 @@ class Operator:
 
     def stage_inputs(self):
         """Upload and read back the exact frozen inputs while bootstrap waits."""
-        self.identity()
         self.verify_local_bundle()
+        self.identity()
         bundle = self.root / 'operations.json.xz'
         bundle.write_bytes(runtime_bundle(self.config))
         bundle.chmod(0o600)
@@ -285,6 +285,7 @@ class Operator:
         self.save()
 
     def token(self):
+        self.verify_operations_files()
         self.identity()
         token = sys.stdin.read(4097).strip()
         if not 20 <= len(token) <= 4096 or '\n' in token:
@@ -355,6 +356,7 @@ class Operator:
             raise RuntimeError('fixed-egress-authority-mismatch')
 
     def start(self):
+        self.verify_operations_files()
         self.identity()
         self.wait_stack({'CREATE_COMPLETE', 'UPDATE_COMPLETE'})
         self.verify_deadman()
@@ -597,6 +599,7 @@ class Operator:
         self.delete_controller()
 
     def abort_setup(self):
+        self.verify_operations_files()
         self.identity()
         stack = self.stack()
         parameters = {x['ParameterKey']: x['ParameterValue'] for x in stack['Parameters']}
@@ -729,6 +732,7 @@ class Operator:
         print(json.dumps({'status': self.ownership['status'], 'retainedBucket': self.config['bucket']}))
 
     def purge_proofs(self):
+        self.verify_operations_files()
         self.identity()
         if self.ownership['status'] == 'all-campaign-resources-cleaned':
             print('{"status":"all-campaign-resources-cleaned"}')
