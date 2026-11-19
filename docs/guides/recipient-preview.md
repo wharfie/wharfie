@@ -203,6 +203,16 @@ check that no other user service needs it first.
 
 ## Optional: provision an AWS or Hetzner host
 
+**Known issue, recorded 2026-11-19: Hetzner in v0.0.15.** Since 2026-11-02,
+Hetzner `deployment preview` and a first Hetzner `deployment apply` fail with
+"Hetzner API response document is invalid." They fail before creating anything.
+Hetzner removed the image `deprecated` response field, and v0.0.15 requires it.
+Resuming an apply that already has a local journal, `deployment status`,
+`deployment destroy`, SSH-side operations, the existing-server route, and the
+AWS route are not affected. A [fix is in progress](https://github.com/wharfie/wharfie/pull/175)
+for the next preview; no release date is set. Until then, evaluate with an
+existing server or AWS.
+
 The `--self-deployable` executable above also exposes the
 [packaged AWS and Hetzner deployment commands](quickstart.md#try-the-experimental-deployment-lifecycle).
 Follow that reference for read-only `preview`, provider credentials, placement,
@@ -264,12 +274,13 @@ acceptance evidence.
 
 Status recorded 2026-09-15:
 
-| Version or check                                                                          | Evidence and limit                                                                                                                                                                      |
-| ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published v0.0.15, source `aae74e0de018fe340564c08c0c820ff590de1894`                      | Matching GitHub/npm bytes, release provenance, and the automated recipient service journey passed the [publication gates](https://github.com/wharfie/wharfie/actions/runs/34883188483). |
-| 48–72-hour operational soak                                                               | Pending. A short rehearsal or a running campaign does not establish completed long-duration proof.                                                                                      |
-| Unfamiliar tester handoffs                                                                | Pending; this guide and worksheet make those trials repeatable.                                                                                                                         |
-| Journal performance change merged in [PR168](https://github.com/wharfie/wharfie/pull/168) | Newer than the published source above. v0.0.15 does not include that change, and its results do not validate the newer implementation.                                                  |
+| Version or check                                                                          | Evidence and limit                                                                                                                                                                                                                                               |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Published v0.0.15, source `aae74e0de018fe340564c08c0c820ff590de1894`                      | Matching GitHub/npm bytes, release provenance, and the automated recipient service journey passed the [publication gates](https://github.com/wharfie/wharfie/actions/runs/34883188483).                                                                          |
+| 48–72-hour operational soak                                                               | Pending. A short rehearsal or a running campaign does not establish completed long-duration proof.                                                                                                                                                               |
+| Hetzner route in v0.0.15                                                                  | Known issue since 2026-11-02: `deployment preview` and a first `deployment apply` fail before creating anything. A [fix is in progress](https://github.com/wharfie/wharfie/pull/175); it is not in v0.0.15. The existing-server and AWS routes are not affected. |
+| Unfamiliar tester handoffs                                                                | Pending; this guide and worksheet make those trials repeatable.                                                                                                                                                                                                  |
+| Journal performance change merged in [PR168](https://github.com/wharfie/wharfie/pull/168) | Newer than the published source above. v0.0.15 does not include that change, and its results do not validate the newer implementation.                                                                                                                           |
 
 ## Maintainer acceptance
 

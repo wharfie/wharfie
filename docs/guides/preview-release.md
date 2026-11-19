@@ -4,7 +4,9 @@ The published [v0.0.15 preview](https://github.com/wharfie/wharfie/releases/tag/
 is available on npm's `preview` channel. Its manifest records source commit
 [`aae74e0de018fe340564c08c0c820ff590de1894`](https://github.com/wharfie/wharfie/commit/aae74e0de018fe340564c08c0c820ff590de1894).
 Use the [recipient handoff](recipient-preview.md) to build, share, keep work
-running on Linux, reconnect, and clean up with that exact release.
+running on Linux, reconnect, and clean up with that exact release. Since
+2026-11-02, v0.0.15 cannot preview or first-apply a Hetzner deployment; see the
+[known issue](recipient-preview.md#optional-provision-an-aws-or-hetzner-host).
 
 Wharfie previews are experimental, intentionally outside npm's
 `latest` channel, and supported only for evaluation. The npm package requires
