@@ -1,0 +1,586 @@
+"""Local-only supervisor regressions: no SDK, network, or real credentials."""
+import hashlib
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import tarfile
+import tempfile
+import threading
+import time
+import unittest
+import sys
+from unittest.mock import patch
+
+
+MODULE_PATH = Path(__file__).resolve().parents[1] / 'supervisor.py'
+SPEC = importlib.util.spec_from_file_location('supervisor_under_test', MODULE_PATH)
+supervisor = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(supervisor)
+TOKEN = 'fixture-hetzner-token-not-a-real-credential'
+
+
+class MemoryBody(io.BytesIO):
+    def iter_chunks(self, size):
+        while chunk := self.read(size):
+            yield chunk
+
+
+class MemoryEvidenceClient:
+    """Exercise real evidence hashing/readback against an in-memory transport."""
+    def __init__(self):
+        self.objects = {}
+        self.puts = []
+        self.gets = []
+        self.fail_once_suffix = None
+
+    def put_object(self, **request):
+        key = request['Key']
+        self.puts.append(key)
+        if self.fail_once_suffix and key.endswith(self.fail_once_suffix):
+            self.fail_once_suffix = None
+            raise RuntimeError('injected-export-failure')
+        data = request['Body'].read()
+        if len(data) != request['ContentLength']:
+            raise AssertionError('incorrect content length')
+        if request['ServerSideEncryption'] != 'AES256':
+            raise AssertionError('missing archive encryption request')
+        if hashlib.sha256(data).hexdigest() != request['Metadata']['sha256']:
+            raise AssertionError('incorrect evidence digest')
+        self.objects[key] = data
+        return {}
+
+    def get_object(self, **request):
+        self.gets.append(request['Key'])
+        return {'Body': MemoryBody(self.objects[request['Key']])}
+
+
+class SupervisorTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='wharfie-supervisor-test-')
+        self.addCleanup(self.temporary.cleanup)
+        self.parent = Path(self.temporary.name).resolve()
+        self.root = self.parent / 'controller'
+        self.root.mkdir(mode=0o700)
+        self.root_patch = patch.object(supervisor, 'ROOT', self.root)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        supervisor.STOP.clear()
+        supervisor.STOP_REASON = None
+        self.addCleanup(supervisor.STOP.clear)
+        self.config = {
+            'campaignId': 'fixture-campaign',
+            'specSha256': 'a' * 64,
+            'sourceCommit': 'b' * 40,
+            'stopAt': time.time() + 80 * 3600, 'soakHours': 72,
+            'controllerIpv4': '192.0.2.15',
+            'bucket': 'fixture-bucket-never-contacted',
+        }
+        self.client = MemoryEvidenceClient()
+        self.evidence = supervisor.Evidence(self.config, self.client)
+        # Any accidental child process or SDK entry is a test failure.
+        self.process_patch = patch.object(
+            supervisor.subprocess, 'Popen', side_effect=AssertionError('unexpected subprocess'))
+        self.process_patch.start()
+        self.addCleanup(self.process_patch.stop)
+
+    def campaign(self):
+        campaign = supervisor.Campaign(self.config, self.evidence, TOKEN)
+        def settle_diagnostics():
+            if campaign.diagnostic_thread is not None:
+                campaign.diagnostic_thread.join(2)
+                self.assertFalse(campaign.diagnostic_thread.is_alive())
+        self.addCleanup(settle_diagnostics)
+        return campaign
+
+    def test_waits_until_anchored_tick_without_launching_or_exporting_busy_work(self):
+        campaign = self.campaign()
+        label = 'soak-aws'
+        clock = [time.time()]
+        began = clock[0]
+        campaign.monotonic_deadline = clock[0] + 76 * 3600
+        started = int(clock[0] * 1000)
+        self.write(supervisor.safe_relative_run(label) / 'soak.json', {
+            'startedAt': started, 'endAt': started + 259200000, 'intervalMs': 900000,
+            'completed': [{}], 'pending': None, 'complete': False,
+        })
+        waits = []
+        def wait(seconds):
+            waits.append(seconds)
+            clock[0] += seconds
+        with patch.object(supervisor.time, 'time', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.time, 'monotonic', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.STOP, 'wait', side_effect=wait):
+            campaign.wait_for_tick(label)
+        self.assertAlmostEqual(clock[0], started / 1000 + 900)
+        self.assertGreater(clock[0] - began, 899)
+        self.assertTrue(waits and max(waits) <= 5)
+        self.assertEqual(self.client.puts, [])
+
+    def test_wait_interrupt_preserves_first_cancellation_reason(self):
+        campaign = self.campaign()
+        label = 'soak-aws'
+        started = int(time.time() * 1000)
+        self.write(supervisor.safe_relative_run(label) / 'soak.json', {
+            'startedAt': started, 'endAt': started + 259200000, 'intervalMs': 900000,
+            'completed': [{}], 'pending': None, 'complete': False,
+        })
+        def stop(_seconds):
+            supervisor.request_stop('signal', 15)
+            supervisor.request_stop('full-build-start-deadline')
+        with patch.object(supervisor.STOP, 'wait', side_effect=stop):
+            with self.assertRaisesRegex(RuntimeError, 'campaign-stop-during-wait'):
+                campaign.wait_for_tick(label)
+        self.assertEqual(supervisor.STOP_REASON['cause'], 'signal')
+        self.assertEqual(supervisor.STOP_REASON['signal'], 15)
+
+    def test_exports_bounded_real_log_bytes_and_fsynced_lifecycle_events(self):
+        campaign = self.campaign()
+        label = 'soak-aws'
+        (self.root / (label + '.log')).write_bytes(b'fixed phase output\n')
+        (self.root / (label + '.log.1')).write_bytes(b'previous phase output\n')
+        campaign.event(label, 'child-term-requested', pid=42, reason='operation-deadline')
+        item = campaign.export_logs(label)
+        data = self.client.objects[item['key']]
+        self.assertEqual(hashlib.sha256(data).hexdigest(), item['sha256'])
+        with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+            self.assertEqual(set(archive.getnames()), {label + '.log', label + '.log.1', label + '-observer.json'})
+            event = json.load(archive.extractfile(label + '-observer.json'))['events'][0]
+            self.assertEqual(event['reason'], 'operation-deadline')
+        self.assertNotIn(TOKEN.encode(), data)
+
+    def test_log_export_refuses_symlink_or_excessive_log(self):
+        campaign = self.campaign()
+        label = 'soak-aws'
+        source = self.root / (label + '.log')
+        source.symlink_to(self.root / 'supervisor.json')
+        with self.assertRaisesRegex(RuntimeError, 'diagnostic-log-limit'):
+            campaign.export_logs(label)
+        source.unlink()
+        with source.open('wb') as output:
+            output.truncate(4198401)
+        with self.assertRaisesRegex(RuntimeError, 'diagnostic-log-limit'):
+            campaign.export_logs(label)
+
+    def test_exports_numeric_controller_health_without_environment(self):
+        campaign = self.campaign()
+        with patch.dict(os.environ, {'HETZNER_TOKEN': TOKEN}):
+            campaign.export_controller()
+        data = self.client.objects['fixture-campaign/supervisor-diagnostics.json']
+        value = json.loads(data)
+        self.assertGreater(value['diskAvailableBytes'], 0)
+        self.assertEqual(value['campaignId'], self.config['campaignId'])
+        self.assertNotIn(TOKEN.encode(), data)
+
+    def test_real_child_output_is_visible_before_exit_and_stop_cause_is_exportable(self):
+        campaign = self.campaign()
+        label = 'soak-aws'
+        runner = self.root / 'fixture-runner.py'
+        runner.write_text("import time\nprint('fixture-running', flush=True)\ntime.sleep(30)\n")
+        self.process_patch.stop()
+        visible = []
+        def stop():
+            logfile = self.root / (label + '.log')
+            visible.append(logfile.exists() and 'fixture-running' in logfile.read_text())
+            supervisor.request_stop('signal', 15)
+        timer = threading.Timer(0.5, stop)
+        timer.start()
+        try:
+            with patch.object(supervisor, 'NODE', sys.executable), \
+                 patch.object(supervisor, 'RUNNER', str(runner)), \
+                 patch.object(supervisor, 'HARNESS', str(self.root)):
+                code = campaign.invoke(label, ['--resume'])
+        finally:
+            timer.cancel()
+        self.assertEqual(code, 124)
+        self.assertEqual(visible, [True])
+        events = supervisor.read_json(self.root / (label + '-observer.json'))['events']
+        stopped = next(event for event in events if event['event'] == 'child-term-requested')
+        self.assertEqual(stopped['reason'], 'supervisor-stop')
+        self.assertEqual(stopped['stopReason']['signal'], 15)
+        self.assertEqual(events[-1]['event'], 'child-exited')
+        self.assertEqual(events[-1]['exitCode'], -15)
+        item = campaign.export_logs(label)
+        self.assertIn(item['key'], self.client.objects)
+
+    def write(self, path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        supervisor.atomic_json(path, value)
+
+    def run_fixture(self, label='soak-hetzner', passed=False, workspace=True):
+        run_dir = supervisor.safe_relative_run(label)
+        run_dir.mkdir(parents=True)
+        self.write(run_dir / 'run.json', {'provider': label.split('-')[-1], 'runId': 'fixture-run'})
+        self.write(run_dir / 'report.json', {
+            'status': 'passed' if passed else 'failed',
+            'workspaceRemoved': not workspace,
+            'cleanup': {'status': 'unknown' if workspace else 'absent'},
+        })
+        self.write(run_dir / 'soak-progress.json', {
+            'complete': passed, 'completedRuns': 288 if passed else 16,
+            'observations': {'completedRuns': 288 if passed else 16},
+            'endAt': 123456789,
+        })
+        if workspace:
+            (run_dir / 'workspace').mkdir(mode=0o700)
+        return run_dir
+
+    def saved_outcome(self, campaign, label, passed=False, settled=False):
+        outcome = {
+            'provider': label.split('-')[-1], 'label': label,
+            'status': 'passed' if passed else 'failed', 'complete': passed,
+            'completedRuns': 288 if passed else 16,
+            'cleanupVerifiedAbsent': settled, 'proofExported': settled,
+            'settlementAttempts': 1 if settled else 0,
+        }
+        campaign.state['runs'][label] = dict(outcome)
+        campaign.save()
+        return outcome
+
+    def cleanup_success(self, run_dir):
+        shutil.rmtree(run_dir / 'workspace')
+        self.write(run_dir / 'cleanup-report.json', {
+            'status': 'passed', 'workspaceRemoved': True,
+            'cleanup': {'status': 'absent'},
+        })
+
+    def test_saved_passed_run_survives_restart_without_any_new_work(self):
+        label = 'soak-aws'
+        self.run_fixture(label, passed=True, workspace=False)
+        original = self.campaign()
+        expected = self.saved_outcome(original, label, passed=True, settled=True)
+        restarted = self.campaign()
+        with patch.object(restarted, 'invoke') as invoke, patch.object(restarted, 'export_run') as export:
+            self.assertEqual(restarted.run_one(label), expected)
+        invoke.assert_not_called()
+        export.assert_not_called()
+        self.assertEqual(restarted.state['startedAt'], original.state['startedAt'])
+        self.assertEqual(supervisor.read_json(restarted.state_path)['runs'][label], expected)
+
+    def test_completed_report_survives_restart_before_supervisor_outcome_was_saved(self):
+        label = 'soak-aws'
+        self.run_fixture(label, passed=True, workspace=False)
+        campaign = self.campaign()
+        with patch.object(campaign, 'invoke') as invoke:
+            result = campaign.run_one(label)
+        invoke.assert_not_called()
+        self.assertEqual(result['status'], 'passed')
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['completedRuns'], 288)
+        self.assertTrue(result['cleanupVerifiedAbsent'])
+        self.assertTrue(result['proofExported'])
+        self.assertIn('fixture-campaign/runs/soak-aws/export.json', self.client.objects)
+
+    def test_retained_failed_run_retries_export_without_repeating_successful_cleanup(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        original = self.campaign()
+        self.saved_outcome(original, label)
+        restarted = self.campaign()
+        self.client.fail_once_suffix = '/export.json'
+
+        def clean(request_label, arguments, cleanup=False):
+            self.assertEqual(request_label, label)
+            self.assertEqual(arguments, ['--cleanup', str(run_dir)])
+            self.assertTrue(cleanup)
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(restarted, 'invoke', side_effect=clean) as invoke, patch.object(supervisor.time, 'sleep') as sleep:
+            result = restarted.run_one(label)
+        self.assertEqual(invoke.call_count, 1)
+        sleep.assert_called_once_with(5)
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['completedRuns'], 16)
+        self.assertEqual(result['settlementAttempts'], 2)
+        self.assertTrue(result['cleanupVerifiedAbsent'])
+        self.assertTrue(result['proofExported'])
+        self.assertFalse((run_dir / 'workspace').exists())
+        again = self.campaign()
+        with patch.object(again, 'invoke') as invoke_again:
+            self.assertEqual(again.run_one(label), result)
+        invoke_again.assert_not_called()
+
+    def test_failed_cleanup_has_three_total_attempts_across_restarts_and_exports_recovery(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        (run_dir / 'workspace' / 'app-linux-x64').write_bytes(b'\x7fELF SEA fixture')
+        original = self.campaign()
+        self.saved_outcome(original, label)
+        restarted = self.campaign()
+        with patch.object(restarted, 'invoke', return_value=1) as invoke, patch.object(supervisor.time, 'sleep'):
+            result = restarted.run_one(label)
+        self.assertEqual(invoke.call_count, 3)
+        for call in invoke.call_args_list:
+            self.assertEqual(call.args, (label, ['--cleanup', str(run_dir)]))
+            self.assertEqual(call.kwargs, {'cleanup': True})
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['settlementAttempts'], 3)
+        self.assertFalse(result['cleanupVerifiedAbsent'])
+        self.assertTrue(result['proofExported'])
+        self.assertTrue((run_dir / 'workspace').is_dir())
+        recovery_key = 'fixture-campaign/runs/soak-hetzner/recovery.tar.gz'
+        self.assertEqual(self.client.puts.count(recovery_key), 3)
+        self.assertEqual(self.client.gets.count(recovery_key), 3)
+        again = self.campaign()
+        with patch.object(again, 'invoke') as invoke_again, patch.object(again, 'export_run') as export_again:
+            self.assertEqual(again.run_one(label), result)
+        invoke_again.assert_not_called()
+        export_again.assert_not_called()
+
+    def test_failed_retained_report_with_stale_progress_never_resumes_work(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        campaign = self.campaign()
+
+        def clean(request_label, arguments, cleanup=False):
+            self.assertEqual(request_label, label)
+            self.assertEqual(arguments, ['--cleanup', str(run_dir)])
+            self.assertTrue(cleanup)
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(campaign, 'invoke', side_effect=clean) as invoke:
+            result = campaign.run_one(label)
+        self.assertEqual(invoke.call_count, 1)
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['completedRuns'], 16)
+        self.assertTrue(result['cleanupVerifiedAbsent'])
+        self.assertTrue(result['proofExported'])
+
+    def test_new_cleanup_cannot_reuse_a_stale_export_flag_when_final_export_fails(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        campaign = self.campaign()
+        previous = self.saved_outcome(campaign, label)
+        previous.update(proofExported=True, settlementAttempts=2)
+        campaign.state['runs'][label] = previous
+        campaign.save()
+        restarted = self.campaign()
+        self.client.fail_once_suffix = '/export.json'
+        persisted_export_flags = []
+
+        def clean(_label, _arguments, cleanup=False):
+            self.assertTrue(cleanup)
+            persisted_export_flags.append(
+                supervisor.read_json(restarted.state_path)['runs'][label]['proofExported'])
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(restarted, 'invoke', side_effect=clean) as invoke, patch.object(supervisor.time, 'sleep'):
+            result = restarted.run_one(label)
+        self.assertEqual(invoke.call_count, 1)
+        self.assertEqual(result['settlementAttempts'], 3)
+        self.assertEqual(result['status'], 'failed')
+        self.assertTrue(result['cleanupVerifiedAbsent'])
+        self.assertFalse(result['proofExported'])
+        self.assertEqual(persisted_export_flags, [False])
+        self.assertFalse(supervisor.read_json(restarted.state_path)['runs'][label]['proofExported'])
+
+    def test_external_stop_nearby_preserves_recovery_authority_without_starting_cleanup(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        self.config['stopAt'] = time.time() + 1800
+        campaign = self.campaign()
+        self.saved_outcome(campaign, label)
+        with patch.object(campaign, 'invoke') as invoke, patch.object(campaign, 'export_run') as export:
+            result = campaign.run_one(label)
+        invoke.assert_not_called()
+        export.assert_not_called()
+        self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['settlementDeferred'], 'external-stop-close-preserve-authority')
+        self.assertEqual(result['settlementAttempts'], 0)
+        self.assertTrue((run_dir / 'workspace').is_dir())
+
+    def test_manual_cleanup_repairs_evidence_without_changing_failed_work_or_automatic_budget(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        campaign = self.campaign()
+        previous = self.saved_outcome(campaign, label)
+        previous.update(settlementAttempts=3, proofExported=True)
+        campaign.state.update(status='failed')
+        campaign.state['runs'][label] = previous
+        campaign.save()
+        persisted_export_flags = []
+
+        def clean(request_label, arguments, cleanup=False):
+            self.assertEqual(request_label, label)
+            self.assertEqual(arguments, ['--cleanup', str(run_dir)])
+            self.assertTrue(cleanup)
+            persisted_export_flags.append(
+                supervisor.read_json(campaign.state_path)['runs'][label]['proofExported'])
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(campaign, 'invoke', side_effect=clean) as invoke:
+            self.assertEqual(campaign.repair_cleanup(label), 0)
+        self.assertEqual(invoke.call_count, 1)
+        self.assertEqual(persisted_export_flags, [False])
+        saved = supervisor.read_json(campaign.state_path)
+        result = saved['runs'][label]
+        self.assertEqual(saved['status'], 'failed')
+        self.assertEqual(result['status'], 'failed')
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['completedRuns'], 16)
+        self.assertEqual(result['settlementAttempts'], 3)
+        self.assertEqual(result['manualCleanupAttempts'], 1)
+        self.assertTrue(result['cleanupVerifiedAbsent'])
+        self.assertTrue(result['proofExported'])
+        self.assertIn('fixture-campaign/runs/soak-hetzner/export.json', self.client.objects)
+        self.assertIn('fixture-campaign/supervisor.json', self.client.objects)
+
+    def test_manual_cleanup_rejects_active_or_passed_authority_without_actions(self):
+        label = 'soak-hetzner'
+        self.run_fixture(label)
+        campaign = self.campaign()
+        for campaign_status, run_status in (
+            ('failed', 'running'), ('failed', 'passed'),
+            ('running', 'failed'), ('passed', 'failed'),
+        ):
+            with self.subTest(campaign=campaign_status, run=run_status):
+                outcome = self.saved_outcome(campaign, label)
+                outcome['status'] = run_status
+                campaign.state['runs'][label] = outcome
+                campaign.state['status'] = campaign_status
+                campaign.save()
+                before = campaign.state_path.read_bytes()
+                with patch.object(campaign, 'invoke') as invoke, patch.object(campaign, 'export_run') as export:
+                    with self.assertRaisesRegex(RuntimeError, 'repair-requires-terminal-failed-proof'):
+                        campaign.repair_cleanup(label)
+                invoke.assert_not_called()
+                export.assert_not_called()
+                self.assertEqual(campaign.state_path.read_bytes(), before)
+                self.assertEqual(self.client.puts, [])
+
+    def test_manual_cleanup_export_failure_keeps_persisted_proof_invalid_and_failed(self):
+        label = 'soak-hetzner'
+        run_dir = self.run_fixture(label)
+        campaign = self.campaign()
+        outcome = self.saved_outcome(campaign, label)
+        outcome.update(settlementAttempts=3, proofExported=True)
+        campaign.state['runs'][label] = outcome
+        campaign.state['status'] = 'failed'
+        campaign.save()
+        self.client.fail_once_suffix = '/export.json'
+
+        def clean(request_label, arguments, cleanup=False):
+            self.assertEqual(request_label, label)
+            self.assertEqual(arguments, ['--cleanup', str(run_dir)])
+            self.assertTrue(cleanup)
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(campaign, 'invoke', side_effect=clean) as invoke:
+            with self.assertRaisesRegex(RuntimeError, 'injected-export-failure'):
+                campaign.repair_cleanup(label)
+        self.assertEqual(invoke.call_count, 1)
+        self.assertFalse((run_dir / 'workspace').exists())
+        saved = supervisor.read_json(campaign.state_path)
+        retained = saved['runs'][label]
+        self.assertEqual(saved['status'], 'failed')
+        self.assertEqual(retained['status'], 'failed')
+        self.assertFalse(retained['proofExported'])
+        self.assertFalse(retained['complete'])
+        self.assertEqual(retained['completedRuns'], 16)
+        self.assertEqual(retained['settlementAttempts'], 3)
+        self.assertEqual(retained['manualCleanupAttempts'], 1)
+        self.assertNotIn('fixture-campaign/runs/soak-hetzner/export.json', self.client.objects)
+        self.assertNotIn('fixture-campaign/supervisor.json', self.client.objects)
+
+    def test_recovery_archive_preserves_seas_journal_and_ssh_authority_only_within_run(self):
+        run_dir = self.run_fixture()
+        fixtures = {
+            'workspace/app-linux-x64': (b'\x7fELF SEA revision A fixture', 0o755),
+            'workspace/app-next-linux-x64': (b'\x7fELF SEA revision B fixture', 0o755),
+            'workspace/data/apps/fixture/control/single-node-deployments/v3/deployment/journal/journal-0000000000000000.json': (b'{"journalId":"fixture-journal"}\n', 0o600),
+            'workspace/data/single-node-deployment-ssh/v1/identity/private-key': (b'fixture-private-key-not-an-actual-key\n', 0o600),
+            'workspace/data/single-node-deployment-ssh/v1/identity/known-hosts': (b'fixture-host-key-not-an-actual-key\n', 0o600),
+        }
+        for relative, (data, mode) in fixtures.items():
+            path = run_dir / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(mode)
+        unrelated = self.root / 'homes' / 'hetzner' / 'credential-fixture'
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text(TOKEN)
+        expected = {str(path.relative_to(self.root)): path.read_bytes()
+                    for path in run_dir.rglob('*') if path.is_file()}
+        destination = self.root / 'recovery.tar.gz'
+        counts = supervisor.recovery_archive(run_dir, destination)
+        self.assertEqual(counts, {'files': len(expected), 'uncompressedBytes': sum(map(len, expected.values()))})
+        with tarfile.open(destination, 'r:gz') as archive:
+            self.assertEqual(set(archive.getnames()), set(expected))
+            for member in archive.getmembers():
+                self.assertTrue(member.isfile())
+                self.assertTrue(member.name.startswith('runs/soak-hetzner/'))
+                self.assertNotIn('..', Path(member.name).parts)
+                self.assertEqual(archive.extractfile(member).read(), expected[member.name])
+            self.assertEqual(archive.getmember('runs/soak-hetzner/workspace/app-linux-x64').mode, 0o755)
+            self.assertEqual(archive.getmember('runs/soak-hetzner/workspace/data/single-node-deployment-ssh/v1/identity/private-key').mode, 0o600)
+        self.assertTrue((run_dir / 'workspace').is_dir())
+
+    def test_recovery_archive_rejects_file_directory_root_and_ancestor_symlinks(self):
+        for kind in ('file', 'directory', 'root', 'ancestor'):
+            with self.subTest(kind=kind):
+                sandbox = self.parent / kind
+                sandbox.mkdir()
+                root = sandbox / 'controller'
+                root.mkdir()
+                outside = sandbox / 'outside'
+                outside.mkdir()
+                (outside / 'sentinel').write_text('external fixture must not enter archive')
+                run_dir = root / 'runs' / 'soak-hetzner'
+                if kind == 'ancestor':
+                    (root / 'runs').symlink_to(outside, target_is_directory=True)
+                    run_dir.mkdir()
+                    (run_dir / 'fixture').write_text('run fixture')
+                else:
+                    run_dir.parent.mkdir()
+                    if kind == 'root':
+                        run_dir.symlink_to(outside, target_is_directory=True)
+                    else:
+                        run_dir.mkdir()
+                        (run_dir / 'link').symlink_to(
+                            outside / 'sentinel' if kind == 'file' else outside,
+                            target_is_directory=kind == 'directory')
+                destination = root / 'recovery.tar.gz'
+                with patch.object(supervisor, 'ROOT', root):
+                    with self.assertRaises(RuntimeError):
+                        supervisor.recovery_archive(run_dir, destination)
+                self.assertFalse(destination.exists())
+                self.assertEqual((outside / 'sentinel').read_text(), 'external fixture must not enter archive')
+
+    def test_provider_environments_do_not_inherit_ambient_secrets(self):
+        ambient = {
+            'AWS_PROFILE': 'fixture-profile', 'AWS_ACCESS_KEY_ID': 'fixture-access-key',
+            'AWS_SECRET_ACCESS_KEY': 'fixture-secret-key', 'AWS_SESSION_TOKEN': 'fixture-session',
+            'AWS_WEB_IDENTITY_TOKEN_FILE': '/fixture/token', 'HCLOUD_TOKEN': 'wrong-fixture-token',
+            'HETZNER_TOKEN': 'wrong-fixture-token', 'GITHUB_TOKEN': 'fixture-github-token',
+            'NODE_AUTH_TOKEN': 'fixture-npm-token', 'SSH_AUTH_SOCK': '/fixture/agent',
+            'NODE_OPTIONS': '--require=/fixture/untrusted.js',
+        }
+        with patch.dict(os.environ, ambient):
+            aws = supervisor.provider_environment('aws', TOKEN)
+            hetzner = supervisor.provider_environment('hetzner', TOKEN)
+        for name in ambient:
+            self.assertNotIn(name, aws)
+            if name != 'HCLOUD_TOKEN':
+                self.assertNotIn(name, hetzner)
+        self.assertNotIn(TOKEN, aws.values())
+        self.assertEqual(hetzner['HCLOUD_TOKEN'], TOKEN)
+        self.assertFalse(any(name.startswith('AWS_') for name in hetzner))
+        self.assertEqual(aws['AWS_REGION'], 'us-east-2')
+        self.assertEqual(aws['AWS_DEFAULT_REGION'], 'us-east-2')
+        self.assertNotEqual(aws['HOME'], hetzner['HOME'])
+        self.assertEqual(aws['PATH'], '/opt/wharfie-soak/node/bin:/usr/bin:/bin')
+        with self.assertRaisesRegex(RuntimeError, 'invalid-provider'):
+            supervisor.provider_environment('unexpected', TOKEN)
+
+
+if __name__ == '__main__':
+    unittest.main()

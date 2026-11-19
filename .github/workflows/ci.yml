@@ -97,6 +97,11 @@ jobs:
         run: npm install --global --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org "$(node --print "require('${GITHUB_WORKSPACE}/package.json').packageManager")"
       - run: npm ci
       - run: npm run test:ci
+      - name: test operational soak controller
+        if: ${{ always() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s scripts/soak-controller/tests
       - name: verify preview release contract
         run: npm run verify:release:preview
       - name: verify packed install and real Linux SEA
