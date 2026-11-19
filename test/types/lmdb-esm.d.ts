@@ -1,4 +1,4 @@
-// LMDB 3.4.4's ESM declaration uses `export =`, which NodeNext rejects.
+// LMDB 3.5.11's ESM declaration uses `export =`, which NodeNext rejects.
 // This test-only declaration covers the native fixture's actual API until the
 // upstream ESM declaration is corrected. Keep reads and values checked.
 declare module 'lmdb' {

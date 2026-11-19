@@ -29,7 +29,7 @@ export const CORE_RUNTIME_DEPENDENCY_PURPOSE = 'localDurableStorage';
 export const CORE_RUNTIME_DEPENDENCY_ACTIVITY = 'core-local-durable-storage';
 export const CORE_RUNTIME_DEPENDENCY_ROOT = Object.freeze({
   name: 'lmdb',
-  version: '3.4.4',
+  version: '3.5.11',
 });
 
 /**
