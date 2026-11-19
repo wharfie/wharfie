@@ -34,8 +34,10 @@ REPORT_NAMES = (
 SOAK_HOURS = (48, 72)
 # Runner phases that finish before `prepare-apply` persists a possible provider
 # mutation (scripts/verify-live-deployment.js). A run that stopped in these
-# phases, then removed its workspace, never created a guest.
-PRE_APPLY_PHASES = ('package', 'verify-executable', 'local-cli', 'preview', 'preview-next')
+# phases, then removed its workspace, never created a guest. `preview-next` is
+# excluded: the runner records the deployment identity before it, so a failure
+# there is left to packaged cleanup and operator review.
+PRE_APPLY_PHASES = ('package', 'verify-executable', 'local-cli', 'preview')
 NEVER_CREATED_PHASES = frozenset(PRE_APPLY_PHASES + ('prepare-removal', 'remove-workspace'))
 
 
@@ -111,22 +113,26 @@ def cleanup_verified(run_dir):
             and not (run_dir / 'workspace').exists())
 
 
-def never_created_evidence(run, report, retirement, cleanup):
+def never_created_evidence(provider, run, report, retirement, cleanup):
     """Exact runner evidence that no provider mutation was ever attempted.
 
     This is not verified absence: nothing was observed absent because nothing
     was created. It settles cleanup only; the run itself remains failed.
     """
+    if provider not in ('aws', 'hetzner'):
+        return False
     if not all(isinstance(value, dict) for value in (run, report, retirement, cleanup)):
         return False
     binding = retirement.get('binding')
     phases = report.get('phases')
     failure = report.get('failure')
+    run_id = run.get('runId')
     return (run.get('applyAttempted') is False
             and run.get('deploymentInstanceId') is None
+            and isinstance(run_id, str) and len(run_id) > 0
             and isinstance(binding, dict)
-            and binding.get('provider') == run.get('provider') == report.get('provider')
-            and binding.get('runId') == run.get('runId')
+            and binding.get('provider') == run.get('provider') == report.get('provider') == provider
+            and binding.get('runId') == run_id
             and binding.get('deploymentInstanceId') is None
             and retirement.get('cleanup') == {'status': 'not-created'}
             and report.get('status') == 'failed'
@@ -147,7 +153,8 @@ def never_created(run_dir):
         cleanup = read_json(cleanup_file) if cleanup_file.exists() else report
     except (OSError, ValueError, RuntimeError):
         return False
-    return (never_created_evidence(run, report, retirement, cleanup)
+    provider = run_dir.name.split('-')[-1]
+    return (never_created_evidence(provider, run, report, retirement, cleanup)
             and not (run_dir / 'workspace').exists())
 
 

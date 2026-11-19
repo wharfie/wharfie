@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ops
+import template
 from test_supervisor import supervisor, MemoryEvidenceClient
 
 
@@ -137,7 +138,9 @@ class DiagnosticIsolationTests(unittest.TestCase):
 
     def operator_fixture(self, diagnostics):
         operator = ops.Operator.__new__(ops.Operator)
-        operator.root, operator.config = self.root, self.config
+        operator.root, operator.config = self.root, {**self.config, 'operationsFiles': {
+            name: ops.sha256(ops.HERE / name) for name in [
+                *template.RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py']}}
         operator.identity = Mock()
         operator.delete_controller = Mock()
         report = json.dumps({'workspaceRemoved': True, 'cleanup': {'status': 'absent'}}).encode()

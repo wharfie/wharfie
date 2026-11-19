@@ -167,10 +167,15 @@ class Operator:
             if request_path is not None:
                 request_path.unlink(missing_ok=True)
 
-    def verify_local_bundle(self):
+    def verify_operations_files(self):
+        # Every command that acts on a prepared campaign runs the reviewed
+        # operations code; a checkout change after preparation refuses here.
         for name, digest in self.config['operationsFiles'].items():
             if sha256(HERE / name) != digest:
                 raise RuntimeError('reviewed-operations-files-changed')
+
+    def verify_local_bundle(self):
+        self.verify_operations_files()
         if sha256(self.root / 'cloudformation.json') != self.ownership['templateSha256']:
             raise RuntimeError('reviewed-template-changed')
         if self.config['stopAt'] - time.time() < (soak_hours(self.config) + 3) * 3600:
@@ -406,7 +411,8 @@ class Operator:
         assert run['deploymentId'] == 'acceptance-' + gate['runId']
         assert run['appId'] == 'steady-file-demo' and run['applyAttempted'] is True
         assert run['soak']['startedAt'] is None
-        assert run['soak']['durationMs'] == (900000 if label == 'rehearsal-aws' else 259200000)
+        assert run['soak']['durationMs'] == (900000 if label == 'rehearsal-aws'
+                                             else soak_hours(config) * 3600000)
         assert preview['provider'] == 'aws' and preview['status'] == 'actionable'
         assert preview['journal']['state'] == 'absent'
         assert preview['deployment']['deploymentInstanceId'] == gate['deploymentInstanceId']
@@ -468,6 +474,7 @@ class Operator:
         print(json.dumps({'status': 'exact-deployment-authorized', 'label': label, 'runId': gate['runId']}), flush=True)
 
     def authorize(self):
+        self.verify_operations_files()
         self.identity()
         # Both rehearsals and long AWS setup must fit in the fixed setup window.
         deadline = time.monotonic() + 7200
@@ -489,6 +496,7 @@ class Operator:
         raise RuntimeError('local-gate-watch-deadline')
 
     def collect(self):
+        self.verify_operations_files()
         self.identity()
         target_root = self.root / 'collected'
         target_root.mkdir(mode=0o700, exist_ok=True)
@@ -551,6 +559,7 @@ class Operator:
         print(json.dumps({'status': 'collected', 'campaignStatus': summary['status'], 'files': len(collected)}))
 
     def teardown(self):
+        self.verify_operations_files()
         self.identity()
         collection = read_json(self.root / 'collection.json')
         summary_path = self.root / 'collected' / 'supervisor.json'
@@ -576,7 +585,9 @@ class Operator:
                 if not all((label, name) in listed for name in names):
                     raise RuntimeError('never-created-evidence-not-collected')
                 run, report, retirement = (read_json(directory / name) for name in names[:3])
-                if outcome.get('status') != 'failed' or not never_created_evidence(run, report, retirement, cleanup):
+                provider = label.split('-')[-1]
+                if (outcome.get('status') != 'failed' or outcome.get('provider') != provider
+                        or not never_created_evidence(provider, run, report, retirement, cleanup)):
                     raise RuntimeError('independent-guest-audit-not-never-created')
             else:
                 raise RuntimeError('recover-guest-authority-before-controller-deletion')

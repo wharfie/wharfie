@@ -1,6 +1,7 @@
 """A run that never attempted apply settles cleanup without becoming a pass."""
 import contextlib
 import copy
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -14,6 +15,8 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ops
+import template
+from test_controller import config as controller_config, fake_gate
 from test_supervisor import supervisor, MemoryEvidenceClient, TOKEN
 
 RUN_ID = '00000000-0000-4000-8000-000000000001'
@@ -65,9 +68,15 @@ def apply_failure(files):
     return files
 
 
-def accepted(files):
+def accepted(files, provider='hetzner'):
     return supervisor.never_created_evidence(
-        files['run.json'], files['report.json'], files['retirement.json'], files['cleanup-report.json'])
+        provider, files['run.json'], files['report.json'], files['retirement.json'],
+        files['cleanup-report.json'])
+
+
+def operations_files():
+    return {name: ops.sha256(ops.HERE / name) for name in [
+        *template.RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py']}
 
 
 class NeverCreatedEvidenceTests(unittest.TestCase):
@@ -97,6 +106,14 @@ class NeverCreatedEvidenceTests(unittest.TestCase):
             'foreign provider': lambda f: f['retirement.json']['binding'].update(provider='aws'),
             'extra cleanup detail': lambda f: f['retirement.json']['cleanup'].update(reason='lost'),
             'empty phases': lambda f: f['report.json'].update(phases=[]),
+            'missing providers': lambda f: [f[n].pop('provider') for n in ('run.json', 'report.json')]
+                and f['retirement.json']['binding'].pop('provider'),
+            'missing run identities': lambda f: f['run.json'].pop('runId')
+                and f['retirement.json']['binding'].pop('runId'),
+            'preview-next failure': lambda f: f['report.json'].update(
+                failure={'phase': 'preview-next', 'status': 1},
+                phases=[{'phase': 'preview', 'status': 'passed'}, {'phase': 'preview-next', 'status': 1},
+                        {'phase': 'remove-workspace', 'status': 'passed'}]),
         }
         for name, change in cases.items():
             with self.subTest(name):
@@ -104,7 +121,9 @@ class NeverCreatedEvidenceTests(unittest.TestCase):
                 change(files)
                 self.assertFalse(accepted(files))
         self.assertFalse(accepted(apply_failure(evidence())))
-        self.assertFalse(supervisor.never_created_evidence([], {}, {}, {}))
+        self.assertFalse(accepted(evidence(), provider='aws'))
+        self.assertFalse(accepted(evidence('foreign'), provider='foreign'))
+        self.assertFalse(supervisor.never_created_evidence('hetzner', [], {}, {}, {}))
 
 
 class NeverCreatedSupervisorTests(unittest.TestCase):
@@ -194,6 +213,19 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
                 supervisor.shutil.rmtree(run_dir)
                 (self.root / 'supervisor.json').unlink()
 
+    def test_passed_run_with_unsettled_cleanup_becomes_failed(self):
+        label = 'soak-aws'
+        files = apply_failure(evidence('aws'))
+        files['report.json'].update(status='passed', failure=None)
+        self.write_run(label, files, workspace=True)
+        campaign = self.campaign()
+        with patch.object(campaign, 'invoke', return_value=1), patch.object(supervisor.time, 'sleep'):
+            result = campaign.settle(label, {'provider': 'aws', 'label': label, 'status': 'passed',
+                                             'complete': True})
+        self.assertEqual(result['status'], 'failed')
+        self.assertIs(result['neverCreated'], False)
+        self.assertIs(result['cleanupVerifiedAbsent'], False)
+
     def test_never_created_rehearsal_failure_still_blocks_both_soaks(self):
         campaign = self.campaign()
         outcomes = {
@@ -211,6 +243,33 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
             self.assertEqual(campaign.run(), 0)
         self.assertEqual(calls, ['rehearsal-aws', 'rehearsal-hetzner'])
         self.assertEqual(campaign.state['status'], 'failed')
+
+    def test_finish_never_counts_never_created_as_clean_even_beside_a_passed_status(self):
+        campaign = self.campaign()
+        clean = {'status': 'passed', 'complete': True, 'cleanupVerifiedAbsent': True, 'proofExported': True}
+        campaign.state['runs'] = {
+            'rehearsal-aws': dict(clean), 'rehearsal-hetzner': dict(clean), 'soak-aws': dict(clean),
+            'soak-hetzner': {**clean, 'cleanupVerifiedAbsent': False, 'neverCreated': True},
+        }
+        self.assertEqual(campaign.finish(), 0)
+        self.assertEqual(campaign.state['status'], 'failed')
+
+    def test_manual_repair_settles_never_created_run_without_packaged_cleanup(self):
+        label = 'rehearsal-hetzner'
+        self.write_run(label, evidence())
+        campaign = self.campaign()
+        campaign.state['status'] = 'failed'
+        campaign.state['runs'][label] = {'provider': 'hetzner', 'label': label, 'status': 'failed',
+                                         'settlementAttempts': 3, 'cleanupVerifiedAbsent': False}
+        campaign.save()
+        with patch.object(campaign, 'invoke') as invoke:
+            self.assertEqual(campaign.repair_cleanup(label), 0)
+        invoke.assert_not_called()
+        outcome = campaign.state['runs'][label]
+        self.assertEqual(outcome['status'], 'failed')
+        self.assertIs(outcome['neverCreated'], True)
+        self.assertIs(outcome['cleanupVerifiedAbsent'], False)
+        self.assertEqual(outcome['settlementAttempts'], 3)
 
     def test_full_soak_length_and_deadline_follow_the_prepared_campaign(self):
         self.config['soakHours'] = 48
@@ -232,9 +291,10 @@ class NeverCreatedTeardownTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix='wharfie-never-created-teardown-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.config = {'campaignId': 'fixture-campaign', 'specSha256': 'a' * 64}
+        self.config = {'campaignId': 'fixture-campaign', 'specSha256': 'a' * 64,
+                       'operationsFiles': operations_files()}
 
-    def operator(self, runs):
+    def operator(self, runs, unlisted=()):
         """Collected evidence for each label: (outcome, files)."""
         collected = self.root / 'collected'
         listed = []
@@ -244,6 +304,8 @@ class NeverCreatedTeardownTests(unittest.TestCase):
             for name, value in files.items():
                 data = json.dumps(value).encode()
                 (directory / name).write_bytes(data)
+                if (label, name) in unlisted:
+                    continue
                 listed.append({'label': label, 'name': name, 'size': len(data),
                                'sha256': hashlib.sha256(data).hexdigest()})
         summary = {'campaignId': 'fixture-campaign', 'status': 'failed',
@@ -264,8 +326,8 @@ class NeverCreatedTeardownTests(unittest.TestCase):
                 {'report.json': report})
 
     def never_created_hetzner(self, files=None):
-        return ({'status': 'failed', 'cleanupVerifiedAbsent': False, 'neverCreated': True,
-                 'proofExported': True}, files or evidence())
+        return ({'provider': 'hetzner', 'status': 'failed', 'cleanupVerifiedAbsent': False,
+                 'neverCreated': True, 'proofExported': True}, files or evidence())
 
     def test_accepts_collected_never_created_evidence_beside_verified_absence(self):
         operator = self.operator({'rehearsal-aws': self.absent_aws(),
@@ -280,11 +342,14 @@ class NeverCreatedTeardownTests(unittest.TestCase):
         del missing['retirement.json']
         passed_claim = self.never_created_hetzner()
         passed_claim[0]['status'] = 'passed'
+        foreign_outcome = self.never_created_hetzner()
+        foreign_outcome[0]['provider'] = 'aws'
         cases = {
             'deployment identity': (self.never_created_hetzner(identity), 'not-never-created'),
             'apply attempted': (self.never_created_hetzner(apply_failure(evidence())), 'not-never-created'),
             'uncollected retirement': (self.never_created_hetzner(missing), 'not-collected'),
             'passed outcome': (passed_claim, 'not-never-created'),
+            'outcome provider mismatch': (foreign_outcome, 'not-never-created'),
             'unsettled apply failure': (({'status': 'failed', 'cleanupVerifiedAbsent': False,
                                           'proofExported': True}, apply_failure(evidence())),
                                         'recover-guest-authority'),
@@ -299,6 +364,25 @@ class NeverCreatedTeardownTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, message):
                     operator.teardown()
                 operator.delete_controller.assert_not_called()
+
+    def test_refuses_present_but_unlisted_never_created_evidence(self):
+        for name in ('run.json', 'report.json', 'retirement.json', 'cleanup-report.json'):
+            with self.subTest(name):
+                for path in sorted(self.root.rglob('*'), reverse=True):
+                    path.rmdir() if path.is_dir() else path.unlink()
+                operator = self.operator({'rehearsal-hetzner': self.never_created_hetzner()},
+                                         unlisted={('rehearsal-hetzner', name)})
+                with self.assertRaisesRegex(RuntimeError, 'never-created-evidence-not-collected'):
+                    operator.teardown()
+                operator.delete_controller.assert_not_called()
+
+    def test_refuses_teardown_after_an_operations_file_changes(self):
+        operator = self.operator({'rehearsal-hetzner': self.never_created_hetzner()})
+        operator.config['operationsFiles'] = {**operator.config['operationsFiles'], 'ops.py': '0' * 64}
+        with self.assertRaisesRegex(RuntimeError, 'reviewed-operations-files-changed'):
+            operator.teardown()
+        operator.identity.assert_not_called()
+        operator.delete_controller.assert_not_called()
 
 
 class SoakLengthPreparationTests(unittest.TestCase):
@@ -326,6 +410,78 @@ class SoakLengthPreparationTests(unittest.TestCase):
         options.soak_hours = 24
         with self.assertRaisesRegex(RuntimeError, 'invalid-soak-hours'):
             ops.prepare(options)
+
+
+class SoakLengthAuthorityTests(unittest.TestCase):
+    def operator(self, hours, remaining_hours=None):
+        c = {**controller_config(), 'soakHours': hours}
+        if remaining_hours is not None:
+            c['stopAt'] = int(time.time() + remaining_hours * 3600)
+            c['createdAt'] = c['stopAt'] - (hours + 6) * 3600
+        operator = object.__new__(ops.Operator)
+        operator.config = c
+        operator.ownership = {'outputs': {'ControllerIpv4': c['controllerIpv4'], 'ControllerId': 'i-0123456789abcdef0',
+                                          'AllocationId': 'eipalloc-0123456789abcdef0'}}
+        return operator
+
+    def soak_gate(self, operator, hours):
+        gate = fake_gate(operator.config)
+        gate['runDir'] = '/var/lib/wharfie-soak/runs/soak-aws'
+        gate['run']['soak']['durationMs'] = hours * 3600000
+        return gate
+
+    def test_aws_soak_gate_requires_the_prepared_soak_length(self):
+        for hours, other in ((48, 72), (72, 48)):
+            with self.subTest(hours=hours):
+                operator = self.operator(hours)
+                operator.validate_gate(self.soak_gate(operator, hours), 'soak-aws')
+                with self.assertRaises(AssertionError):
+                    operator.validate_gate(self.soak_gate(operator, other), 'soak-aws')
+                operator.validate_gate(fake_gate(operator.config), 'rehearsal-aws')
+
+    def test_launch_freshness_follows_the_soak_length(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for hours in (48, 72):
+                for remaining, accepted in ((hours + 3.02, True), (hours + 2.98, False)):
+                    with self.subTest(hours=hours, remaining=remaining):
+                        operator = self.operator(hours, remaining)
+                        operator.config['operationsFiles'] = operations_files()
+                        operator.root = Path(directory)
+                        (operator.root / 'cloudformation.json').write_text('{}')
+                        operator.ownership['templateSha256'] = ops.sha256(operator.root / 'cloudformation.json')
+                        if accepted:
+                            operator.verify_local_bundle()
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, 'prepared-deadline-too-old'):
+                                operator.verify_local_bundle()
+
+    def test_external_stop_window_follows_the_soak_length(self):
+        def aws_for(operator):
+            c, outputs = operator.config, operator.ownership['outputs']
+            expected = datetime.fromtimestamp(c['stopAt'], timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+            def aws(service, action, request=None, **_options):
+                if (service, action) == ('scheduler', 'get-schedule'):
+                    return {'State': 'ENABLED', 'ScheduleExpression': 'at(' + expected + ')', 'Target': {
+                        'Input': json.dumps({'InstanceIds': [outputs['ControllerId']], 'Force': True}),
+                        'RoleArn': f"arn:aws:iam::{c['accountId']}:role/{c['campaignId']}-deadman",
+                        'Arn': 'arn:aws:scheduler:::aws-sdk:ec2:stopInstances'}}
+                assert (service, action) == ('ec2', 'describe-addresses')
+                return {'Addresses': [{'InstanceId': outputs['ControllerId'], 'PublicIp': outputs['ControllerIpv4']}]}
+            return aws
+        for hours in (48, 72):
+            with self.subTest(hours=hours):
+                fresh = self.operator(hours, hours + 3.02)
+                fresh.aws = aws_for(fresh)
+                fresh.verify_deadman()
+                stale = self.operator(hours, hours + 2.98)
+                stale.aws = aws_for(stale)
+                with self.assertRaisesRegex(RuntimeError, 'external-stop-deadline-invalid'):
+                    stale.verify_deadman()
+                other = self.operator(hours, hours + 5)
+                other.config['createdAt'] = other.config['stopAt'] - (120 - hours + 6) * 3600
+                other.aws = aws_for(other)
+                with self.assertRaisesRegex(RuntimeError, 'external-stop-deadline-invalid'):
+                    other.verify_deadman()
 
 
 if __name__ == '__main__':

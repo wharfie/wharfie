@@ -98,7 +98,7 @@ jobs:
       - run: npm ci
       - run: npm run test:ci
       - name: test operational soak controller
-        if: ${{ always() }}
+        if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: '1'
         run: python3 -m unittest discover -s scripts/soak-controller/tests
