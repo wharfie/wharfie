@@ -18,7 +18,7 @@ env:
 jobs:
   candidate:
     if: github.repository == 'wharfie/wharfie'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -50,7 +50,7 @@ jobs:
   build:
     if: github.repository == 'wharfie/wharfie'
     needs: candidate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -100,7 +100,7 @@ jobs:
   attest:
     if: github.repository == 'wharfie/wharfie'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -120,7 +120,7 @@ jobs:
   consumer:
     if: github.repository == 'wharfie/wharfie'
     needs: candidate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -152,7 +152,7 @@ jobs:
       github.ref_type == 'tag' &&
       vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
     needs: [attest, consumer]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     environment: npm-preview
     permissions:
@@ -196,7 +196,7 @@ jobs:
   registry-consumer:
     if: github.repository == 'wharfie/wharfie'
     needs: publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -228,7 +228,7 @@ jobs:
   draft-recipient:
     if: github.repository == 'wharfie/wharfie'
     needs: publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Include the bounded 15-minute download before the full candidate proof.
     timeout-minutes: 120
     # Draft listings require push access; the verifier strips credentials
@@ -281,7 +281,7 @@ jobs:
       github.ref_type == 'tag' &&
       vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
     needs: [publish, registry-consumer, draft-recipient]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     environment: npm-preview-promotion
     permissions:
@@ -323,7 +323,7 @@ jobs:
   public-recipient:
     if: github.repository == 'wharfie/wharfie'
     needs: finalize
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Download permits 15 minutes; retain time for smoke checks and the report.
     timeout-minutes: 30
     permissions:

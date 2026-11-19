@@ -30,7 +30,7 @@ jobs:
       github.repository == 'wharfie/wharfie' &&
       github.ref == 'refs/heads/master' &&
       vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     outputs:
       assets_name: ${{ steps.identity.outputs.assets_name }}
@@ -98,7 +98,7 @@ jobs:
   registry-consumer:
     if: github.repository == 'wharfie/wharfie'
     needs: download
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -131,7 +131,7 @@ jobs:
   draft-recipient:
     if: github.repository == 'wharfie/wharfie'
     needs: download
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     permissions:
       contents: read
@@ -188,7 +188,7 @@ jobs:
       github.ref == 'refs/heads/master' &&
       vars.WHARFIE_PREVIEW_PUBLISH_ENABLED == 'true'
     needs: [download, registry-consumer, draft-recipient]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     environment: npm-preview-promotion
     permissions:
@@ -234,7 +234,7 @@ jobs:
   public-recipient:
     if: github.repository == 'wharfie/wharfie'
     needs: finalize
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Download permits 15 minutes; retain time for smoke checks and the report.
     timeout-minutes: 30
     permissions:
