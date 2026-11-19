@@ -310,7 +310,9 @@ internal-only status of coordinator replacement.
   decoder on `master` (`decodeHetznerImage` in
   `src/core/runtime/providers/hetzner/api-documents.js`) still requires that
   field, so `preview` fails with "Hetzner API response document is invalid."
-  before anything is created. The fix is in progress and is not merged.
+  before anything is created. The fix is
+  [PR #175](https://github.com/wharfie/wharfie/pull/175); 0.0.17 is the first
+  release planned to carry it.
 - The November soak campaign for 0.0.16 failed at its Hetzner rehearsal for
   that reason. Its AWS rehearsal passed. Its controller was removed and
   verified absent on 2026-11-18. The campaign stays recorded as failed.

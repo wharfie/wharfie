@@ -49,8 +49,9 @@ failed for the reason above, so the campaign stopped there. It stays recorded as
 failed. A failed campaign is never resumed into a pass. Its controller was torn
 down and verified absent on 2026-11-18.
 
-A fix is in progress on branch `agent/hetzner-image-deprecation`. It is not
-merged. Nothing here claims it is done.
+The fix is [PR #175](https://github.com/wharfie/wharfie/pull/175). It was not
+merged when this checkpoint was written, and 0.0.17 is the first release planned
+to carry it.
 
 ## What merged since the last checkpoint
 
