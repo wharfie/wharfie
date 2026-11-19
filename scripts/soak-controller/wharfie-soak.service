@@ -1,0 +1,36 @@
+[Unit]
+Description=Fixed Wharfie AWS and Hetzner acceptance campaign
+After=network-online.target cloud-final.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/wharfie-soak/bootstrap-ready.json
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=wharfie-soak
+Group=wharfie-soak
+ExecStart=/usr/bin/python3 /opt/wharfie-soak/ops/supervisor.py
+WorkingDirectory=/opt/wharfie-soak/harness
+Environment=AWS_REGION=us-east-2
+Environment=AWS_DEFAULT_REGION=us-east-2
+Environment=HOME=/var/lib/wharfie-soak
+Environment=PATH=/opt/wharfie-soak/node/bin:/usr/bin:/bin
+UMask=0077
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=2400
+KillMode=control-group
+MemoryMax=7000M
+TasksMax=512
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/wharfie-soak
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

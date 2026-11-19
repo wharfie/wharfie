@@ -76,6 +76,10 @@ To perform just one observation from a scheduler, add `--step` to `--resume`.
 
 Keep the observing computer awake, online, and at the permitted public address,
 or arrange periodic resume invocations from that same controller environment.
+For a release campaign, the
+[unattended soak controller](../../scripts/soak-controller/README.md) runs both
+rehearsals and both full soaks against an exact candidate from one disposable
+EC2 controller, then settles cleanup and exports the proofs.
 An idle gap exceeding two observation intervals, measured from the previous
 resource sample to the next observation's start, fails the proof and triggers
 cleanup. Active observation work has its separate five-minute deadline.
