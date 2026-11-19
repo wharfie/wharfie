@@ -85,6 +85,18 @@ itself can prevent reporting; if it is killed during publication, the empty
 confirming no corresponding validation process is running, remove only that
 empty guard to allow future reports. Do not use recursive cleanup for a guard.
 
+## LMDB on macOS
+
+On macOS, LMDB coordinates processes that share a store through named POSIX
+semaphores. A sandbox that denies POSIX IPC, as some agent shells do, makes
+every store open fail with `Operation not permitted: Attempting to setup locks`.
+Run local suites outside such a sandbox. Before lmdb 3.5.8, any failed open
+also crashed the process instead of throwing: SIGABRT with an invalid free in
+`node.napi.node` on macOS, SIGSEGV on Linux. That is the native abort earlier
+local runs reported. Rarely, an open on macOS that races another process's
+close of the same store fails with `Invalid argument: Attempting to setup
+locks`. Linux keeps robust mutexes inside the lock file and does not show this.
+
 ## Disposable Linux service proof
 
 `npm run verify:remote-recovery:systemd:lima -- --snapshot` runs the focused
@@ -178,7 +190,7 @@ seam that requires them.
 | Scratch lint root | ESLint ignores `scratch/` for unsupported experiments. Maintained application fixtures have moved to `test/fixtures/apps/`, where they are linted and included in the test TypeScript program. Tests must not depend on scratch files. | Move a maintained test input into `test/fixtures/`, or a supported user example into `examples/`, before relying on it. |
 | Test lint rules | Files under `test/**` are still linted. Their override disables Jest assertion-count/conditional-test rules, dynamic-require rules, process-exit rules, and documentation requirements that conflict with fixtures and subprocess tests. | Remove each override when enabling that rule over all of `test/**` is clean and preserves the test's intended failure/readability boundary. |
 | SEA verifier typing | The program rooted at the exact files in `tsconfig.sea-verifier.json` uses `noImplicitAny: false` and `strictNullChecks: false`. Those roots and their verifier-only imports are procedural host/proof harnesses, not shipped runtime modules; library declaration checking remains enabled. | Remove each override when that exact program passes with its inherited value. New runtime code must live in a strict source program rather than expanding this exception. |
-| Native fixture declaration | Only the test TypeScript program maps the `lmdb` module to `test/types/lmdb-esm.d.ts`. The declaration checks the fixture's `open`, `get`, `put`, and `close` usage with unknown read values and explicit missing-value guards. LMDB 3.4.4's upstream declaration uses a CommonJS export assignment in an ESM package, which fails NodeNext checking. Runtime imports and the fixture's exact dependency lock are unchanged; `skipLibCheck` stays false. | Remove the test-only mapping when the pinned dependency supplies a valid NodeNext declaration, then check the fixture against that declaration. |
+| Native fixture declaration | Only the test TypeScript program maps the `lmdb` module to `test/types/lmdb-esm.d.ts`. The declaration checks the fixture's `open`, `get`, `put`, and `close` usage with unknown read values and explicit missing-value guards. LMDB 3.5.11's upstream declaration uses a CommonJS export assignment in an ESM package, which fails NodeNext checking. Runtime imports and the fixture's exact dependency lock are unchanged; `skipLibCheck` stays false. | Remove the test-only mapping when the pinned dependency supplies a valid NodeNext declaration, then check the fixture against that declaration. |
 | Extensionless CLI launcher | TypeScript cannot admit the extensionless npm bin file `bin/wharfie`. ESLint, CLI tests, and packed-install verification cover its import-and-error-forwarding wrapper. | Move any additional launcher logic into checked `src/` code. If the wrapper becomes more than delegation, rename it to JavaScript and update the package `bin` mapping so it enters typecheck and coverage. |
 | Native external test | `test/cli/app/kitchen-sink-native-externals.test.js` is opt-in during the ordinary Jest run and is authoritative through `npm run test:native`. | Fold it into the ordinary suite when every supported hosted runner can rebuild, load, close, and reopen the target-native dependency without host-specific process failure. |
 | Platform-conditioned tests | The conditional cases in `test/run-jest.test.js`, `test/cli/cmds/ops-resident-worker-command.test.js`, `test/cli/cmds/ops-workflow-sigkill.test.js`, `test/runtime/application-state-readiness-crash-subprocess.test.js`, `test/runtime/core-runtime-dependencies.test.js`, `test/runtime/deployment-aws-host-activation-persistence.test.js`, `test/runtime/local-service-session.test.js`, `test/runtime/managed-effect-crash-subprocess.test.js`, `test/runtime/managed-effect-settlement-crash.test.js`, `test/runtime/managed-effect-successor-crash-subprocess.test.js`, and `test/runtime/services/systemd-user-service-manager.test.js` run only on the POSIX or Linux hosts whose kernel behavior they assert. GitHub's Linux gate is authoritative for Linux cases. | Remove a condition when the behavior becomes platform-independent; add that platform to hosted CI before claiming its conditioned behavior. |

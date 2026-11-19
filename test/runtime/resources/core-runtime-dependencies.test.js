@@ -41,7 +41,7 @@ const TARGETS = [
       platform: 'darwin',
       architecture: 'arm64',
     },
-    packageCount: 10,
+    packageCount: 11,
   },
   {
     target: {
@@ -49,7 +49,7 @@ const TARGETS = [
       platform: 'darwin',
       architecture: 'x64',
     },
-    packageCount: 10,
+    packageCount: 11,
   },
   {
     target: {
@@ -58,7 +58,7 @@ const TARGETS = [
       architecture: 'arm64',
       libc: 'glibc',
     },
-    packageCount: 10,
+    packageCount: 11,
   },
   {
     target: {
@@ -67,7 +67,7 @@ const TARGETS = [
       architecture: 'x64',
       libc: 'glibc',
     },
-    packageCount: 10,
+    packageCount: 11,
   },
 ];
 
@@ -92,9 +92,9 @@ describe('CoreRuntimeDependenciesResource', () => {
       name: '@wharfie/core-lmdb-closure',
       version: '1.0.0',
       private: true,
-      dependencies: { lmdb: '3.4.4' },
+      dependencies: { lmdb: '3.5.11' },
     });
-    expect(locations).toHaveLength(21);
+    expect(locations).toHaveLength(22);
     expect(locations).toContain('node_modules/@lmdb/lmdb-linux-arm');
     expect(locations).toContain(
       'node_modules/@msgpackr-extract/msgpackr-extract-linux-arm',
@@ -106,7 +106,7 @@ describe('CoreRuntimeDependenciesResource', () => {
     }
     expect(
       sha256Base64Url(JSON.stringify(sortCanonicalJsonValue(coreLock))),
-    ).toBe('aTLcH6_nhkLpmYgXRHTGIzEhzZKgT4gQ_mE-SOBct4w');
+    ).toBe('UEt90QDiXgHoKDGsoVHKwGvhPcvATP1g8U8rMCrR5xQ');
   });
 
   it.each(TARGETS)(
@@ -122,20 +122,20 @@ describe('CoreRuntimeDependenciesResource', () => {
         activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
         buildTarget: target,
         dependencyLock,
-        externals: [{ name: 'lmdb', version: '3.4.4' }],
+        externals: [{ name: 'lmdb', version: '3.5.11' }],
       });
 
       expect(plan.plan.roots).toEqual([
         {
           name: 'lmdb',
-          version: '3.4.4',
+          version: '3.5.11',
           location: 'node_modules/lmdb',
         },
       ]);
       expect(plan.plan.packages).toHaveLength(packageCount);
       expect(plan.plan.packages).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ name: 'lmdb', version: '3.4.4' }),
+          expect.objectContaining({ name: 'lmdb', version: '3.5.11' }),
         ]),
       );
     },
@@ -175,7 +175,7 @@ describe('CoreRuntimeDependenciesResource', () => {
         );
         await fsp.writeFile(
           path.join(lmdbPath, 'package.json'),
-          JSON.stringify({ name: 'lmdb', version: '3.4.4' }),
+          JSON.stringify({ name: 'lmdb', version: '3.5.11' }),
         );
         await fsp.writeFile(
           path.join(lmdbPath, 'index.js'),
@@ -193,7 +193,7 @@ describe('CoreRuntimeDependenciesResource', () => {
           roots: [
             {
               name: 'lmdb',
-              version: '3.4.4',
+              version: '3.5.11',
               location: 'node_modules/lmdb',
             },
           ],
@@ -201,13 +201,13 @@ describe('CoreRuntimeDependenciesResource', () => {
             {
               location: 'node_modules/lmdb',
               name: 'lmdb',
-              version: '3.4.4',
-              resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.4.4.tgz',
+              version: '3.5.11',
+              resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.5.11.tgz',
               integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
               hasInstallScript: false,
               manifestContract: sortCanonicalJsonValue({
                 name: 'lmdb',
-                version: '3.4.4',
+                version: '3.5.11',
                 bundleDependencies: [],
                 hasInstallScript: false,
               }),
@@ -263,11 +263,11 @@ describe('CoreRuntimeDependenciesResource', () => {
               format: DEPENDENCY_LOCK_INPUT_FORMAT,
               digest: {
                 algorithm: 'sha256',
-                value: 'aTLcH6_nhkLpmYgXRHTGIzEhzZKgT4gQ_mE-SOBct4w',
+                value: 'UEt90QDiXgHoKDGsoVHKwGvhPcvATP1g8U8rMCrR5xQ',
               },
             },
           }),
-          externals: [{ name: 'lmdb', version: '3.4.4' }],
+          externals: [{ name: 'lmdb', version: '3.5.11' }],
         }),
       );
       expect(manifest).toEqual(receipt);

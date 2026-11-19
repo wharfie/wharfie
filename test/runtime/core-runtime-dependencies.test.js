@@ -184,7 +184,7 @@ async function makeClosureArchive(options = {}) {
   );
   await fsp.writeFile(
     path.join(lmdbPath, 'package.json'),
-    JSON.stringify({ name: 'lmdb', version: '3.4.4' }),
+    JSON.stringify({ name: 'lmdb', version: '3.5.11' }),
   );
   await fsp.writeFile(
     path.join(lmdbPath, 'index.js'),
@@ -241,7 +241,7 @@ async function makeMisdirectedPackageClosure(options = {}) {
       path.join(lmdbPath, 'package.json'),
       JSON.stringify({
         name: 'lmdb',
-        version: '3.4.4',
+        version: '3.5.11',
         dependencies: { 'ordered-binary': '1.0.0' },
       }),
     ),
@@ -286,7 +286,7 @@ async function makeMisdirectedPackageClosure(options = {}) {
     roots: [
       {
         name: 'lmdb',
-        version: '3.4.4',
+        version: '3.5.11',
         location: 'node_modules/lmdb',
       },
     ],
@@ -294,13 +294,13 @@ async function makeMisdirectedPackageClosure(options = {}) {
       {
         location: 'node_modules/lmdb',
         name: 'lmdb',
-        version: '3.4.4',
-        resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.4.4.tgz',
+        version: '3.5.11',
+        resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.5.11.tgz',
         integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
         hasInstallScript: false,
         manifestContract: sortCanonicalJsonValue({
           name: 'lmdb',
-          version: '3.4.4',
+          version: '3.5.11',
           dependencies: { 'ordered-binary': '1.0.0' },
           bundleDependencies: [],
           hasInstallScript: false,
@@ -395,6 +395,7 @@ async function makeInstalledLmdbClosureArchive(options = {}) {
   const msgpackrExtractNativePackage = `@msgpackr-extract/msgpackr-extract-${target.platform}-${target.architecture}`;
   const packagePaths = [
     'node_modules/lmdb',
+    'node_modules/@harperfast/extended-iterable',
     'node_modules/lmdb/node_modules/node-addon-api',
     'node_modules/msgpackr',
     'node_modules/msgpackr-extract',
@@ -455,7 +456,7 @@ function makeMinimalPlan() {
     roots: [
       {
         name: 'lmdb',
-        version: '3.4.4',
+        version: '3.5.11',
         location: 'node_modules/lmdb',
       },
     ],
@@ -463,13 +464,13 @@ function makeMinimalPlan() {
       {
         location: 'node_modules/lmdb',
         name: 'lmdb',
-        version: '3.4.4',
-        resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.4.4.tgz',
+        version: '3.5.11',
+        resolved: 'https://registry.npmjs.org/lmdb/-/lmdb-3.5.11.tgz',
         integrity: `sha512-${Buffer.alloc(64).toString('base64')}`,
         hasInstallScript: false,
         manifestContract: sortCanonicalJsonValue({
           name: 'lmdb',
-          version: '3.4.4',
+          version: '3.5.11',
           bundleDependencies: [],
           hasInstallScript: false,
         }),
@@ -488,7 +489,7 @@ async function makeInstalledLmdbClosurePlan() {
       activity: CORE_RUNTIME_DEPENDENCY_ACTIVITY,
       buildTarget: currentTarget(),
       dependencyLock: await getCoreLmdbDependencyLock(),
-      externals: [{ name: 'lmdb', version: '3.4.4' }],
+      externals: [{ name: 'lmdb', version: '3.5.11' }],
     })
   ).plan;
 }
@@ -506,7 +507,7 @@ function makeAssets(archive, plan = makeMinimalPlan()) {
     kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
     purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
     target,
-    roots: [{ name: 'lmdb', version: '3.4.4' }],
+    roots: [{ name: 'lmdb', version: '3.5.11' }],
     dependencyLockInput: plan.lock,
     closureDigest,
     plan,
@@ -548,7 +549,7 @@ function makeUncheckedAssets(archive, plan) {
     kind: CORE_RUNTIME_DEPENDENCY_ASSET_KIND,
     purpose: CORE_RUNTIME_DEPENDENCY_PURPOSE,
     target: currentTarget(),
-    roots: [{ name: 'lmdb', version: '3.4.4' }],
+    roots: [{ name: 'lmdb', version: '3.5.11' }],
     dependencyLockInput: plan.lock,
     closureDigest,
     plan,
