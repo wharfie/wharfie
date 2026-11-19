@@ -1,6 +1,6 @@
 {
   "name": "@wharfie/wharfie",
-  "version": "0.0.16",
+  "version": "0.0.17",
   "description": "Experimental toolkit for building TypeScript CLIs and packaging them as portable Node SEA executables",
   "private": false,
   "type": "module",
@@ -237,7 +237,7 @@
     }
   },
   "devDependencies": {
-    "@wharfie/aws": "0.0.16",
+    "@wharfie/aws": "0.0.17",
     "@babel/eslint-parser": "^7.28.5",
     "@babel/plugin-syntax-import-attributes": "^7.27.1",
     "@jest/globals": "^30.4.1",
@@ -257,7 +257,7 @@
     "npm-install-checks": "8.0.0"
   },
   "peerDependencies": {
-    "@wharfie/aws": "0.0.16"
+    "@wharfie/aws": "0.0.17"
   },
   "peerDependenciesMeta": {
     "@wharfie/aws": {
