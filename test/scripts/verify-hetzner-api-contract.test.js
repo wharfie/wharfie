@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+
 import { describe, expect, it } from '@jest/globals';
 
 import { createHetznerApiClientForTest } from '../../src/core/runtime/providers/hetzner/api-client.js';
@@ -52,17 +55,41 @@ function productionImage(overrides = {}) {
   };
 }
 
+/** @param {string} name @param {boolean} available */
+function serverType(name, available) {
+  return {
+    id: { cx23: 114, cpx12: 108, cpx22: 109 }[name],
+    name,
+    architecture: 'x86',
+    cores: 1,
+    memory: 2,
+    disk: 40,
+    deprecation: null,
+    locations: [
+      { id: 1, name: 'fsn1', available, recommended: false, deprecation: null },
+    ],
+  };
+}
+
 /**
- * @param {{images?: any[], available?: boolean}} [options] - Catalog variations.
+ * @param {{images?: any[], serverTypes?: any[], requests?: {method: string, url: URL}[]}} [options] - Catalog variations.
  * @returns {Readonly<Record<string, Function>>} - Read client over a fake API.
  */
-function clientFor({ images = [productionImage()], available = true } = {}) {
+function clientFor({
+  images = [productionImage()],
+  serverTypes = [serverType('cx23', false), serverType('cpx12', true)],
+  requests = [],
+} = {}) {
   return createHetznerApiClientForTest({
     token: 'hcloud-test-token',
     baseUrl: 'https://api.example.test/v1',
     maxGetAttempts: 1,
     waitForRetry: async () => {},
-    fetchImplementation: async (/** @type {string} */ url) => {
+    fetchImplementation: async (
+      /** @type {string} */ url,
+      /** @type {RequestInit} */ init,
+    ) => {
+      requests.push({ method: String(init.method), url: new URL(url) });
       const { pathname } = new URL(url);
       if (pathname.endsWith('/locations')) {
         return listResponse('locations', [
@@ -76,26 +103,7 @@ function clientFor({ images = [productionImage()], available = true } = {}) {
         ]);
       }
       if (pathname.endsWith('/server_types')) {
-        return listResponse('server_types', [
-          {
-            id: 108,
-            name: 'cpx12',
-            architecture: 'x86',
-            cores: 1,
-            memory: 2,
-            disk: 40,
-            deprecation: null,
-            locations: [
-              {
-                id: 1,
-                name: 'fsn1',
-                available,
-                recommended: false,
-                deprecation: null,
-              },
-            ],
-          },
-        ]);
+        return listResponse('server_types', serverTypes);
       }
       if (pathname.endsWith('/images')) return listResponse('images', images);
       throw new Error('unexpected Hetzner contract endpoint');
@@ -103,26 +111,61 @@ function clientFor({ images = [productionImage()], available = true } = {}) {
   });
 }
 
+const SCRIPT = path.join(
+  process.cwd(),
+  'scripts',
+  'verify-hetzner-api-contract.js',
+);
+
+/** @param {Record<string, string>} env - Exact child environment. */
+function runScript(env) {
+  return spawnSync(process.execPath, [SCRIPT], {
+    env: { PATH: process.env.PATH ?? '', ...env },
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+}
+
 describe('verify-hetzner-api-contract', () => {
-  it('passes against the production catalog shape without `deprecated`', async () => {
+  it('passes against the production catalog shape with GET-only planner reads', async () => {
+    /** @type {{method: string, url: URL}[]} */
+    const requests = [];
     await expect(
-      checkHetznerApiContract({ api: clientFor(), location: 'fsn1' }),
+      checkHetznerApiContract({
+        api: clientFor({ requests }),
+        location: 'fsn1',
+      }),
     ).resolves.toEqual({
       format: 'wharfie-hetzner-api-contract',
       version: 1,
       location: 'fsn1',
       reads: {
         locations: { decoded: true, count: 1 },
-        serverTypes: { decoded: true, count: 1 },
+        serverTypes: { decoded: true, count: 2 },
         images: { decoded: true, count: 1 },
       },
       selection: {
         location: 'fsn1',
-        availableSmallServerTypes: ['cpx12'],
-        currentImages: [{ id: 161547269, name: 'ubuntu-24.04' }],
+        serverType: 'cpx12',
+        image: { id: 161547269, name: 'ubuntu-24.04' },
       },
       result: 'passed',
     });
+    expect(requests.map(({ method }) => method)).toEqual(['GET', 'GET', 'GET']);
+    const imageQuery = requests.find(({ url }) =>
+      url.pathname.endsWith('/images'),
+    )?.url.searchParams;
+    expect(Object.fromEntries(imageQuery ?? [])).toMatchObject({
+      name: 'ubuntu-24.04',
+      type: 'system',
+      architecture: 'x86',
+      include_deprecated: 'false',
+    });
+    expect(
+      requests
+        .find(({ url }) => url.pathname.endsWith('/locations'))
+        ?.url.searchParams.get('name'),
+    ).toBe('fsn1');
   });
 
   it('fails with the fixed decoder error when image deprecation evidence is missing', async () => {
@@ -133,15 +176,17 @@ describe('verify-hetzner-api-contract', () => {
     });
 
     expect(report.result).toBe('failed');
+    expect(report.selection).toBeNull();
     expect(report.reads.images).toEqual({
       decoded: false,
       error: 'Hetzner API response document is invalid.',
     });
   });
 
-  it('fails when the only image is deprecated or no small type is available', async () => {
-    const deprecated = await checkHetznerApiContract({
-      api: clientFor({
+  it.each([
+    [
+      'the only image is deprecated',
+      {
         images: [
           productionImage({
             deprecation: {
@@ -150,17 +195,50 @@ describe('verify-hetzner-api-contract', () => {
             },
           }),
         ],
-      }),
-      location: 'fsn1',
-    });
-    const unavailable = await checkHetznerApiContract({
-      api: clientFor({ available: false }),
-      location: 'fsn1',
-    });
+      },
+      /exactly one current image/u,
+    ],
+    [
+      'no small type is available',
+      { serverTypes: [serverType('cpx12', false)] },
+      /No supported small x86/u,
+    ],
+    [
+      'a server type name is ambiguous',
+      {
+        serverTypes: [
+          serverType('cx23', true),
+          { ...serverType('cx23', true), id: 999 },
+        ],
+      },
+      /provider-ambiguous/u,
+    ],
+  ])(
+    'fails with the planner selection error when %s',
+    async (_name, options, error) => {
+      const report = await checkHetznerApiContract({
+        api: clientFor(options),
+        location: 'fsn1',
+      });
 
-    expect(deprecated.selection.currentImages).toEqual([]);
-    expect(deprecated.result).toBe('failed');
-    expect(unavailable.selection.availableSmallServerTypes).toEqual([]);
-    expect(unavailable.result).toBe('failed');
+      expect(report.result).toBe('failed');
+      expect(report.selection).toBeNull();
+      expect(report.selectionError).toMatch(error);
+    },
+  );
+
+  it('exits cleanly without a usable token and never makes a request', () => {
+    const missing = runScript({});
+    const malformed = runScript({ HCLOUD_TOKEN: ' not-a-trimmed-token ' });
+
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toBe(
+      'verify:hetzner:contract requires HCLOUD_TOKEN.\n',
+    );
+    expect(malformed.status).toBe(2);
+    expect(malformed.stderr).toBe(
+      'verify:hetzner:contract could not create a read client: Hetzner API client options are invalid.\n',
+    );
+    expect(malformed.stdout).toBe('');
   });
 });

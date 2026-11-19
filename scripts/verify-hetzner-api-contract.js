@@ -4,11 +4,16 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { createHetznerPreviewApiClient } from '../src/core/runtime/providers/hetzner/api-client.js';
-import { HETZNER_SMALL_SERVER_TYPE_CANDIDATES } from '../src/core/runtime/providers/hetzner/single-node-plan.js';
+import {
+  selectImage,
+  selectLocation,
+  selectServerType,
+} from '../src/core/runtime/providers/hetzner/single-node-plan.js';
 
 // Read-only check that the catalog reads behind Hetzner `deployment preview`
-// and a first `deployment apply` still decode against the live API. Uses the
-// GET-only preview client with the planner's exact list filters.
+// and a first `deployment apply` still decode against the live API and still
+// select a location, server type, and image. Uses the GET-only preview client
+// with the planner's exact list filters and the planner's own selectors.
 
 /**
  * @param {string} name - Read label.
@@ -33,7 +38,7 @@ async function read(name, request) {
  * @returns {Promise<Readonly<Record<string, any>>>} - Secret-free contract report.
  */
 export async function checkHetznerApiContract({ api, location }) {
-  const [locations, serverTypes, images] = await Promise.all([
+  const reads = await Promise.all([
     read('locations', () => api.listLocations({ name: location })),
     read('serverTypes', () => api.listServerTypes()),
     read('images', () =>
@@ -45,66 +50,40 @@ export async function checkHetznerApiContract({ api, location }) {
       }),
     ),
   ]);
-  const matchedLocations = locations.decoded
-    ? locations.value.filter(
-        (/** @type {any} */ candidate) => candidate.name === location,
-      )
-    : [];
-  const target = matchedLocations.length === 1 ? matchedLocations[0] : null;
-  const availableSmallServerTypes =
-    serverTypes.decoded && target !== null
-      ? HETZNER_SMALL_SERVER_TYPE_CANDIDATES.filter((name) =>
-          serverTypes.value.some(
-            (/** @type {any} */ type) =>
-              type.name === name &&
-              type.architecture === 'x86' &&
-              type.locations.some(
-                (/** @type {any} */ entry) =>
-                  entry.id === target.id &&
-                  entry.available === true &&
-                  entry.deprecation === null,
-              ),
-          ),
-        )
-      : [];
-  const currentImages = images.decoded
-    ? images.value.filter(
-        (/** @type {any} */ image) =>
-          image.name === 'ubuntu-24.04' &&
-          image.type === 'system' &&
-          image.status === 'available' &&
-          image.architecture === 'x86' &&
-          image.osFlavor === 'ubuntu' &&
-          image.osVersion === '24.04' &&
-          image.deprecation === null,
-      )
-    : [];
-  const passed =
-    [locations, serverTypes, images].every((outcome) => outcome.decoded) &&
-    target !== null &&
-    availableSmallServerTypes.length > 0 &&
-    currentImages.length === 1;
+  const [locations, serverTypes, images] = reads;
+  let selection = null;
+  let selectionError = null;
+  if (reads.every((outcome) => outcome.decoded)) {
+    try {
+      const target = selectLocation(locations.value, location);
+      const serverType = selectServerType(serverTypes.value, target);
+      const image = selectImage(images.value);
+      selection = {
+        location: target.name,
+        serverType: serverType.name,
+        image: { id: image.id, name: image.name },
+      };
+    } catch (error) {
+      // Planner selection errors are fixed messages without provider data.
+      selectionError =
+        error instanceof Error ? error.message : 'unknown failure';
+    }
+  }
   return Object.freeze({
     format: 'wharfie-hetzner-api-contract',
     version: 1,
     location,
     reads: Object.fromEntries(
-      [locations, serverTypes, images].map((outcome) => [
+      reads.map((outcome) => [
         outcome.name,
         outcome.decoded
           ? { decoded: true, count: outcome.value.length }
           : { decoded: false, error: outcome.error },
       ]),
     ),
-    selection: {
-      location: target?.name ?? null,
-      availableSmallServerTypes,
-      currentImages: currentImages.map((/** @type {any} */ image) => ({
-        id: image.id,
-        name: image.name,
-      })),
-    },
-    result: passed ? 'passed' : 'failed',
+    selection,
+    ...(selectionError === null ? {} : { selectionError }),
+    result: selection === null ? 'failed' : 'passed',
   });
 }
 
@@ -119,8 +98,21 @@ export async function main() {
     process.exitCode = 2;
     return;
   }
+  let api;
+  try {
+    api = createHetznerPreviewApiClient({ token });
+  } catch (error) {
+    // The client rejects malformed tokens with a fixed message.
+    process.stderr.write(
+      `verify:hetzner:contract could not create a read client: ${
+        error instanceof Error ? error.message : 'unknown failure'
+      }\n`,
+    );
+    process.exitCode = 2;
+    return;
+  }
   const report = await checkHetznerApiContract({
-    api: createHetznerPreviewApiClient({ token }),
+    api,
     location: /** @type {string} */ (values.location),
   });
   process.stdout.write(
