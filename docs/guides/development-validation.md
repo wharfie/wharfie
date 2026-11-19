@@ -87,15 +87,19 @@ empty guard to allow future reports. Do not use recursive cleanup for a guard.
 
 ## LMDB on macOS
 
-On macOS, LMDB coordinates processes that share a store through named POSIX
-semaphores. A sandbox that denies POSIX IPC, as some agent shells do, makes
+On macOS, LMDB coordinates processes that share a store through System V
+semaphores. A sandbox that denies System V IPC, as some agent shells do, makes
 every store open fail with `Operation not permitted: Attempting to setup locks`.
 Run local suites outside such a sandbox. Before lmdb 3.5.8, any failed open
 also crashed the process instead of throwing: SIGABRT with an invalid free in
 `node.napi.node` on macOS, SIGSEGV on Linux. That is the native abort earlier
 local runs reported. Rarely, an open on macOS that races another process's
 close of the same store fails with `Invalid argument: Attempting to setup
-locks`. Linux keeps robust mutexes inside the lock file and does not show this.
+locks`. One Linux arm64 probe of the same open/close pattern did not show that
+error; Linux keeps robust mutexes inside the lock file instead. Linux is still
+affected when one process opens and closes a store while others write to it:
+[lmdb-js #370](https://github.com/kriszyp/lmdb-js/issues/370), which is still
+open, reports lost writes, `MDB_PROBLEM` errors, and SIGSEGV on Linux x64.
 
 ## Disposable Linux service proof
 
