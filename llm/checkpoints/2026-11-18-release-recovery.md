@@ -28,7 +28,7 @@ priorities in [ROADMAP.md](../../ROADMAP.md) are unchanged.
 | Held release run | The `v0.0.16` release run built and attested its candidate, then stopped at the `publish` job. It has waited for `npm-preview` approval since November 5 and times out by itself. It should not be approved. |
 | Hetzner route | Broken in 0.0.15 and 0.0.16. See below. |
 | Operational soak | None has completed. September stopped after about fifteen hours for a reason never established. November failed at the Hetzner rehearsal. |
-| Cloud | The AWS account has no instances or Elastic IPs from this work. The November controller was deleted and verified absent. The Hetzner project is empty. Two private proof buckets are retained on purpose. |
+| Cloud | The November controller stack is `DELETE_COMPLETE` and its instance is terminated. The post-teardown observation on 2026-11-18 found no controller volumes, no Elastic IPs, no campaign security groups, and no active instances in the region. Two private proof buckets are retained on purpose. The Hetzner project is empty (plan, not receipts). |
 | Soak tooling | The controller that runs soaks unattended exists only in a gitignored directory on one laptop. It is not in the repository. It has a known defect in how it handles a run that failed before creating anything. |
 | Docs | `https://docs.wharfie.dev/` serves the v0.0.15 page through CloudFront. PR #171 is an open draft that would move hosting to an S3 website behind Cloudflare. |
 | Issues and PRs | Seven open issues (#126, #127, #128, #131, #132, #136, #137). One open PR (#171). |
@@ -87,8 +87,15 @@ maintainer. Nothing in this checkpoint authorizes them.
 ## Evidence limits
 
 - The npm dist-tags and the `v0.0.16` tag were read on 2026-11-18. The held run
-  and cloud state are as recorded in the plan, verified on the same date; they
-  are not reproducible from the repository.
+  and the Hetzner project state are as recorded in the plan; they are not
+  reproducible from the repository.
+- The teardown evidence is in ignored files in the maintainer's main checkout:
+  `tmp/wharfie-release-20261104/teardown-20261118/teardown-receipt.json` and
+  `post-teardown-observation.json`. The receipt records campaign status
+  `failed`, the Hetzner rehearsal failing at phase `preview` with
+  `cleanupStatus` `not-created`, and the campaign controller deleted with the
+  proof bucket retained. The observation shows the stack and instance gone and
+  the retained buckets present. The AWS rehearsal result is from the plan only.
 - No soak receipts exist for any release. The September and November campaign
   evidence is outside the repository, in ignored local directories and two
   retained private buckets.
