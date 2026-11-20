@@ -15,6 +15,7 @@ import { describe, expect, test } from '@jest/globals';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SRC = join(REPO_ROOT, 'src');
+const SCRIPTS = join(REPO_ROOT, 'scripts');
 
 /** @param {string} directory @returns {string[]} */
 function sourceFiles(directory) {
@@ -25,11 +26,11 @@ function sourceFiles(directory) {
   });
 }
 
-/** @param {RegExp} pattern @returns {Record<string, number>} */
-function countBySourceFile(pattern) {
+/** @param {RegExp} pattern @param {string} [root] @returns {Record<string, number>} */
+function countBySourceFile(pattern, root = SRC) {
   /** @type {Record<string, number>} */
   const counts = {};
-  for (const file of sourceFiles(SRC)) {
+  for (const file of sourceFiles(root)) {
     const matches = readFileSync(file, 'utf8').match(pattern);
     if (matches) counts[relative(REPO_ROOT, file)] = matches.length;
   }
@@ -137,5 +138,48 @@ describe('LMDB open choke point', () => {
     expect(countBySourceFile(/\bonStoreHeld: 'wait'/g)).toEqual({
       'src/core/runtime/services/ledger-service-command.js': 1,
     });
+  });
+
+  test('verifier scripts open installed stores only at the reviewed sites', () => {
+    // Scripts load the installed package's LMDB adapter directly, outside
+    // db.js, so each site is reviewed against the one-holder rule here.
+    expect(
+      countBySourceFile(/adapters\/lmdb\.js'|'adapters', 'lmdb\.js'/g, SCRIPTS),
+    ).toEqual({
+      'scripts/application-state-readiness-proof.js': 1,
+      'scripts/verify-package-sea.js': 2,
+      'scripts/verify-systemd-user-service-linux.js': 1,
+    });
+    expect(
+      countBySourceFile(
+        /\b(?:adapterModule|adapter|modules\.adapter)\.default\b/g,
+        SCRIPTS,
+      ),
+    ).toEqual({
+      // Live READY proof: reads the control and application-state stores
+      // while the SEA resident runs. The application-state store has no read
+      // host, so this is a known verifier-only #370 exposure, a few opens
+      // per run. Remove it by hosting that store too.
+      'scripts/application-state-readiness-proof.js': 1,
+      // openInstalledStore, its only adapter calls: under the holder lock;
+      // without it only beside a process this verifier holds paused, or for
+      // the application-state store, which has no read host, beside a live
+      // holder (counted and printed). Fixture reads go through the control
+      // reader and fixture writes through a live holder's host, else here.
+      'scripts/verify-package-sea.js': 3,
+      // Linux systemd verifier: the same live READY proof as above, for the
+      // control and application-state stores of a running service.
+      'scripts/verify-systemd-user-service-linux.js': 2,
+    });
+    expect(countBySourceFile(/\bholderLock: true\b/g, SCRIPTS)).toEqual({
+      'scripts/verify-package-sea.js': 1,
+    });
+    // The generated test app's own LMDB data, not a Wharfie store.
+    expect(
+      countBySourceFile(
+        /from 'lmdb'|require\('lmdb'\)|import\('lmdb'\)/g,
+        SCRIPTS,
+      ),
+    ).toEqual({ 'scripts/verify-package-sea.js': 1 });
   });
 });

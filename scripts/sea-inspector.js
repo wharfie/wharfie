@@ -414,10 +414,27 @@ export function hasSeaProcessPausedByInspector() {
   return pausedSessions.size > 0;
 }
 
+/**
+ * @param {number} processId - Candidate process.
+ * @returns {boolean} - Whether this verifier holds that process paused.
+ */
+export function isSeaProcessPausedByInspector(processId) {
+  for (const session of pausedSessions) {
+    if (/** @type {{processId?: number}} */ (session).processId === processId) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Chrome DevTools Protocol session over Node's inspector WebSocket. */
 class InspectorProtocolSession {
-  /** @param {string} url - Inspector WebSocket URL. */
-  constructor(url) {
+  /**
+   * @param {string} url - Inspector WebSocket URL.
+   * @param {number} [processId] - Inspected process, for pause tracking.
+   */
+  constructor(url, processId) {
+    this.processId = processId;
     const WebSocketClient = globalThis.WebSocket;
     if (typeof WebSocketClient !== 'function') {
       throw new Error('This verifier requires the built-in WebSocket client.');
@@ -600,14 +617,14 @@ class InspectorProtocolSession {
 
 /**
  * Attach to a --inspect-brk process and expose source-mapped breakpoints.
- * @param {{inspectorUrl: Promise<string>}} processHandle - Paused process.
+ * @param {{inspectorUrl: Promise<string>, child?: {pid?: number}}} processHandle - Paused process.
  * @param {{timeoutMs?: number}} [options] - Protocol timeout.
  * @returns {Promise<{setSourceBreakpoint: (name: string, target: {sourceSuffix: string, anchor: string, occurrence?: number, expectedSourceContent?: string}) => Promise<{name: string, breakpointId: string, breakpointIds: string[], source: string, originalLine: number, originalColumn: number, generatedLine: number, generatedColumn: number}>, resume: () => Promise<void>, waitForPause: () => Promise<Record<string, any>>, close: () => void}>} - Inspector controller.
  */
 export async function attachSeaInspector(processHandle, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const url = await processHandle.inspectorUrl;
-  const session = new InspectorProtocolSession(url);
+  const session = new InspectorProtocolSession(url, processHandle.child?.pid);
   /** @type {{scriptId: string, sourceMap: Record<string, any>} | undefined} */
   let bundle;
   try {
