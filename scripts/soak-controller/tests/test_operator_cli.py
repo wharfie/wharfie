@@ -1,4 +1,5 @@
 import contextlib
+import http.server
 import io
 import json
 import os
@@ -8,6 +9,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -120,6 +122,60 @@ class OperatorCliTests(unittest.TestCase):
         with mock.patch.object(ops.subprocess, 'run', side_effect=execute):
             with self.assertRaises(ops.AwsError):
                 self.operator.aws('ssm', 'put-parameter', {'Value': secret})
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    @unittest.skipUnless(shutil.which('aws'), 'AWS CLI parser is not installed')
+    def test_secret_stdin_reaches_the_real_cli_request_without_argv_or_disk(self):
+        # A loopback-only fake endpoint records the request the installed CLI
+        # builds. No AWS endpoint, signing, credentials, or cloud operation.
+        secret = 'test-only-value-that-must-not-enter-argv-or-disk'
+        received = []
+        root = self.root
+
+        class Endpoint(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers['Content-Length']))
+                on_disk = [path.read_bytes() for path in root.rglob('*') if path.is_file()]
+                received.append((json.loads(body), on_disk))
+                reply = b'{"Version":1,"Tier":"Standard"}'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-amz-json-1.1')
+                self.send_header('Content-Length', str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+
+            def log_message(self, *_arguments):
+                pass
+
+        server = http.server.HTTPServer(('127.0.0.1', 0), Endpoint)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        real_run = subprocess.run
+        commands = []
+
+        def execute(command, **kwargs):
+            self.assertFalse(any(secret in argument for argument in command))
+            commands.append(command)
+            command = command + ['--endpoint-url', 'http://127.0.0.1:%d' % server.server_port,
+                                 '--no-sign-request']
+            kwargs['env'].update(AWS_MAX_ATTEMPTS='1', AWS_EC2_METADATA_DISABLED='true',
+                                 NO_PROXY='127.0.0.1', no_proxy='127.0.0.1')
+            return real_run(command, **kwargs)
+
+        with mock.patch.object(ops.subprocess, 'run', side_effect=execute):
+            self.operator.aws('ssm', 'put-parameter', {
+                'Name': '/wharfie-soak/fixture/hetzner-token', 'Type': 'SecureString',
+                'Tier': 'Standard', 'Overwrite': False}, timeout=30,
+                extra=('--value', 'file:///dev/stdin'), secret_stdin=secret.encode())
+        request, on_disk = received[0]
+        self.assertEqual(request['Value'], secret)
+        self.assertEqual(request['Name'], '/wharfie-soak/fixture/hetzner-token')
+        self.assertIs(request['Overwrite'], False)
+        # The nonsecret request file exists while the CLI runs; the secret never does.
+        self.assertEqual(len(on_disk), 1)
+        self.assertNotIn(secret.encode(), on_disk[0])
+        self.assertIn('file:///dev/stdin', commands[0])
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_inactive_start_does_not_reset_unloaded_unit(self):
