@@ -703,7 +703,10 @@ describe('local durable activity host coordinator authority', () => {
         /** @type {any} */ options,
       ) => {
         order.push('control-open');
-        expect(options).toEqual({ configuration: CONTROL_CONFIGURATION });
+        expect(options).toEqual({
+          configuration: CONTROL_CONFIGURATION,
+          hostReads: true,
+        });
         try {
           return await handler(unboundLedger, CONTROL_CONTEXT);
         } finally {
