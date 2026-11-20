@@ -1,18 +1,21 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { open, writeFile } from 'node:fs/promises';
+import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MAX_BODY = 256 * 1024;
 const QUERY = '?wharfie-docs-check=wharfie-private-query-probe';
-const GUIDES = 'https://github.com/wharfie/wharfie/blob/master/docs/guides/';
-const CLOUDFRONT = /^d[a-z0-9]+\.cloudfront\.net$/u;
+const PUBLIC_URL = 'https://docs.wharfie.dev/';
+const ORIGIN_URL =
+  'http://wharfie-docs-411430101559-us-east-1.s3-website-us-east-1.amazonaws.com/';
 
-/** @typedef {{method: string, path: string, status: number, guide?: string, providerRejection?: boolean}} Check */
+/** @typedef {{method: string, path: string, status: number, document: 'index.html' | '404.html', privateRelease?: boolean}} Check */
 /** @typedef {{statusCode: number, headers: import('node:http').IncomingHttpHeaders, body: Buffer}} Response */
-/** @typedef {{url: string, bundleDir: string, connectHost?: string}} Options */
+/** @typedef {{url: string, bundleDir: string}} Options */
+/** @typedef {{sha256: string, size: number}} Reference */
 
 /**
  * Read a bounded reference file before making any network requests.
@@ -43,27 +46,28 @@ async function readBounded(file, limit) {
 }
 
 /**
- * Perform one HTTPS request without redirects, decompression, or credential input.
- * @param {URL} url - Validated public URL.
- * @param {string} connectHost - Validated TCP destination.
+ * Request a fixed public route without redirects, decompression, or credentials.
+ * @param {URL} url - Validated docs HTTPS or public S3 website HTTP endpoint.
  * @param {Check} check - Fixed request route.
- * @param {typeof https.request} request - Injectable HTTPS transport.
+ * @param {typeof https.request} request - Injectable transport.
  * @returns {Promise<Response>} Bounded response.
  */
-async function fetchResponse(url, connectHost, check, request) {
+async function fetchResponse(url, check, request) {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 10_000);
   try {
     const response = await new Promise((resolve, reject) => {
       const req = request(
         {
-          hostname: connectHost,
-          servername: url.hostname,
-          port: 443,
+          protocol: url.protocol,
+          hostname: url.hostname,
+          port: url.protocol === 'https:' ? 443 : 80,
+          ...(url.protocol === 'https:'
+            ? { servername: url.hostname, rejectUnauthorized: true }
+            : {}),
           method: check.method,
           path: check.path,
           headers: { host: url.hostname, 'accept-encoding': 'identity' },
-          rejectUnauthorized: true,
           agent: false,
           signal: abort.signal,
         },
@@ -95,158 +99,123 @@ async function fetchResponse(url, connectHost, check, request) {
 }
 
 /**
- * Construct a fixed, finite public route acceptance set.
- * @returns {Check[]} GET/HEAD and method-control checks.
+ * @param {string} releaseKey - Bound, private release object.
+ * @returns {Check[]} Finite static website acceptance routes.
  */
-function routes() {
-  const checks = [];
+function routes(releaseKey) {
+  const checks = /** @type {Check[]} */ ([]);
   for (const uri of ['/', '/index.html']) {
     for (const method of ['GET', 'HEAD']) {
       for (const query of ['', QUERY])
-        checks.push({ method, path: uri + query, status: 200 });
-    }
-  }
-  for (const [uri, guide] of [
-    ['/install', 'installation.md'],
-    ['/quickstart', 'recipient-preview.md'],
-    ['/project-structure', 'application-structure.md'],
-  ]) {
-    for (const suffix of ['', '/', '.html']) {
-      for (const query of ['', QUERY])
         checks.push({
-          method: 'GET',
-          path: uri + suffix + query,
-          status: 302,
-          guide,
+          method,
+          path: uri + query,
+          status: 200,
+          document: 'index.html',
         });
     }
   }
+  for (const method of ['GET', 'HEAD'])
+    checks.push({
+      method,
+      path: '/404.html',
+      status: 200,
+      document: '404.html',
+    });
+  for (const uri of ['/install', '/quickstart', '/project-structure']) {
+    for (const suffix of ['', '/', '.html'])
+      checks.push({
+        method: 'GET',
+        path: uri + suffix + QUERY,
+        status: 403,
+        document: '404.html',
+      });
+  }
   for (const uri of ['/install.sh', '/install.ps1']) {
     for (const method of ['GET', 'HEAD'])
-      checks.push({ method, path: uri + QUERY, status: 410 });
+      checks.push({
+        method,
+        path: uri + QUERY,
+        status: 403,
+        document: '404.html',
+      });
   }
-  for (const uri of [
-    '/unknown',
-    '/quickstart/child',
-    '/install.sh/extra',
-    '/%69ndex.html',
-    '/unknown' + QUERY,
-  ]) {
-    checks.push({ method: 'GET', path: uri, status: 404 });
-  }
-  checks.push({
-    method: 'GET',
-    path: '/%2e%2e/install' + QUERY,
-    status: 400,
-    providerRejection: true,
-  });
-  checks.push({ method: 'POST', path: '/' + QUERY, status: 405 });
+  for (const uri of ['/unknown', '/quickstart/child', '/install.sh/extra'])
+    checks.push({
+      method: 'GET',
+      path: uri + QUERY,
+      status: 403,
+      document: '404.html',
+    });
+  for (const method of ['GET', 'HEAD'])
+    checks.push({
+      method,
+      path: '/' + releaseKey + QUERY,
+      status: 403,
+      document: '404.html',
+      privateRelease: true,
+    });
   return checks;
 }
 
 /**
- * Check public response semantics without retaining response bodies.
- * @param {Check} check - Expected route contract.
- * @param {Response} response - Bounded HTTPS response.
- * @param {string} expectedHash - Prepared landing page SHA-256.
- * @param {number} expectedSize - Prepared landing page byte length.
+ * Validate public semantics without retaining remote bodies or headers.
+ * @param {Check} check - Expected static route contract.
+ * @param {Response} response - Bounded public response.
+ * @param {Reference} reference - Prepared document identity.
  * @returns {string | undefined} Fixed failure code, if any.
  */
-function failureCode(check, response, expectedHash, expectedSize) {
+function failureCode(check, response, reference) {
   const { statusCode, headers, body } = response;
   if (statusCode !== check.status) return 'unexpected-status';
+  if (headers.location !== undefined || headers.refresh !== undefined)
+    return 'unexpected-redirect';
   if (headers['content-encoding'] && headers['content-encoding'] !== 'identity')
     return 'unexpected-content-encoding';
-  if (check.providerRejection) {
-    if (headers.location !== undefined) return 'unexpected-redirect';
-    if (
-      (body.toString('utf8') + JSON.stringify(headers)).includes(
-        'wharfie-private-query-probe',
-      )
+  if (
+    (body.toString('utf8') + JSON.stringify(headers)).includes(
+      'wharfie-private-query-probe',
     )
-      return 'reflected-query';
-    return;
+  )
+    return 'reflected-query';
+  if (check.method === 'HEAD') {
+    if (body.length !== 0) return 'unexpected-head-body';
+    // S3 may omit object metadata when rejecting a HEAD request.
+    if (check.status !== 200) return;
+    if (headers['content-length'] !== String(reference.size))
+      return 'document-length-mismatch';
   }
-  const contentType =
-    check.status === 200
-      ? 'text/html; charset=utf-8'
-      : 'text/plain; charset=utf-8';
-  if (headers['content-type']?.toLowerCase() !== contentType)
+  const contentType = headers['content-type']?.toLowerCase();
+  if (
+    contentType !== 'text/html; charset=utf-8' &&
+    !(check.status !== 200 && contentType === 'text/html')
+  )
     return 'unexpected-content-type';
-  if (headers['x-content-type-options'] !== 'nosniff') return 'missing-nosniff';
-  if (headers['cache-control'] !== 'no-store')
+  if (
+    (check.status === 200 || headers['cache-control'] !== undefined) &&
+    headers['cache-control'] !== 'no-store'
+  )
     return 'unexpected-cache-control';
-  if (check.method === 'HEAD' && body.length !== 0)
-    return 'unexpected-head-body';
-  if (check.status === 200) {
-    const csp = headers['content-security-policy'];
-    if (
-      typeof csp !== 'string' ||
-      !csp.includes("default-src 'none'") ||
-      !csp.includes("frame-ancestors 'none'")
-    )
-      return 'missing-content-security-policy';
-    if (
-      check.method === 'GET' &&
-      createHash('sha256').update(body).digest('hex') !== expectedHash
-    )
-      return 'landing-hash-mismatch';
-    if (
-      check.method === 'HEAD' &&
-      headers['content-length'] !== String(expectedSize)
-    )
-      return 'landing-length-mismatch';
-  } else {
-    const text = body.toString('utf8');
-    if (
-      text.includes('wharfie-private-query-probe') ||
-      JSON.stringify(headers).includes('wharfie-private-query-probe')
-    )
-      return 'reflected-query';
-    if (check.status === 302 && headers.location !== GUIDES + check.guide)
-      return 'unexpected-redirect';
-    if (check.status !== 302 && headers.location !== undefined)
-      return 'unexpected-redirect';
-    if (
-      check.status === 410 &&
-      check.method === 'GET' &&
-      text !==
-        'This installer has been retired.\nCurrent installation guide: ' +
-          GUIDES +
-          'installation.md\n'
-    )
-      return 'unsafe-installer-response';
-    if (check.status === 404 && !text.includes('https://docs.wharfie.dev/'))
-      return 'missing-current-docs-link';
-    if (check.status === 405 && headers.allow !== 'GET, HEAD')
-      return 'unexpected-allow';
-  }
+  if (
+    check.method === 'GET' &&
+    createHash('sha256').update(body).digest('hex') !== reference.sha256
+  )
+    return 'document-hash-mismatch';
 }
 
 /**
- * Verify the prepared artifact against a live HTTPS endpoint with four workers.
- * @param {Options} options - Fixed serving endpoint and prepared bundle.
- * @param {typeof https.request} [request] - HTTPS transport for focused tests.
- * @returns {Promise<{success: boolean, checks: any[], [key: string]: unknown}>} Bounded, body-free acceptance report.
+ * Verify both prepared HTML documents with at most four concurrent requests.
+ * @param {Options} options - Exact public endpoint and prepared bundle.
+ * @param {typeof https.request} [request] - Transport for focused tests.
+ * @returns {Promise<{success: boolean, checks: any[], [key: string]: unknown}>} Bounded, body-free report.
  */
-export async function verifyDocsSite(options, request = https.request) {
+export async function verifyDocsSite(options, request) {
   const url = new URL(options.url);
   assert.ok(
-    url.protocol === 'https:' &&
-      !url.username &&
-      !url.password &&
-      !url.port &&
-      url.pathname === '/' &&
-      !url.search &&
-      !url.hash &&
-      (url.hostname === 'docs.wharfie.dev' || CLOUDFRONT.test(url.hostname)),
-    'Use the exact HTTPS docs or CloudFront root URL.',
-  );
-  assert.ok(
-    !options.connectHost ||
-      (CLOUDFRONT.test(options.connectHost) &&
-        options.connectHost === options.connectHost.trim()),
-    'Connect host must be a CloudFront distribution hostname.',
+    options.url === options.url.trim() &&
+      [PUBLIC_URL, ORIGIN_URL].includes(url.href) &&
+      !Object.hasOwn(options, 'connectHost'),
+    'Use only the docs HTTPS root or controlled S3 website HTTP root.',
   );
   const manifest = JSON.parse(
     (
@@ -256,26 +225,46 @@ export async function verifyDocsSite(options, request = https.request) {
       )
     ).toString('utf8'),
   );
-  const index = await readBounded(
-    path.join(options.bundleDir, 'index.html'),
-    MAX_BODY,
-  );
-  const contentSha256 = createHash('sha256').update(index).digest('hex');
-  const indexEntries = manifest.files?.filter(
-    (/** @type {{name?: string}} */ file) => file.name === 'index.html',
-  );
   assert.ok(
     manifest.format === 'wharfie-docs-site' &&
-      manifest.version === 1 &&
-      manifest.contentSha256 === contentSha256 &&
-      indexEntries?.length === 1 &&
-      indexEntries[0].sha256 === contentSha256 &&
-      indexEntries[0].size === index.length,
-    'Prepared manifest and landing page do not agree.',
+      manifest.version === 2 &&
+      manifest.provider === 's3-website' &&
+      Array.isArray(manifest.files),
+    'Expected a prepared S3 website manifest.',
+  );
+  const references = /** @type {Record<string, Reference>} */ ({});
+  for (const name of ['index.html', '404.html']) {
+    const bytes = await readBounded(
+      path.join(options.bundleDir, name),
+      MAX_BODY,
+    );
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const entries = manifest.files.filter(
+      (/** @type {{name?: string}} */ file) => file.name === name,
+    );
+    assert.ok(
+      entries.length === 1 &&
+        entries[0].sha256 === sha256 &&
+        entries[0].size === bytes.length,
+      'Prepared manifest and HTML documents do not agree.',
+    );
+    references[name] = { sha256, size: bytes.length };
+  }
+  assert.equal(
+    manifest.contentSha256,
+    references['index.html'].sha256,
+    'Prepared index hash does not agree.',
+  );
+  assert.equal(
+    manifest.releaseKey,
+    'releases/' + references['index.html'].sha256 + '/index.html',
+    'Prepared private release key does not agree.',
   );
   const startedAt = new Date().toISOString();
-  const checks = routes();
+  const checks = routes(manifest.releaseKey);
   const results = new Array(checks.length);
+  const transport =
+    request ?? (url.protocol === 'https:' ? https.request : http.request);
   let next = 0;
   await Promise.all(
     Array.from({ length: 4 }, async () => {
@@ -285,13 +274,8 @@ export async function verifyDocsSite(options, request = https.request) {
         let response;
         let failure;
         try {
-          response = await fetchResponse(
-            url,
-            options.connectHost ?? url.hostname,
-            check,
-            request,
-          );
-          failure = failureCode(check, response, contentSha256, index.length);
+          response = await fetchResponse(url, check, transport);
+          failure = failureCode(check, response, references[check.document]);
         } catch (error) {
           failure =
             error instanceof Error &&
@@ -304,9 +288,9 @@ export async function verifyDocsSite(options, request = https.request) {
           path: check.path,
           statusCode: response?.statusCode ?? null,
           success: !failure,
-          ...(check.providerRejection ? { kind: 'provider-rejection' } : {}),
+          ...(check.privateRelease ? { kind: 'private-release' } : {}),
           ...(failure ? { failure } : {}),
-          ...(response && check.method === 'GET' && check.status === 200
+          ...(response && check.method === 'GET'
             ? {
                 sha256: createHash('sha256')
                   .update(response.body)
@@ -319,10 +303,11 @@ export async function verifyDocsSite(options, request = https.request) {
   );
   return {
     format: 'wharfie-docs-site-verification',
-    version: 1,
+    version: 2,
+    provider: 's3-website',
     url: url.href,
-    connectHost: options.connectHost ?? null,
-    contentSha256,
+    contentSha256: references['index.html'].sha256,
+    errorSha256: references['404.html'].sha256,
     startedAt,
     finishedAt: new Date().toISOString(),
     success: results.every((result) => result.success),
@@ -330,15 +315,12 @@ export async function verifyDocsSite(options, request = https.request) {
   };
 }
 
-/**
- * Parse a finite CLI argument set and retain an optional exclusive report.
- * @returns {Promise<void>} Completion after reporting every route outcome.
- */
+/** @returns {Promise<void>} Report all outcomes and optionally retain a new private JSON file. */
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 1 && ['--help', '-h'].includes(args[0])) {
     process.stdout.write(
-      'Usage: node scripts/verify-docs-site.js --url https://docs.wharfie.dev --bundle-dir <prepared-directory> [--connect-host d123.cloudfront.net] [--output <new-report.json>]\n',
+      'Usage: node scripts/verify-docs-site.js --url <docs-https-or-controlled-s3-http-root> --bundle-dir <prepared-directory> [--output <new-report.json>]\n',
     );
     return;
   }
@@ -346,7 +328,7 @@ async function main() {
   for (let i = 0; i < args.length; i += 2) {
     const flag = args[i];
     assert.ok(
-      ['--url', '--bundle-dir', '--connect-host', '--output'].includes(flag) &&
+      ['--url', '--bundle-dir', '--output'].includes(flag) &&
         !Object.hasOwn(values, flag) &&
         args[i + 1] &&
         !args[i + 1].startsWith('--'),
@@ -361,7 +343,6 @@ async function main() {
   const report = await verifyDocsSite({
     url: values['--url'],
     bundleDir: values['--bundle-dir'],
-    connectHost: values['--connect-host'],
   });
   const json = JSON.stringify(report, null, 2) + '\n';
   if (values['--output'])

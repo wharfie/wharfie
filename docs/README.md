@@ -58,15 +58,14 @@ next to the version being tested.
   provider runs and independent cleanup evidence.
 - [Deployment journal capacity](guides/deployment-journal-capacity.md): limits,
   refusal behavior, and recovery reserve.
-- [Public docs publication plan](guides/docs-site.md): the prepared landing page,
-  legacy routes, and the remaining hosting work.
+- [Publish the public docs](guides/docs-site.md): manual S3 uploads, verification,
+  and rollback through Cloudflare.
 - [Architecture decisions](architecture/decisions/README.md),
   [product direction](product/magnetic-first-run.md), and
   [implementation checkpoints](../llm/checkpoints/): design and historical
   evidence. Check each checkpoint's date and source before applying its claims
   to a release.
 
-The old Athena/table product and its installers are retired. Until
-[issue 137](https://github.com/wharfie/wharfie/issues/137) is verified resolved,
-share the repository guide above with testers; the public docs domain still
-needs its current landing page deployed.
+The old Athena/table product and its installers are retired. The repository guides
+above are the current instructions. The [publication runbook](guides/docs-site.md)
+records the public site's hosting migration and remaining acceptance checks.

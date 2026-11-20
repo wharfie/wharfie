@@ -1,13 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const EDGE_CODE_MARKER = '__WHARFIE_DOCS_EDGE_CODE__';
-const CONTENT_MARKER = '__WHARFIE_DOCS_SHA256__';
 
 /**
  * @param {Buffer | string} value - Exact file contents.
@@ -44,7 +42,7 @@ function readGit(repoRoot, args) {
  * Prepare local files only; cloud credentials and deployment stay with the operator.
  * Git provenance describes the checkout before this new output directory is created.
  * @param {{outputDir: string, repoRoot?: string}} options - Bundle destination and source.
- * @returns {{format: string, version: number, git: {commit: string, dirty: boolean}, account: string, region: string, stack: string, bucket: string, contentSha256: string, objectKey: string, files: Array<{name: string, sha256: string, size: number}>}} Manifest binding source and deployable files.
+ * @returns {{format: string, version: number, provider: string, git: {commit: string, dirty: boolean}, account: string, region: string, stack: string, bucket: string, contentSha256: string, objectKey: string, releaseKey: string, files: Array<{name: string, sha256: string, size: number}>}} Manifest binding source and deployable files.
  */
 export function prepareDocsSite({ outputDir, repoRoot = REPO_ROOT }) {
   assert.equal(typeof outputDir, 'string', '--output-dir is required.');
@@ -56,47 +54,15 @@ export function prepareDocsSite({ outputDir, repoRoot = REPO_ROOT }) {
   const status = readGit(repoRoot, statusArgs);
   const source = path.join(repoRoot, 'docs', 'site');
   const index = readFileSync(path.join(source, 'index.html'));
-  const edge = readFileSync(path.join(source, 'edge-router.js'), 'utf8');
-  const template = JSON.parse(
-    readFileSync(path.join(source, 'hosting.template.json'), 'utf8'),
-  );
-  assert.equal(
-    template.Resources?.DocsRoutes?.Properties?.FunctionCode,
-    EDGE_CODE_MARKER,
-    'The hosting template must contain the exact edge-code marker.',
-  );
-  const segments = edge.split(CONTENT_MARKER);
-  assert.equal(
-    segments.length,
-    2,
-    'The edge source must contain one content marker.',
-  );
+  const errorPage = readFileSync(path.join(source, '404.html'));
+  const template = readFileSync(path.join(source, 'hosting.template.json'));
+  JSON.parse(template.toString('utf8'));
   const contentSha256 = sha256(index);
-  assert.ok(
-    Buffer.byteLength(segments.join(contentSha256)) <= 10 * 1024,
-    'The rendered edge function exceeds the CloudFront 10 KB limit.',
-  );
-  template.Resources.DocsRoutes.Properties.FunctionCode = {
-    'Fn::Join': ['', [segments[0], { Ref: 'ContentSha256' }, segments[1]]],
-  };
   const files = new Map([
     ['index.html', index],
-    ['hosting.template.json', jsonBytes(template)],
-    [
-      'parameters.json',
-      jsonBytes([
-        { ParameterKey: 'ContentSha256', ParameterValue: contentSha256 },
-        { ParameterKey: 'CustomDomain', ParameterValue: '' },
-        { ParameterKey: 'CertificateArn', ParameterValue: '' },
-      ]),
-    ],
+    ['404.html', errorPage],
+    ['hosting.template.json', template],
   ]);
-  const certificate = path.join(source, 'certificate.template.json');
-  if (existsSync(certificate)) {
-    const bytes = readFileSync(certificate);
-    JSON.parse(bytes.toString('utf8'));
-    files.set('certificate.template.json', bytes);
-  }
   assert.equal(
     readGit(repoRoot, ['rev-parse', '--verify', 'HEAD']),
     commit,
@@ -109,14 +75,16 @@ export function prepareDocsSite({ outputDir, repoRoot = REPO_ROOT }) {
   );
   const manifest = {
     format: 'wharfie-docs-site',
-    version: 1,
+    version: 2,
+    provider: 's3-website',
     git: { commit, dirty: status !== '' },
     account: '411430101559',
     region: 'us-east-1',
     stack: 'wharfie-docs',
     bucket: 'wharfie-docs-411430101559-us-east-1',
     contentSha256,
-    objectKey: `releases/${contentSha256}/index.html`,
+    objectKey: 'index.html',
+    releaseKey: `releases/${contentSha256}/index.html`,
     files: [...files].map(([name, bytes]) => ({
       name,
       sha256: sha256(bytes),

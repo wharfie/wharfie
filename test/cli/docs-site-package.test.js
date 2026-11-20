@@ -9,20 +9,22 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runInNewContext } from 'node:vm';
 
 import {
   parseDocsSiteArgs,
   prepareDocsSite,
 } from '../../scripts/prepare-docs-site.js';
 
-const marker = '__WHARFIE_DOCS_SHA256__';
+const hostingTemplate = readFileSync(
+  new URL('../../docs/site/hosting.template.json', import.meta.url),
+);
 const script = fileURLToPath(
   new URL('../../scripts/prepare-docs-site.js', import.meta.url),
 );
@@ -57,19 +59,10 @@ beforeEach(() => {
     '<!doctype html>\r\n<p>Current docs.</p>\n',
   );
   writeFileSync(
-    path.join(source, 'edge-router.js'),
-    `function handler() { return '${marker}'; } // literal \u0024{neverExpand}\n`,
+    path.join(source, '404.html'),
+    '<!doctype html>\r\n<p>Use the current documentation.</p>\n',
   );
-  writeFileSync(
-    path.join(source, 'hosting.template.json'),
-    JSON.stringify({
-      Resources: {
-        DocsRoutes: {
-          Properties: { FunctionCode: '__WHARFIE_DOCS_EDGE_CODE__' },
-        },
-      },
-    }),
-  );
+  writeFileSync(path.join(source, 'hosting.template.json'), hostingTemplate);
   git('init', '-q');
   git('add', '.');
   git(
@@ -91,24 +84,32 @@ afterEach(() => {
 });
 
 describe('local documentation deployment bundle', () => {
-  it('binds exact HTML bytes, all file hashes, staging parameters, and clean Git provenance', () => {
+  it('binds exact public HTML, the immutable release key, and clean Git provenance', () => {
     const outputDir = path.join(directory, 'bundle');
     const manifest = prepareDocsSite({ outputDir, repoRoot });
     const index = readFileSync(path.join(source, 'index.html'));
     expect(readFileSync(path.join(outputDir, 'index.html'))).toEqual(index);
     expect(manifest).toMatchObject({
       format: 'wharfie-docs-site',
-      version: 1,
+      version: 2,
+      provider: 's3-website',
       git: { commit: git('rev-parse', 'HEAD'), dirty: false },
       account: '411430101559',
       region: 'us-east-1',
       stack: 'wharfie-docs',
       bucket: 'wharfie-docs-411430101559-us-east-1',
       contentSha256: digest(index),
-      objectKey: `releases/${digest(index)}/index.html`,
+      objectKey: 'index.html',
+      releaseKey: `releases/${digest(index)}/index.html`,
     });
+    expect(manifest.files.map((file) => file.name)).toEqual([
+      'index.html',
+      '404.html',
+      'hosting.template.json',
+    ]);
     for (const file of manifest.files) {
       const bytes = readFileSync(path.join(outputDir, file.name));
+      expect(bytes).toEqual(readFileSync(path.join(source, file.name)));
       expect(file).toEqual({
         name: file.name,
         sha256: digest(bytes),
@@ -118,50 +119,38 @@ describe('local documentation deployment bundle', () => {
     expect(
       JSON.parse(readFileSync(path.join(outputDir, 'manifest.json'), 'utf8')),
     ).toEqual(manifest);
-    expect(
-      JSON.parse(readFileSync(path.join(outputDir, 'parameters.json'), 'utf8')),
-    ).toEqual([
-      { ParameterKey: 'ContentSha256', ParameterValue: digest(index) },
-      { ParameterKey: 'CustomDomain', ParameterValue: '' },
-      { ParameterKey: 'CertificateArn', ParameterValue: '' },
+    expect(readdirSync(outputDir).sort()).toEqual([
+      '404.html',
+      'hosting.template.json',
+      'index.html',
+      'manifest.json',
     ]);
-    const template = JSON.parse(
-      readFileSync(path.join(outputDir, 'hosting.template.json'), 'utf8'),
-    );
-    /** @type {[string, Array<string | {Ref: string}>]} */
-    const join =
-      template.Resources.DocsRoutes.Properties.FunctionCode['Fn::Join'];
-    expect(join[0]).toBe('');
-    expect(join[1][1]).toEqual({ Ref: 'ContentSha256' });
-    const code = join[1]
-      .map((part) => (typeof part === 'string' ? part : manifest.contentSha256))
-      .join('');
-    expect(code).toContain('${neverExpand}');
-    expect(code).not.toContain(marker);
-    expect(runInNewContext(`${code}\nhandler();`)).toBe(manifest.contentSha256);
   });
 
-  it('records dirty source accurately, changes the object identity, and copies the optional certificate exactly', () => {
+  it('records dirty source, changes the rollback identity, and excludes obsolete deployment files', () => {
     const first = prepareDocsSite({
       outputDir: path.join(directory, 'first'),
       repoRoot,
     });
     writeFileSync(path.join(source, 'index.html'), '<p>Revised docs.</p>');
-    const certificate = Buffer.from('{"Description":"Certificate"}\r\n');
-    writeFileSync(path.join(source, 'certificate.template.json'), certificate);
+    writeFileSync(path.join(source, 'certificate.template.json'), '{}');
+    writeFileSync(path.join(source, 'edge-router.js'), 'obsolete');
+    writeFileSync(path.join(source, 'parameters.json'), '[]');
     const outputDir = path.join(directory, 'second');
     const second = prepareDocsSite({ outputDir, repoRoot });
     expect(second.git).toEqual({ commit: first.git.commit, dirty: true });
     expect(second.contentSha256).not.toBe(first.contentSha256);
-    expect(second.objectKey).not.toBe(first.objectKey);
-    expect(
-      readFileSync(path.join(outputDir, 'certificate.template.json')),
-    ).toEqual(certificate);
-    expect(second.files).toContainEqual({
-      name: 'certificate.template.json',
-      sha256: digest(certificate),
-      size: certificate.length,
-    });
+    expect(second.objectKey).toBe(first.objectKey);
+    expect(second.releaseKey).not.toBe(first.releaseKey);
+    expect(second.files.map((file) => file.name)).toEqual(
+      first.files.map((file) => file.name),
+    );
+    expect(readdirSync(outputDir).sort()).toEqual([
+      '404.html',
+      'hosting.template.json',
+      'index.html',
+      'manifest.json',
+    ]);
   });
 
   it('refuses to overwrite an existing output directory or any of its files', () => {
@@ -175,31 +164,20 @@ describe('local documentation deployment bundle', () => {
     expect(existsSync(path.join(outputDir, 'manifest.json'))).toBe(false);
   });
 
-  it.each(['missing', `${marker} ${marker}`])(
-    'rejects ambiguous edge markers before creating output: %s',
-    (edge) => {
-      writeFileSync(path.join(source, 'edge-router.js'), edge);
+  it.each(['index.html', '404.html'])(
+    'requires each public document before creating output: %s',
+    (name) => {
+      rmSync(path.join(source, name));
       const outputDir = path.join(directory, 'invalid');
-      expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow(
-        /one content marker/,
-      );
+      expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow(/ENOENT/);
       expect(existsSync(outputDir)).toBe(false);
     },
   );
 
-  it('rejects an already-rendered hosting template before creating output', () => {
-    writeFileSync(
-      path.join(source, 'hosting.template.json'),
-      JSON.stringify({
-        Resources: {
-          DocsRoutes: { Properties: { FunctionCode: 'already-rendered' } },
-        },
-      }),
-    );
+  it('rejects malformed hosting JSON before creating output', () => {
+    writeFileSync(path.join(source, 'hosting.template.json'), '{');
     const outputDir = path.join(directory, 'invalid');
-    expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow(
-      /exact edge-code marker/,
-    );
+    expect(() => prepareDocsSite({ outputDir, repoRoot })).toThrow();
     expect(existsSync(outputDir)).toBe(false);
   });
 
@@ -225,5 +203,91 @@ describe('local documentation deployment bundle', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--output-dir <new-directory>');
     expect(result.stderr).toBe('');
+  });
+});
+
+describe('retained S3 website infrastructure', () => {
+  const template = JSON.parse(hostingTemplate.toString('utf8'));
+  const publicObjects = [
+    { 'Fn::Sub': '${DocsBucket.Arn}/index.html' },
+    { 'Fn::Sub': '${DocsBucket.Arn}/404.html' },
+  ];
+
+  it('keeps the existing bucket identity and retains only the two S3 resources', () => {
+    expect(Object.keys(template.Resources).sort()).toEqual([
+      'DocsBucket',
+      'DocsBucketPolicy',
+    ]);
+    expect(template.Parameters).toBeUndefined();
+    expect(template.Resources.DocsBucket).toMatchObject({
+      Type: 'AWS::S3::Bucket',
+      DeletionPolicy: 'Retain',
+      UpdateReplacePolicy: 'Retain',
+      Properties: {
+        BucketName: {
+          'Fn::Sub': 'wharfie-docs-${AWS::AccountId}-${AWS::Region}',
+        },
+        BucketEncryption: {
+          ServerSideEncryptionConfiguration: [
+            { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+          ],
+        },
+        OwnershipControls: {
+          Rules: [{ ObjectOwnership: 'BucketOwnerEnforced' }],
+        },
+        PublicAccessBlockConfiguration: {
+          BlockPublicAcls: true,
+          BlockPublicPolicy: false,
+          IgnorePublicAcls: true,
+          RestrictPublicBuckets: false,
+        },
+        WebsiteConfiguration: {
+          IndexDocument: 'index.html',
+          ErrorDocument: '404.html',
+        },
+      },
+    });
+    expect(template.Resources.DocsBucketPolicy.Properties.Bucket).toEqual({
+      Ref: 'DocsBucket',
+    });
+  });
+
+  it('grants only public HTML reads and keeps other reads and all writes HTTPS-only', () => {
+    const statements =
+      template.Resources.DocsBucketPolicy.Properties.PolicyDocument.Statement;
+    expect(statements).toHaveLength(3);
+    expect(
+      statements.filter(
+        (/** @type {{Effect: string}} */ statement) =>
+          statement.Effect === 'Allow',
+      ),
+    ).toEqual([
+      {
+        Sid: 'AllowPublicDocumentationReads',
+        Effect: 'Allow',
+        Principal: '*',
+        Action: 's3:GetObject',
+        Resource: publicObjects,
+      },
+    ]);
+    expect(statements).toContainEqual({
+      Sid: 'DenyInsecureOperationsExceptObjectReads',
+      Effect: 'Deny',
+      Principal: '*',
+      NotAction: 's3:GetObject',
+      Resource: [
+        { 'Fn::GetAtt': ['DocsBucket', 'Arn'] },
+        { 'Fn::Sub': '${DocsBucket.Arn}/*' },
+      ],
+      Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+    });
+    expect(statements).toContainEqual({
+      Sid: 'DenyInsecureReadsOutsidePublicDocuments',
+      Effect: 'Deny',
+      Principal: '*',
+      Action: 's3:GetObject',
+      NotResource: publicObjects,
+      Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+    });
   });
 });
