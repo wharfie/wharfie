@@ -260,9 +260,14 @@ class Operator:
                 # The retained proof bucket has a fixed name. If it exists, an
                 # earlier create got that far and its stack was deleted outside
                 # this tool; creating again would fail on the bucket after
-                # launching a billed controller.
-                if self.ownership.get('createAttempted') and not self.bucket_absent():
-                    raise RuntimeError('campaign-bucket-exists-without-stack-prepare-new-campaign')
+                # launching a billed controller. Only a 404 shows it absent; any
+                # other head-bucket failure may be transient, so a rerun can recover.
+                if self.ownership.get('createAttempted'):
+                    bucket = self.bucket_state()
+                    if bucket == 'present':
+                        raise RuntimeError('campaign-bucket-exists-without-stack-prepare-new-campaign')
+                    if bucket != 'absent':
+                        raise RuntimeError('campaign-bucket-absence-unverified-rerun-apply')
                 self.ownership['createAttempted'] = True
                 self.save()
                 template = (self.root / 'cloudformation.json').read_text()
@@ -898,11 +903,18 @@ class Operator:
         self.save()
         print('{"status":"all-campaign-resources-cleaned"}')
 
-    def bucket_absent(self):
+    def bucket_state(self):
         result = subprocess.run(['aws', '--profile', 'wharfie', '--region', 'us-east-2', '--no-cli-pager',
                                  's3api', 'head-bucket', '--bucket', self.config['bucket']],
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
-        return result.returncode != 0 and b'(404)' in result.stderr and b'HeadBucket' in result.stderr
+        if result.returncode == 0:
+            return 'present'
+        if b'(404)' in result.stderr and b'HeadBucket' in result.stderr:
+            return 'absent'
+        return None
+
+    def bucket_absent(self):
+        return self.bucket_state() == 'absent'
 
 
 def main():

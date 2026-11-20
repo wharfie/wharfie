@@ -240,7 +240,7 @@ class RecoverableAttemptTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.operator = operator(temporary.name)
         (self.operator.root / 'cloudformation.json').write_text('{}')
-        self.operator.bucket_absent = mock.Mock(return_value=True)
+        self.operator.bucket_state = mock.Mock(return_value='absent')
         self.operator.cli_history_possible = mock.Mock(return_value=False)
         self.calls = []
 
@@ -321,10 +321,10 @@ class RecoverableAttemptTests(unittest.TestCase):
 
     def test_rerun_refuses_create_when_the_retained_bucket_proves_an_earlier_stack(self):
         self.operator.ownership['createAttempted'] = True
-        self.operator.bucket_absent.return_value = False
+        self.operator.bucket_state.return_value = 'present'
         with self.assertRaisesRegex(RuntimeError, 'campaign-bucket-exists-without-stack-prepare-new-campaign'):
             self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
-        self.operator.bucket_absent.assert_called_once()
+        self.operator.bucket_state.assert_called_once()
         self.assertIsNone(self.operator.ownership['stackId'])
 
     def test_cli_absence_codes_are_parsed_privately(self):
@@ -344,7 +344,7 @@ class RecoverableAttemptTests(unittest.TestCase):
                     self.operator.aws('cloudformation', 'describe-stacks', {'StackName': 'x'})
                 self.assertEqual(raised.exception.provider_code, code)
 
-    def token(self, put, stored, key_id=ops.DEFAULT_SSM_KEY):
+    def token(self, put, stored, key_id=ops.DEFAULT_SSM_KEY, matches=1):
         def aws(service, action, value=None, **kwargs):
             if action == 'describe-parameters':
                 self.assertEqual(value['ParameterFilters'], [{'Key': 'Name', 'Option': 'Equals',
@@ -352,7 +352,7 @@ class RecoverableAttemptTests(unittest.TestCase):
                 metadata = {'Name': config()['tokenParameter']}
                 if key_id is not None:
                     metadata['KeyId'] = key_id
-                return {'Parameters': [metadata]}
+                return {'Parameters': [dict(metadata) for _ in range(matches)]}
             self.calls.append((action, value, kwargs))
             if action == 'put-parameter':
                 return put(value)
@@ -415,6 +415,15 @@ class RecoverableAttemptTests(unittest.TestCase):
                     self.token(lambda _value: self.fail('must not put'), self.parameter(), key_id=key_id)
                 self.assertNotIn('tokenStored', self.operator.ownership)
 
+    def test_existing_parameter_needs_exactly_one_metadata_match(self):
+        # Even when every returned entry names the default key.
+        for matches in (0, 2):
+            with self.subTest(matches=matches):
+                self.operator.ownership = {'tokenAttempted': True}
+                with self.assertRaisesRegex(RuntimeError, 'existing-campaign-token-key-mismatch'):
+                    self.token(lambda _value: self.fail('must not put'), self.parameter(), matches=matches)
+                self.assertNotIn('tokenStored', self.operator.ownership)
+
     def test_token_refuses_before_reading_the_secret_when_cli_history_may_record_it(self):
         self.operator.cli_history_possible.return_value = True
         self.operator.aws = mock.Mock(side_effect=AssertionError('no AWS call may carry the secret'))
@@ -432,6 +441,109 @@ class RecoverableAttemptTests(unittest.TestCase):
         self.assertNotIn(TOKEN, json.dumps(request))
         self.assertEqual(options['extra'], ('--value', 'file:///dev/stdin'))
         self.assertEqual(options['secret_stdin'], TOKEN.encode())
+
+
+HEAD_BUCKET = {
+    'present': (0, b''),
+    'not-found': (254, b'\nAn error occurred (404) when calling the HeadBucket operation: Not Found\n'),
+    'forbidden': (254, b'\nAn error occurred (403) when calling the HeadBucket operation: Forbidden\n'),
+    'network': (255, b'\nCould not connect to the endpoint URL: "https://s3.us-east-2.amazonaws.com/"\n'),
+}
+
+
+class CliProbeOutcomeTests(unittest.TestCase):
+    """Only an explicit 404 is absence and only unset/disabled is history-off."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.operator = operator(temporary.name)
+        self.heads = []
+
+    def head_bucket(self, outcome):
+        returncode, stderr = HEAD_BUCKET[outcome]
+        def run(command, **_kwargs):
+            self.assertEqual(command[command.index('s3api') + 1], 'head-bucket')
+            self.heads.append(outcome)
+            return subprocess.CompletedProcess(command, returncode, b'', stderr)
+        return mock.patch.object(ops.subprocess, 'run', side_effect=run)
+
+    def test_apply_rerun_creates_again_only_after_a_head_bucket_404(self):
+        expected = {'not-found': None,
+                    'present': 'campaign-bucket-exists-without-stack-prepare-new-campaign',
+                    'forbidden': 'campaign-bucket-absence-unverified-rerun-apply',
+                    'network': 'campaign-bucket-absence-unverified-rerun-apply'}
+        for outcome, error in expected.items():
+            with self.subTest(outcome):
+                attempt = RecoverableAttemptTests('test_cli_absence_codes_are_parsed_privately')
+                attempt.setUp()
+                self.addCleanup(attempt.doCleanups)
+                del attempt.operator.bucket_state  # the real head-bucket interpretation
+                attempt.operator.ownership['createAttempted'] = True
+                creates = []
+                create = lambda value: creates.append(value) or {'StackId': 'arn:aws:cloudformation:exact'}
+                with self.head_bucket(outcome):
+                    if error is None:
+                        attempt.apply(create, attempt.missing_stack)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, error):
+                            attempt.apply(create, attempt.missing_stack)
+                self.assertEqual(len(creates), 1 if error is None else 0)
+
+    def purge(self, outcome, **ownership):
+        self.operator.ownership.update(status='controller-cleaned-proofs-retained',
+                                       abortBeforeGuestAuthorization=True, **ownership)
+        c = config()
+        def aws(service, action, value=None, **_kwargs):
+            responses = {'get-bucket-tagging': {'TagSet': [
+                             {'Key': 'wharfie:soak-campaign', 'Value': c['campaignId']},
+                             {'Key': 'wharfie:soak-spec', 'Value': c['specSha256']}]},
+                         'list-objects-v2': {'IsTruncated': False}, 'delete-bucket': {}}
+            return responses[action]
+        self.operator.aws = mock.Mock(side_effect=aws)
+        with self.head_bucket(outcome), contextlib.redirect_stdout(io.StringIO()):
+            self.operator.purge_proofs()
+
+    def test_purge_accepts_absence_only_from_a_head_bucket_404(self):
+        for outcome in HEAD_BUCKET:
+            for retry in ({'bucketCreated': False}, {'proofPurgeAttempted': True}, {}):
+                with self.subTest(outcome=outcome, ownership=retry):
+                    self.setUp()
+                    if outcome == 'not-found':
+                        self.purge(outcome, **retry)
+                        self.assertEqual(self.operator.ownership['status'], 'all-campaign-resources-cleaned')
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'proof-bucket-absence-unverified'):
+                            self.purge(outcome, **retry)
+                        self.assertNotEqual(self.operator.ownership['status'], 'all-campaign-resources-cleaned')
+                    # A retry's pre-check 404 finishes without touching the bucket.
+                    # Any other pre-check result falls through to the full,
+                    # tag-checked purge, whose delete is verified by head-bucket again.
+                    actions = [call.args[1] for call in self.operator.aws.call_args_list]
+                    if retry and outcome == 'not-found':
+                        self.assertEqual((len(self.heads), actions), (1, []))
+                    else:
+                        self.assertEqual(len(self.heads), 2 if retry else 1)
+                        self.assertEqual(actions, ['get-bucket-tagging', 'list-objects-v2',
+                                                   'list-objects-v2', 'delete-bucket'])
+
+    def test_cli_history_is_off_only_when_unset_or_disabled(self):
+        cases = (
+            ((1, b'', b''), False),  # unset
+            ((0, b'disabled\n', b''), False),
+            ((0, b'enabled\n', b''), True),
+            ((1, b'', b'\nThe config profile (wharfie) could not be found\n'), True),
+            ((255, b'', b'\naws: error: unexpected failure\n'), True),
+            ((255, b'', b''), True),
+            ((1, b'enabled\n', b''), True),
+        )
+        for (returncode, stdout, stderr), possible in cases:
+            with self.subTest(returncode=returncode, stdout=stdout, stderr=stderr), \
+                 mock.patch.object(ops.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                     ['aws'], returncode, stdout, stderr)) as run:
+                self.assertIs(self.operator.cli_history_possible(), possible)
+                self.assertEqual(run.call_args.args[0],
+                                 ['aws', '--profile', 'wharfie', 'configure', 'get', 'cli_history'])
 
 
 class SupervisorScheduleTests(unittest.TestCase):
