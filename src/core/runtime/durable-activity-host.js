@@ -39,6 +39,7 @@ import {
   withLocalLedgerServiceMutationOwnership,
 } from './operator/execution-ledger-store.js';
 import { createLocalOwnerCommandServer } from './operator/local-owner-command.js';
+import { assertLocalStoreNotHosted } from './local-store-host.js';
 
 /**
  * @typedef {{kind: 'prepared-source', prepared: import('../../cli/app/compile-application-revision.js').PreparedApplicationRevision} | {kind: 'embedded', manifest: any, embeddedRevision: import('../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair}} ManifestActivityExecution
@@ -683,6 +684,11 @@ export async function runLocalDurableManifestActivity(options) {
     applicationStateConfiguration,
     configuration,
   );
+  // A foreground run hosts the store for its duration, but must not start
+  // while a resident or another foreground run already writes to it.
+  if (configuration.adapterName === 'lmdb') {
+    await assertLocalStoreNotHosted({ storePath: configuration.controlPath });
+  }
 
   return await withExecutionLedger(
     async (ledger, controlContext) =>
@@ -802,7 +808,7 @@ export async function runLocalDurableManifestActivity(options) {
           });
         },
       }),
-    { configuration },
+    { configuration, hostReads: true },
   );
 }
 

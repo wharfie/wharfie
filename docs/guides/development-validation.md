@@ -101,6 +101,15 @@ affected when one process opens and closes a store while others write to it:
 [lmdb-js #370](https://github.com/kriszyp/lmdb-js/issues/370), which is still
 open, reports lost writes, `MDB_PROBLEM` errors, and SIGSEGV on Linux x64.
 
+Wharfie therefore does not open a running resident's control store from
+another process. The resident (and a foreground `ops run`) binds a local store
+host socket before it opens the store. Read-only control-store opens from
+operator commands go through that host while it is live, and other writable
+opens refuse. Test and verifier observers that poll a store while another
+process writes it must do the same: read through the product path, or hold one
+long-lived read-only environment, never open and close per poll.
+`test/db/lmdb-open-choke-point.test.js` fails when a new open site appears.
+
 ## Disposable Linux service proof
 
 `npm run verify:remote-recovery:systemd:lima -- --snapshot` runs the focused

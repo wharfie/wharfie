@@ -399,6 +399,21 @@ export function resolveSourceMapAnchor(sourceMap, target) {
   };
 }
 
+/**
+ * Sessions whose SEA process is currently stopped in the debugger. A stopped
+ * process cannot answer anything, including reads routed to it as a local
+ * store host, so callers that would wait on it must take another path.
+ * @type {Set<object>}
+ */
+const pausedSessions = new Set();
+
+/**
+ * @returns {boolean} - Whether this verifier holds any SEA process paused.
+ */
+export function hasSeaProcessPausedByInspector() {
+  return pausedSessions.size > 0;
+}
+
 /** Chrome DevTools Protocol session over Node's inspector WebSocket. */
 class InspectorProtocolSession {
   /** @param {string} url - Inspector WebSocket URL. */
@@ -430,6 +445,7 @@ class InspectorProtocolSession {
       this.handleMessage(event.data);
     });
     this.socket.addEventListener('close', () => {
+      pausedSessions.delete(this);
       this.fail(new Error('SEA inspector connection closed.'));
     });
   }
@@ -468,6 +484,8 @@ class InspectorProtocolSession {
       return;
     }
     if (typeof message.method !== 'string') return;
+    if (message.method === 'Debugger.paused') pausedSessions.add(this);
+    if (message.method === 'Debugger.resumed') pausedSessions.delete(this);
     const params = message.params || {};
     const waiterIndex = this.waiters.findIndex(
       (waiter) => waiter.method === message.method && waiter.predicate(params),
@@ -572,6 +590,7 @@ class InspectorProtocolSession {
 
   /** Close the client without waiting for the debuggee. */
   close() {
+    pausedSessions.delete(this);
     this.fail(new Error('SEA inspector was closed by the verifier.'));
     try {
       this.socket.close();
@@ -768,6 +787,7 @@ export async function attachSeaInspector(processHandle, options = {}) {
 
 export default {
   attachSeaInspector,
+  hasSeaProcessPausedByInspector,
   resolveSourceMapAnchor,
   spawnInspectorPausedProcess,
 };

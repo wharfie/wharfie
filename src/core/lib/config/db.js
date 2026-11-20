@@ -542,7 +542,25 @@ export async function createControlDBClient(
   const controlPath = options.path || resolveControlStorePath();
 
   if (adapterName === 'lmdb') {
-    const { default: createLMDB } = await import('../db/adapters/lmdb.js');
+    const { default: createLMDB, hasOpenLmdbEnvironment } =
+      await import('../db/adapters/lmdb.js');
+    // Another process opening and closing this store while its resident
+    // writes can lose the resident's writes (lmdb-js #370). Read through the
+    // live host instead; open natively only when no other process hosts it,
+    // or when this process already holds the environment.
+    if (options.readOnly === true && !hasOpenLmdbEnvironment(controlPath)) {
+      const { connectLocalStoreHost } =
+        await import('../../runtime/local-store-host.js');
+      const hosted = await connectLocalStoreHost({
+        storePath: controlPath,
+        reopen: async () =>
+          await createControlDBClient(adapterName, {
+            path: controlPath,
+            readOnly: true,
+          }),
+      });
+      if (hosted) return hosted;
+    }
     return createLMDB({
       path: controlPath,
       readOnly: options.readOnly === true,

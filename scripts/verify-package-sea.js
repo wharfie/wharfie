@@ -35,6 +35,7 @@ import { createPackageSeaCoordinatorHandoff } from './package-sea-coordinator-ha
 import { createPackageSeaApplicationStateReadinessProof } from './application-state-readiness-proof.js';
 import {
   attachSeaInspector,
+  hasSeaProcessPausedByInspector,
   spawnInspectorPausedProcess,
 } from './sea-inspector.js';
 import {
@@ -832,6 +833,69 @@ async function stopResidentServiceForCleanup(service) {
 }
 
 /**
+ * How observer reads of control stores were served, printed at the end so a
+ * run shows that packaged hosts answered.
+ */
+const observerControlReads = {
+  hosted: 0,
+  directWithoutHost: 0,
+  directWhilePaused: 0,
+};
+
+/**
+ * Read the installed package's control store the way an operator command
+ * does: through its live host when a SEA process hosts it, so the observer
+ * never opens and closes the store under a writer (lmdb-js #370), and
+ * directly only when no process holds it. A host that does not answer fails
+ * the read; it is never bypassed.
+ *
+ * The one exception is a process this verifier itself holds at a debugger
+ * breakpoint. It cannot answer, so routing to it would deadlock the
+ * verifier against its own pause, and it cannot write while stopped, so a
+ * direct read cannot race its writes.
+ * @param {string} installedPackageRoot - Installed tarball root.
+ * @param {string} controlPath - Control store path.
+ * @returns {Promise<(read: (db: Record<string, any>) => Promise<any>) => Promise<any>>} - Control reader.
+ */
+async function createInstalledControlReader(installedPackageRoot, controlPath) {
+  const [adapterModule, hostModule] = await Promise.all(
+    [
+      ['src', 'core', 'lib', 'db', 'adapters', 'lmdb.js'],
+      ['src', 'core', 'runtime', 'local-store-host.js'],
+    ].map(
+      async (segments) =>
+        await import(
+          pathToFileURL(path.join(installedPackageRoot, ...segments)).href
+        ),
+    ),
+  );
+  return async (read) => {
+    const pausedHere = hasSeaProcessPausedByInspector();
+    const hosted = pausedHere
+      ? undefined
+      : await hostModule.connectLocalStoreHost({ storePath: controlPath });
+    if (hosted) {
+      try {
+        const value = await read(hosted);
+        observerControlReads.hosted += 1;
+        return value;
+      } finally {
+        await hosted.close();
+      }
+    }
+    const direct = adapterModule.default({ path: controlPath, readOnly: true });
+    try {
+      const value = await read(direct);
+      if (pausedHere) observerControlReads.directWhilePaused += 1;
+      else observerControlReads.directWithoutHost += 1;
+      return value;
+    } finally {
+      await direct.close();
+    }
+  };
+}
+
+/**
  * Load a host-side durable lifecycle reader from the installed tarball. The
  * observer is intentionally not part of the clean process environment; it
  * only reads the control and separate application stores written by the copied
@@ -840,19 +904,6 @@ async function stopResidentServiceForCleanup(service) {
  * @returns {Promise<{serviceId: string, getSessionEndpoint: (sessionId: string, sessionRoot: string) => string, read: () => Promise<Record<string, any> | null>, readOwnership: () => Promise<Record<string, any> | null>, assertReady: (snapshot: Record<string, any> | null) => Promise<Readonly<Record<string, any>>>}>} - Lifecycle observer.
  */
 async function createInstalledLedgerLifecycleObserver(options) {
-  const adapterModule = await import(
-    pathToFileURL(
-      path.join(
-        options.installedPackageRoot,
-        'src',
-        'core',
-        'lib',
-        'db',
-        'adapters',
-        'lmdb.js',
-      ),
-    ).href
-  );
   const lifecycleModule = await import(
     pathToFileURL(
       path.join(
@@ -877,6 +928,10 @@ async function createInstalledLedgerLifecycleObserver(options) {
       ),
     ).href
   );
+  const withControl = await createInstalledControlReader(
+    options.installedPackageRoot,
+    options.controlPath,
+  );
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: options.appId,
   });
@@ -891,36 +946,20 @@ async function createInstalledLedgerLifecycleObserver(options) {
         sessionId,
         sessionRoot,
       }),
-    read: async () => {
-      const db = adapterModule.default({
-        path: options.controlPath,
-        readOnly: true,
-      });
-      try {
-        const lifecycle = lifecycleModule.createLedgerServiceLifecycle({
-          db,
-          tableName: options.tableName,
-        });
-        return await lifecycle.get({ serviceId });
-      } finally {
-        await db.close();
-      }
-    },
-    readOwnership: async () => {
-      const db = adapterModule.default({
-        path: options.controlPath,
-        readOnly: true,
-      });
-      try {
-        const ownership = lifecycleModule.createLedgerServiceOwnership({
-          db,
-          tableName: options.tableName,
-        });
-        return await ownership.getOwnership({ serviceId });
-      } finally {
-        await db.close();
-      }
-    },
+    read: async () =>
+      await withControl(
+        async (db) =>
+          await lifecycleModule
+            .createLedgerServiceLifecycle({ db, tableName: options.tableName })
+            .get({ serviceId }),
+      ),
+    readOwnership: async () =>
+      await withControl(
+        async (db) =>
+          await lifecycleModule
+            .createLedgerServiceOwnership({ db, tableName: options.tableName })
+            .getOwnership({ serviceId }),
+      ),
   };
 }
 
@@ -938,13 +977,11 @@ async function createInstalledScheduleControlObserver(options) {
       pathToFileURL(path.join(options.installedPackageRoot, relativePath)).href
     );
   const [
-    adapterModule,
     scheduleControlModule,
     scheduleOccurrenceModule,
     workflowHostModule,
     workflowContractModule,
   ] = await Promise.all([
-    installedModule('src/core/lib/db/adapters/lmdb.js'),
     installedModule('src/core/lib/db/tables/schedule-control.js'),
     installedModule('src/core/lib/ledger/schedule-occurrence.js'),
     installedModule('src/core/runtime/durable-workflow-host.js'),
@@ -972,24 +1009,22 @@ async function createInstalledScheduleControlObserver(options) {
     planId: workflow.planId,
     definition: scheduleDefinition,
   });
+  const withControl = await createInstalledControlReader(
+    options.installedPackageRoot,
+    options.controlPath,
+  );
   const withScheduleControl = async (
     /** @type {(control: Record<string, any>) => Promise<Record<string, any> | null>} */ observe,
-  ) => {
-    const db = adapterModule.default({
-      path: options.controlPath,
-      readOnly: true,
-    });
-    try {
-      return await observe(
-        scheduleControlModule.createScheduleControl({
-          db,
-          tableName: options.tableName,
-        }),
-      );
-    } finally {
-      await db.close();
-    }
-  };
+  ) =>
+    await withControl(
+      async (db) =>
+        await observe(
+          scheduleControlModule.createScheduleControl({
+            db,
+            tableName: options.tableName,
+          }),
+        ),
+    );
   return Object.freeze({
     scheduleId: options.scheduleId,
     workflowId,
@@ -9483,6 +9518,45 @@ function retainSeaFailure(error) {
   });
 }
 
+/**
+ * A healthy run takes about five minutes. Past this bound, report what every
+ * process is doing and fail, rather than hang until the CI job is cancelled
+ * without a log.
+ */
+const VERIFY_PACKAGE_SEA_TIMEOUT_MS = Number(
+  process.env.WHARFIE_VERIFY_PACKAGE_SEA_TIMEOUT_MS || 25 * 60 * 1000,
+);
+const verificationWatchdog = setTimeout(() => {
+  const message = `Package SEA verification exceeded ${VERIFY_PACKAGE_SEA_TIMEOUT_MS}ms in phase '${verificationPhase}'.`;
+  process.stderr.write(
+    `${message} Observer control-store reads: ${JSON.stringify(observerControlReads)}. Process and socket snapshot follows.\n`,
+  );
+  const socketDirectory = `/tmp/wharfie-${process.getuid?.() ?? 'local'}`;
+  for (const [command, args] of /** @type {Array<[string, string[]]>} */ ([
+    process.platform === 'linux'
+      ? ['ps', ['-ef', '--forest']]
+      : ['ps', ['-A', '-o', 'pid,ppid,etime,stat,command']],
+    ['ls', ['-la', socketDirectory]],
+    process.platform === 'linux'
+      ? ['ss', ['-xap']]
+      : ['lsof', ['-nP', '-U', '-a', '-u', String(process.getuid?.() ?? '')]],
+  ])) {
+    const result = spawnSync(command, args, {
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+    process.stderr.write(
+      `--- ${command} ${args.join(' ')}\n${result.stdout || ''}${result.stderr || ''}${result.error ? String(result.error) : ''}\n`,
+    );
+  }
+  retainSeaFailure(new Error(message));
+  spawnSync('pkill', ['-KILL', '-P', String(process.pid)], { timeout: 10_000 });
+  // The awaited step is stuck by definition, so throwing cannot unwind it.
+  // eslint-disable-next-line n/no-process-exit -- bounded hang watchdog
+  process.exit(124);
+}, VERIFY_PACKAGE_SEA_TIMEOUT_MS);
+verificationWatchdog.unref();
+
 const { sourceMetadata, verificationRoot } = (() => {
   try {
     if (!['darwin', 'linux'].includes(process.platform)) {
@@ -11862,6 +11936,9 @@ export default defineApp({
   assert.equal(
     artifactSha256,
     Buffer.from(packagedArtifact.byteDigest.value, 'base64url').toString('hex'),
+  );
+  process.stdout.write(
+    `Observer control-store reads: ${JSON.stringify(observerControlReads)}\n`,
   );
   process.stdout.write(
     `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, explicit public coordinator takeover-and-release with exact receipt replay before every confirmed killed-owner restart and unchanged RELEASED authority across owner-free response-loss crashes, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH${scheduleProof ? `, and due schedule ${scheduleProof.expected.occurrenceId} with one physical dispatch across real SIGKILL/replacement and an unchanged post-restart poll` : ', with the due-schedule/restart proof correctly gated to Linux'} (${artifactSize} bytes; sha256 ${artifactSha256})\n`,

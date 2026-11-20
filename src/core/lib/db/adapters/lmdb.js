@@ -188,6 +188,26 @@ async function releaseSharedLmdbEnvironment(dbRoot, shared) {
 }
 
 /**
+ * @param {string | undefined} path - Facade path, as passed to createLMDB.
+ * @returns {string} - Canonical local LMDB directory.
+ */
+function resolveLmdbRoot(path) {
+  return resolve(path ? join(path, 'lmdb') : join(paths.data, 'lmdb'));
+}
+
+/**
+ * Report whether this process already holds the native environment for a
+ * local volume. Another facade on it only adds a reference, so it can never
+ * open or close the native environment underneath a writer.
+ * @param {string} [path] - Facade path, as passed to createLMDB.
+ * @returns {boolean} - Whether a live shared environment exists.
+ */
+export function hasOpenLmdbEnvironment(path) {
+  const shared = sharedLmdbEnvironments.get(resolveLmdbRoot(path));
+  return shared !== undefined && !shared.closing;
+}
+
+/**
  * @typedef CreateLMDBDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
  * @property {boolean} [readOnly] - Open an existing local volume without creating tables or accepting writes.
@@ -208,9 +228,7 @@ async function releaseSharedLmdbEnvironment(dbRoot, shared) {
  * @returns {import('../base.js').DBClient} - Result.
  */
 export default function createLMDB(options = {}) {
-  const dbRoot = resolve(
-    options.path ? join(options.path, 'lmdb') : join(paths.data, 'lmdb'),
-  );
+  const dbRoot = resolveLmdbRoot(options.path);
   const readOnly = options.readOnly === true;
   if (readOnly) {
     let stats;

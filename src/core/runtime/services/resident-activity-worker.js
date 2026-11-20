@@ -67,6 +67,10 @@ import {
   sendLocalOwnerCommand,
 } from '../operator/local-owner-command.js';
 import { cloneJsonObject } from '../json-value.js';
+import {
+  LocalStoreHostedError,
+  isLocalStoreHostClient,
+} from '../local-store-host.js';
 import { createLedgerService } from './ledger-service.js';
 import { runResidentScheduleObserver } from './resident-schedule-observer.js';
 
@@ -1770,7 +1774,7 @@ export async function runLocalResidentActivityService(options) {
       if (errors.length === 1) throw errors[0];
       return /** @type {Readonly<{processed: number}>} */ (result);
     },
-    { configuration },
+    { configuration, hostReads: true },
   );
 }
 
@@ -1778,21 +1782,46 @@ export async function runLocalResidentActivityService(options) {
  * Route one app-scoped durable mutation to the current resident, or acquire a
  * short-lived local owner and apply it directly. A failed socket response is
  * never treated as non-application; the stable request is retried only after
- * the ownership fence permits it.
+ * the ownership fence permits it. Ownership is read without a writable open:
+ * while another process hosts the store, this never opens it for writing, so
+ * a resident's writes are never raced by this process's native open/close.
  * @param {{appId: string, requestId: string, command: string, request: Record<string, any>, configuration: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, mutateDirect: (ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore) => Promise<Readonly<Record<string, any>>>, failureMessage: string}} options - Exact local mutation request.
  * @returns {Promise<Readonly<Record<string, any>>>} - Durable mutation response.
  */
 export async function routeLocalResidentMutation(options) {
   const serviceId = createLedgerServiceId({ appId: options.appId });
-  return await withExecutionLedger(
-    async (ledger, controlContext) => {
-      const ownershipStore = createLedgerServiceOwnership({
-        db: controlContext.db,
-        tableName: controlContext.tableName,
-      });
 
-      /** @returns {Promise<Readonly<Record<string, any>>>} - Direct durable mutation. */
-      const mutateDirect = async () =>
+  /** @returns {Promise<{observed: Readonly<Record<string, any>> | undefined, hosted: boolean}>} - Current owner and whether another process hosts the store. */
+  const readOwnership = async () => {
+    try {
+      return await withExecutionLedger(
+        async (_ledger, controlContext) => ({
+          observed:
+            (await createLedgerServiceOwnership({
+              db: controlContext.db,
+              tableName: controlContext.tableName,
+            }).getOwnership({ serviceId })) ?? undefined,
+          hosted: isLocalStoreHostClient(controlContext.db),
+        }),
+        { readOnly: true, configuration: options.configuration },
+      );
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        /** @type {{code?: unknown}} */ (error).code ===
+          'WHARFIE_READ_ONLY_STORE_NOT_FOUND'
+      ) {
+        return { observed: undefined, hosted: false };
+      }
+      throw error;
+    }
+  };
+
+  /** @returns {Promise<Readonly<Record<string, any>>>} - Direct durable mutation. */
+  const mutateDirect = async () =>
+    await withExecutionLedger(
+      async (ledger, controlContext) =>
         await withLocalLedgerServiceMutationOwnership({
           appId: options.appId,
           context: controlContext,
@@ -1806,68 +1835,101 @@ export async function routeLocalResidentMutation(options) {
               handler: options.mutateDirect,
             });
           },
-        });
+        }),
+      { configuration: options.configuration },
+    );
 
-      /**
-       * @param {Readonly<Record<string, any>>} owner - Resident owner snapshot.
-       * @returns {Promise<Readonly<Record<string, any>>>} - Authenticated resident response.
-       */
-      const mutateThroughResident = async (owner) =>
-        /** @type {Promise<Readonly<Record<string, any>>>} */ (
-          sendLocalOwnerCommand({
-            serviceId,
-            sessionId: owner.sessionId,
-            sessionRoot: controlContext.sessionPath,
-            requestId: options.requestId,
-            command: options.command,
-            request: options.request,
-            timeoutMs: LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
-            maxRequestBytes: LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
-          })
-        );
+  /**
+   * @param {Readonly<Record<string, any>>} owner - Resident owner snapshot.
+   * @returns {Promise<Readonly<Record<string, any>>>} - Authenticated resident response.
+   */
+  const mutateThroughResident = async (owner) =>
+    /** @type {Promise<Readonly<Record<string, any>>>} */ (
+      sendLocalOwnerCommand({
+        serviceId,
+        sessionId: owner.sessionId,
+        sessionRoot: options.configuration.sessionPath,
+        requestId: options.requestId,
+        command: options.command,
+        request: options.request,
+        timeoutMs: LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS,
+        maxRequestBytes: LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
+      })
+    );
 
-      let observed = await ownershipStore.getOwnership({ serviceId });
-      /** @type {unknown} */
-      let routeError;
-      if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
-        try {
-          return await mutateThroughResident(observed);
-        } catch (error) {
-          routeError = error;
-        }
-      }
+  let { observed, hosted } = await readOwnership();
+  /** @type {unknown} */
+  let routeError;
+  if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
+    try {
+      return await mutateThroughResident(observed);
+    } catch (error) {
+      routeError = error;
+    }
+  }
 
+  if (hosted && routeError === undefined) {
+    // A hosting resident that has not claimed ownership yet is starting. Wait
+    // for its claim rather than opening the store underneath it. A foreground
+    // run's manual ownership will not become resident, so do not wait for it.
+    const deadline = Date.now() + LOCAL_OWNER_COMMAND_MAX_TIMEOUT_MS;
+    while (
+      hosted &&
+      observed?.ownerKind !== LedgerServiceOwnerKind.RESIDENT &&
+      observed?.ownerKind !== LedgerServiceOwnerKind.MANUAL &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      ({ observed, hosted } = await readOwnership());
+    }
+    if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
       try {
-        return await mutateDirect();
-      } catch (directError) {
-        // Cover the opposite race: a resident may acquire ownership after the
-        // first read but before the short-lived manual claim.
-        observed = await ownershipStore.getOwnership({ serviceId });
-        if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
-          try {
-            return await mutateThroughResident(observed);
-          } catch (retryRouteError) {
-            throw new AggregateError(
-              [
-                ...(routeError === undefined ? [] : [routeError]),
-                directError,
-                retryRouteError,
-              ],
-              options.failureMessage,
-            );
-          }
-        }
-        if (routeError !== undefined) {
-          throw new AggregateError(
-            [routeError, directError],
-            options.failureMessage,
-          );
-        }
-        throw directError;
+        return await mutateThroughResident(observed);
+      } catch (error) {
+        routeError = error;
       }
-    },
-    { configuration: options.configuration },
-  );
+    }
+  }
+  if (hosted) {
+    throw new AggregateError(
+      [
+        ...(routeError === undefined ? [] : [routeError]),
+        new LocalStoreHostedError(
+          'Another Wharfie process is serving this local control store and did not accept the command; retry when the resident is ready, or stop it first.',
+        ),
+      ],
+      options.failureMessage,
+    );
+  }
+
+  try {
+    return await mutateDirect();
+  } catch (directError) {
+    // Cover the opposite race: a resident may acquire ownership after the
+    // first read but before the short-lived manual claim.
+    ({ observed } = await readOwnership());
+    if (observed?.ownerKind === LedgerServiceOwnerKind.RESIDENT) {
+      try {
+        return await mutateThroughResident(observed);
+      } catch (retryRouteError) {
+        throw new AggregateError(
+          [
+            ...(routeError === undefined ? [] : [routeError]),
+            directError,
+            retryRouteError,
+          ],
+          options.failureMessage,
+        );
+      }
+    }
+    if (routeError !== undefined) {
+      throw new AggregateError(
+        [routeError, directError],
+        options.failureMessage,
+      );
+    }
+    throw directError;
+  }
 }
 
 /**
