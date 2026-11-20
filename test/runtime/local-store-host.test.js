@@ -477,6 +477,63 @@ describeOnUnix('local store host', () => {
     await client?.close();
   }, 30_000);
 
+  test('refuses to write through a host from before writable connections, without sending the write', async () => {
+    const storePath = join(createRoot(), 'control');
+    const real = await startHostChild(storePath);
+    const endpoint = real.endpoint;
+    await real.stop();
+    // A #181-era host: it ignores `writable` and opens a read-only facade.
+    /** @type {Record<string, any>[]} */
+    const received = [];
+    /** @type {Set<import('node:net').Socket>} */
+    const accepted = new Set();
+    const legacy = net.createServer((socket) => {
+      accepted.add(socket);
+      let buffered = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        while (buffered.length >= 4) {
+          const length = buffered.readUInt32BE(0);
+          if (buffered.length < 4 + length) return;
+          const request = JSON.parse(
+            buffered.subarray(4, 4 + length).toString('utf8'),
+          );
+          buffered = buffered.subarray(4 + length);
+          received.push(request);
+          if (request.kind === 'open') {
+            const body = v8.serialize({
+              version: 1,
+              kind: 'opened',
+              processId: 4242,
+            });
+            const header = Buffer.alloc(4);
+            header.writeUInt32BE(body.byteLength, 0);
+            socket.write(Buffer.concat([header, body]));
+          } else {
+            socket.destroy();
+          }
+        }
+      });
+    });
+    await new Promise((resolve) =>
+      legacy.listen(endpoint, () => resolve(undefined)),
+    );
+    cleanups.push(async () => {
+      for (const socket of accepted) socket.destroy();
+      await new Promise((resolve) => legacy.close(() => resolve(undefined)));
+    });
+    await expect(
+      connectLocalStoreHost({ storePath, writable: true }),
+    ).rejects.toMatchObject({
+      name: 'LocalStoreHostedError',
+      message: expect.stringContaining(
+        'older Wharfie that does not accept writes',
+      ),
+    });
+    expect(received.map((request) => request.kind)).toEqual(['open']);
+    expect(received[0].writable).toBe(true);
+  }, 30_000);
+
   test('reroutes a read whose host stops mid-operation instead of failing the command', async () => {
     const storePath = join(createRoot(), 'control');
     const first = await startHostChild(storePath);

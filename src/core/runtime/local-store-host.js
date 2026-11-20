@@ -415,7 +415,13 @@ function serveConnection(socket, context) {
         socket.end();
         return;
       }
-      send({ kind: 'opened', processId: process.pid });
+      // Say so when writes are accepted: a host from before writable
+      // connections ignores the request and opens a read-only facade.
+      send({
+        kind: 'opened',
+        processId: process.pid,
+        ...(writable ? { writable: true } : {}),
+      });
       return;
     }
     if (
@@ -949,6 +955,16 @@ function connectHost(endpoint, storeRoot, timeouts, writable) {
         if (!settled) {
           settled = true;
           clearTimeout(handshakeTimer);
+          if (message?.kind === 'opened' && writable && !message.writable) {
+            socket.destroy();
+            reject(
+              new LocalStoreHostedError(
+                `The process holding this local store (pid ${message.processId}) is an older Wharfie that does not accept writes from other processes, so this change was not made. Stop that process, or update it and retry.`,
+                { processId: message.processId },
+              ),
+            );
+            return;
+          }
           if (message?.kind === 'opened') {
             resolve({
               kind: 'opened',
