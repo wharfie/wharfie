@@ -41,7 +41,12 @@ function existingVolume(storePath) {
  * These are independent readbacks, not a multi-store atomic snapshot. A final
  * control/lifecycle recheck refuses a handoff that occurred during observation.
  * @param {{installedPackageRoot: string, controlPath: string, applicationStatePath: string, tableName: string, appId: string}} options - Independently derived packaged routes.
- * @param {{openReadOnlyDB?: (options: {path: string, readOnly: true}) => import('../src/core/lib/db/base.js').DBClient}} [ports] - Optional read-only adapter port for focused assertion tests.
+ * The control store is read the way an operator command reads it: through
+ * the live resident's store host, so this proof never opens and closes it
+ * under the resident (lmdb-js #370). The application-state store has no read
+ * host, so it is still opened directly beside the resident; each such open is
+ * reported through `onUnhostedRead` so the verifier can count it.
+ * @param {{openReadOnlyDB?: (options: {path: string, readOnly: true}) => import('../src/core/lib/db/base.js').DBClient | Promise<import('../src/core/lib/db/base.js').DBClient>, onUnhostedRead?: (storePath: string) => void}} [ports] - Optional read-only open port for focused assertion tests, and a report of each direct application-state open.
  * @returns {Promise<{assertReady: (snapshot: Record<string, any> | null) => Promise<Readonly<Record<string, any>>>}>} - Exact live-READY proof.
  */
 export async function createPackageSeaApplicationStateReadinessProof(
@@ -76,7 +81,18 @@ export async function createPackageSeaApplicationStateReadinessProof(
     installedModule('src/core/lib/db/tables/application-state-authority.js'),
     installedModule('src/core/lib/config/db.js'),
   ]);
-  const openReadOnly = ports.openReadOnlyDB ?? adapter.default;
+  const openReadOnly =
+    ports.openReadOnlyDB ??
+    (async (/** @type {{path: string, readOnly: true}} */ input) => {
+      if (input.path === scope.controlPath) {
+        return await dbConfig.createControlDBClient('lmdb', {
+          path: input.path,
+          readOnly: true,
+        });
+      }
+      ports.onUnhostedRead?.(input.path);
+      return adapter.default(input);
+    });
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: scope.appId,
   });
@@ -125,7 +141,10 @@ export async function createPackageSeaApplicationStateReadinessProof(
       );
     }
 
-    const controlDB = openReadOnly({ path: scope.controlPath, readOnly: true });
+    const controlDB = await openReadOnly({
+      path: scope.controlPath,
+      readOnly: true,
+    });
     try {
       const readinessStore =
         readinessModule.createApplicationStateReadinessStore({
@@ -188,7 +207,7 @@ export async function createPackageSeaApplicationStateReadinessProof(
         }
       }
 
-      const applicationDB = openReadOnly({
+      const applicationDB = await openReadOnly({
         path: scope.applicationStatePath,
         readOnly: true,
       });

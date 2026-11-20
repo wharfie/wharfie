@@ -490,7 +490,11 @@ async function readApplicationStateHandoff() {
       assert.ok(statSync(path.join(root, 'lmdb', file)).isFile());
     }
   }
-  const control = modules.adapter.default({
+  // Through the running service's store host, never a second open of its
+  // control store. The application-state store below has no read host, so it
+  // is still opened directly beside the service (a known verifier-only
+  // exposure, listed in the choke-point guard).
+  const control = await modules.dbConfig.createControlDBClient('lmdb', {
     path: storage.controlPath,
     readOnly: true,
   });

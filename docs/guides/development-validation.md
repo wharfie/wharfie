@@ -125,8 +125,12 @@ application-state store) open in at most one process at a time:
 
 Test and verifier code follows the same rule: read through the product path,
 take the holder lock when opening an installed store directly, and read
-without it only beside a process the test holds stopped. A test that keeps a
-read-only environment open now blocks a resident from starting.
+without it only beside the process the test holds stopped. The one exception
+is the application-state store, which has no read host: the package
+verifier's live READY proof and some crash-matrix reads still open it beside
+a running resident, and `verify:package:sea` prints how often
+(`applicationStateBesideHolder`). A test that keeps a read-only environment
+open blocks a resident from starting.
 `test/db/lmdb-open-choke-point.test.js` fails when a new open site appears in
 `src/` or `scripts/`.
 

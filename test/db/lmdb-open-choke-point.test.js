@@ -125,8 +125,10 @@ describe('LMDB open choke point', () => {
     //   takeover writes through a live holder (routeWrites), and opens
     //   natively only under the exclusive holder lock when none is live.
     // - systemd-user-service-manager: activation snapshot and purge scan are
-    //   read-only and route; withLockedActivation holds a writable env across
-    //   the resident's stop and start (reviewed residual risk).
+    //   read-only and route; withLockedActivation resolves the store per call
+    //   (through a live resident, writes included, or natively under the
+    //   exclusive lock between stop and start) and drops it before every
+    //   systemctl stop and start.
     // - systemd-user-service-manager readRuntimeState: read-only, routes.
     expect(
       countBySourceFile(
@@ -163,30 +165,35 @@ describe('LMDB open choke point', () => {
       'scripts/verify-package-sea.js': 2,
       'scripts/verify-systemd-user-service-linux.js': 1,
     });
-    expect(
-      countBySourceFile(
-        /\b(?:adapterModule|adapter|modules\.adapter)\.default\b/g,
-        SCRIPTS,
-      ),
-    ).toEqual({
-      // Live READY proof: reads the control and application-state stores
-      // while the SEA resident runs. The application-state store has no read
-      // host, so this is a known verifier-only #370 exposure, a few opens
-      // per run. Remove it by hosting that store too.
+    // Every `.default(` call in scripts/, whatever the binding is called: a
+    // direct open through an installed adapter is such a call, so a new one
+    // anywhere changes these counts and must be reviewed here.
+    expect(countBySourceFile(/\.default\(/g, SCRIPTS)).toEqual({
+      // Live READY proof: the control store is read through its host
+      // (createControlDBClient); the application-state store has no read
+      // host, so it is opened here beside the live resident, reported
+      // through onUnhostedRead and counted. Remove it by hosting that store.
       'scripts/application-state-readiness-proof.js': 1,
-      // openInstalledStore, its only adapter calls: under the holder lock;
-      // without it only beside a process this verifier holds paused, or for
-      // the application-state store, which has no read host, beside a live
-      // holder (counted and printed). Fixture reads go through the control
-      // reader and fixture writes through a live holder's host, else here.
-      'scripts/verify-package-sea.js': 3,
-      // Linux systemd verifier: the same live READY proof as above, for the
-      // control and application-state stores of a running service.
-      'scripts/verify-systemd-user-service-linux.js': 2,
+      // The package verifier's only native opens: under the holder lock;
+      // without it only beside the holder this verifier holds paused (that
+      // holder, not any paused process), or for the application-state store
+      // beside a live holder (counted and printed).
+      'scripts/installed-store-open.js': 3,
+      // Linux systemd verifier: the same READY proof for a running service;
+      // its control store is read through the host, its application-state
+      // store here.
+      'scripts/verify-systemd-user-service-linux.js': 1,
     });
     expect(countBySourceFile(/\bholderLock: true\b/g, SCRIPTS)).toEqual({
-      'scripts/verify-package-sea.js': 1,
+      'scripts/installed-store-open.js': 1,
     });
+    const readinessProof = readFileSync(
+      join(SCRIPTS, 'application-state-readiness-proof.js'),
+      'utf8',
+    );
+    expect(readinessProof).toMatch(
+      /if \(input\.path === scope\.controlPath\) \{\s+return await dbConfig\.createControlDBClient\('lmdb', \{/,
+    );
     // The generated test app's own LMDB data, not a Wharfie store.
     expect(
       countBySourceFile(

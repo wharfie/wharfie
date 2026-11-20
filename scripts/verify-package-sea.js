@@ -33,9 +33,9 @@ import {
 import { createPackageSeaScheduleRestartProof } from './package-sea-schedule-restart-proof.js';
 import { createPackageSeaCoordinatorHandoff } from './package-sea-coordinator-handoff.js';
 import { createPackageSeaApplicationStateReadinessProof } from './application-state-readiness-proof.js';
+import { openInstalledStore as openInstalledStoreUnderLock } from './installed-store-open.js';
 import {
   attachSeaInspector,
-  hasSeaProcessPausedByInspector,
   isSeaProcessPausedByInspector,
   spawnInspectorPausedProcess,
 } from './sea-inspector.js';
@@ -847,19 +847,12 @@ const observerControlReads = {
 };
 
 /**
- * Open one of the installed package's local stores natively the way product
- * code does: under its holder lock, so this verifier never opens a store
- * beside a process that writes it, and a resident never starts while this
- * verifier is inside (lmdb-holder-lock.js). A conflict is retried for up to
- * 10 s, like a product open, and then fails the verification loudly.
- *
- * The one exception is a store held by a process this verifier holds paused
- * in the debugger: it cannot release the lock, and it cannot write while
- * stopped, so a read-only open goes ahead without the lock.
+ * Open an installed store under its holder lock (installed-store-open.js),
+ * with this verifier's paused processes and read counter.
  * @param {{default: (options: Record<string, any>) => Record<string, any>}} adapterModule - Installed LMDB adapter.
  * @param {string} storePath - Store path.
  * @param {boolean} readOnly - Access mode.
- * @param {{unhostedStore?: boolean}} [options] - The store has no read host (the application-state store), so a read beside a live holder has nowhere else to go: it opens without the lock and is counted.
+ * @param {{unhostedStore?: boolean}} [options] - The store has no read host.
  * @returns {Promise<Record<string, any>>} - Open DB client.
  */
 async function openInstalledStore(
@@ -868,27 +861,13 @@ async function openInstalledStore(
   readOnly,
   options = {},
 ) {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    try {
-      return adapterModule.default({
-        path: storePath,
-        readOnly,
-        holderLock: true,
-      });
-    } catch (error) {
-      if (/** @type {any} */ (error)?.code !== 'local-store-busy') throw error;
-      if (readOnly && hasSeaProcessPausedByInspector()) {
-        return adapterModule.default({ path: storePath, readOnly });
-      }
-      if (readOnly && options.unhostedStore === true) {
-        observerControlReads.applicationStateBesideHolder += 1;
-        return adapterModule.default({ path: storePath, readOnly });
-      }
-      if (Date.now() >= deadline) throw error;
-    }
-    await delay(25);
-  }
+  return await openInstalledStoreUnderLock(adapterModule, storePath, readOnly, {
+    isPausedHere: isSeaProcessPausedByInspector,
+    ...(options.unhostedStore === true ? { unhostedStore: true } : {}),
+    onUnhostedRead: () => {
+      observerControlReads.applicationStateBesideHolder += 1;
+    },
+  });
 }
 
 /**
@@ -990,8 +969,16 @@ async function createInstalledLedgerLifecycleObserver(options) {
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: options.appId,
   });
-  const readinessProof =
-    await createPackageSeaApplicationStateReadinessProof(options);
+  const readinessProof = await createPackageSeaApplicationStateReadinessProof(
+    options,
+    {
+      // The application-state store has no read host; this proof reads it
+      // beside the live READY resident.
+      onUnhostedRead: () => {
+        observerControlReads.applicationStateBesideHolder += 1;
+      },
+    },
+  );
   return {
     serviceId,
     assertReady: readinessProof.assertReady,
