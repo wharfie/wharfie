@@ -354,6 +354,26 @@ function getUnixSocketDirectory() {
 }
 
 /**
+ * Return the private per-user directory that holds local Wharfie sockets.
+ * Companion endpoints, such as a local store host, share its access control.
+ * @returns {string} - Absolute POSIX socket directory.
+ */
+export function getLocalServiceSocketDirectory() {
+  return getUnixSocketDirectory();
+}
+
+/**
+ * Create the private per-user socket directory when missing and require it to
+ * be a real, owner-held directory that group and other users cannot write.
+ * @returns {Promise<string>} - The verified socket directory.
+ */
+export async function ensureLocalServiceSocketDirectory() {
+  const directory = getUnixSocketDirectory();
+  await ensurePrivateUnixSocketDirectory(directory);
+  return directory;
+}
+
+/**
  * Derive the deterministic process-held endpoint for one exact service
  * session. On POSIX, the logical namespace is deliberately hashed into a
  * short per-user /tmp socket path rather than used as the socket parent,

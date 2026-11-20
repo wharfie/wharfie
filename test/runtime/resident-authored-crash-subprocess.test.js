@@ -181,29 +181,49 @@ function payloadStore(fixture) {
   });
 }
 
+/** @param {Fixture} fixture @param {import('../../src/core/lib/db/base.js').DBClient} db @param {string} runId @param {string} revisionId */
+async function readLedgerState(fixture, db, runId, revisionId) {
+  const ledger = createExecutionLedger({
+    db,
+    tableName: fixture.tableName,
+    payloadStore: payloadStore(fixture),
+  });
+  const view = await ledger.rebuildRun(runId);
+  if (!view) throw new Error(`Crash run is unavailable: ${runId}`);
+  return {
+    view,
+    ready: await ledger.listReadyWork({
+      appId: APP_ID,
+      revisionId,
+      observedAt: Number.MAX_SAFE_INTEGER,
+      limit: 100,
+    }),
+  };
+}
+
 /** @param {Fixture} fixture @param {string} runId @param {string} revisionId */
 async function readState(fixture, runId, revisionId) {
   const db = createLMDB({ path: fixture.controlPath, readOnly: true });
   try {
-    const ledger = createExecutionLedger({
-      db,
-      tableName: fixture.tableName,
-      payloadStore: payloadStore(fixture),
-    });
-    const view = await ledger.rebuildRun(runId);
-    if (!view) throw new Error(`Crash run is unavailable: ${runId}`);
-    return {
-      view,
-      ready: await ledger.listReadyWork({
-        appId: APP_ID,
-        revisionId,
-        observedAt: Number.MAX_SAFE_INTEGER,
-        limit: 100,
-      }),
-    };
+    return await readLedgerState(fixture, db, runId, revisionId);
   } finally {
     await db.close();
   }
+}
+
+/**
+ * Hold one read-only environment for as long as another process writes the
+ * store. Opening and closing it per poll while a successor writes is the
+ * lmdb-js #370 trigger; a long-lived reader is not.
+ * @param {Fixture} fixture
+ */
+function openStateObserver(fixture) {
+  const db = createLMDB({ path: fixture.controlPath, readOnly: true });
+  return {
+    read: (/** @type {string} */ runId, /** @type {string} */ revisionId) =>
+      readLedgerState(fixture, db, runId, revisionId),
+    close: () => db.close(),
+  };
 }
 
 /** @param {Fixture} fixture @param {string} idempotencyKey @param {Record<string, any>} input */
@@ -433,8 +453,8 @@ async function waitForExit(worker, timeoutMs = 15_000) {
   }
 }
 
-/** @param {Fixture} fixture @param {string} runId @param {string} revisionId @param {LiveWorker} worker */
-async function waitForBlocked(fixture, runId, revisionId, worker) {
+/** @param {ReturnType<typeof openStateObserver>} observer @param {string} runId @param {string} revisionId @param {LiveWorker} worker */
+async function waitForBlocked(observer, runId, revisionId, worker) {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   let lastError;
   while (Date.now() < deadline) {
@@ -445,7 +465,7 @@ async function waitForBlocked(fixture, runId, revisionId, worker) {
       );
     }
     try {
-      const state = await readState(fixture, runId, revisionId);
+      const state = await observer.read(runId, revisionId);
       if (
         state.view.run.status === RunStatus.BLOCKED &&
         state.view.invocations[0]?.status === InvocationStatus.UNCERTAIN &&
@@ -517,6 +537,8 @@ describe('resident authored work real-process crash semantics', () => {
       let crash;
       /** @type {ReturnType<typeof startSuccessorWorker> | undefined} */
       let successor;
+      /** @type {ReturnType<typeof openStateObserver> | undefined} */
+      let observer;
       try {
         const accepted = submit(fixture, idempotencyKey, {
           markerPath: fixture.markerPath,
@@ -592,9 +614,10 @@ describe('resident authored work real-process crash semantics', () => {
         });
         expect(markerEntries(fixture)).toEqual([marker]);
 
+        observer = openStateObserver(fixture);
         successor = startSuccessorWorker(fixture);
         const blocked = await waitForBlocked(
-          fixture,
+          observer,
           runId,
           accepted.revisionId,
           successor,
@@ -641,6 +664,12 @@ describe('resident authored work real-process crash semantics', () => {
         expect(drained).toMatchObject({ code: 0, signal: null, stderr: '' });
         successor = undefined;
       } finally {
+        // Close the observer only after the successor can no longer write.
+        if (successor && successor.child.exitCode === null) {
+          successor.child.kill('SIGKILL');
+          await successor.exited.catch(() => undefined);
+        }
+        await observer?.close();
         await cleanupFixture(
           fixture,
           crash ? [crash] : [],

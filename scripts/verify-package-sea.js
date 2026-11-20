@@ -840,19 +840,6 @@ async function stopResidentServiceForCleanup(service) {
  * @returns {Promise<{serviceId: string, getSessionEndpoint: (sessionId: string, sessionRoot: string) => string, read: () => Promise<Record<string, any> | null>, readOwnership: () => Promise<Record<string, any> | null>, assertReady: (snapshot: Record<string, any> | null) => Promise<Readonly<Record<string, any>>>}>} - Lifecycle observer.
  */
 async function createInstalledLedgerLifecycleObserver(options) {
-  const adapterModule = await import(
-    pathToFileURL(
-      path.join(
-        options.installedPackageRoot,
-        'src',
-        'core',
-        'lib',
-        'db',
-        'adapters',
-        'lmdb.js',
-      ),
-    ).href
-  );
   const lifecycleModule = await import(
     pathToFileURL(
       path.join(
@@ -877,6 +864,26 @@ async function createInstalledLedgerLifecycleObserver(options) {
       ),
     ).href
   );
+  const dbConfigModule = await import(
+    pathToFileURL(
+      path.join(
+        options.installedPackageRoot,
+        'src',
+        'core',
+        'lib',
+        'config',
+        'db.js',
+      ),
+    ).href
+  );
+  // Poll through the product read path: while the SEA resident hosts the
+  // store, reads go through it instead of opening and closing the store under
+  // its writes (lmdb-js #370).
+  const openControl = async () =>
+    await dbConfigModule.createControlDBClient('lmdb', {
+      path: options.controlPath,
+      readOnly: true,
+    });
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: options.appId,
   });
@@ -892,10 +899,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
         sessionRoot,
       }),
     read: async () => {
-      const db = adapterModule.default({
-        path: options.controlPath,
-        readOnly: true,
-      });
+      const db = await openControl();
       try {
         const lifecycle = lifecycleModule.createLedgerServiceLifecycle({
           db,
@@ -907,10 +911,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
       }
     },
     readOwnership: async () => {
-      const db = adapterModule.default({
-        path: options.controlPath,
-        readOnly: true,
-      });
+      const db = await openControl();
       try {
         const ownership = lifecycleModule.createLedgerServiceOwnership({
           db,
@@ -938,13 +939,13 @@ async function createInstalledScheduleControlObserver(options) {
       pathToFileURL(path.join(options.installedPackageRoot, relativePath)).href
     );
   const [
-    adapterModule,
+    dbConfigModule,
     scheduleControlModule,
     scheduleOccurrenceModule,
     workflowHostModule,
     workflowContractModule,
   ] = await Promise.all([
-    installedModule('src/core/lib/db/adapters/lmdb.js'),
+    installedModule('src/core/lib/config/db.js'),
     installedModule('src/core/lib/db/tables/schedule-control.js'),
     installedModule('src/core/lib/ledger/schedule-occurrence.js'),
     installedModule('src/core/runtime/durable-workflow-host.js'),
@@ -975,7 +976,7 @@ async function createInstalledScheduleControlObserver(options) {
   const withScheduleControl = async (
     /** @type {(control: Record<string, any>) => Promise<Record<string, any> | null>} */ observe,
   ) => {
-    const db = adapterModule.default({
+    const db = await dbConfigModule.createControlDBClient('lmdb', {
       path: options.controlPath,
       readOnly: true,
     });

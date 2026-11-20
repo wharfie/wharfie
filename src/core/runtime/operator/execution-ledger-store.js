@@ -25,6 +25,10 @@ import {
 } from '../../lib/config/db.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../../lib/db/tables/dynamodb-coordinator-authority.js';
 import {
+  acquireLocalStoreHost,
+  assertLocalStoreNotHosted,
+} from '../local-store-host.js';
+import {
   CoordinatorQuiescenceBarrierState,
   createCoordinatorQuiescenceBarrier,
 } from '../../lib/db/tables/coordinator-quiescence-barrier.js';
@@ -343,16 +347,34 @@ function validateResidentReplacementApplicationStateTransport(
 /**
  * Open the durable control store for one operation and always close it.
  * Read-only mode is used by inspection and recovery preflight so exact missing
- * lookups cannot materialize a local control store.
+ * lookups cannot materialize a local control store. A read-only LMDB open is
+ * served by the store's live host when another process hosts it.
+ *
+ * `hostReads` makes this process the local store host for the whole
+ * operation: long-lived writers (the resident and a foreground run) bind the
+ * host endpoint before the native open and serve other processes' reads until
+ * just before their own close. Any other writable LMDB open refuses while
+ * another process hosts the store, rather than opening and closing the store
+ * underneath its writer.
  * @template T
  * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean, payloadStore: ExecutionPayloadStore}) => Promise<T>} handler - Work to run against the ledger.
- * @param {{readOnly?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
+ * @param {{readOnly?: boolean, hostReads?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
  * @returns {Promise<T>} - Handler result.
  */
 export async function withExecutionLedger(handler, options = {}) {
   const configuration =
     options.configuration || resolveExecutionLedgerStoreConfiguration();
   const readOnly = options.readOnly === true;
+  const localLmdb = configuration.adapterName === 'lmdb';
+  /** @type {import('../local-store-host.js').LocalStoreHost | undefined} */
+  let host;
+  if (localLmdb && !readOnly && options.hostReads === true) {
+    host = await acquireLocalStoreHost({
+      storePath: configuration.controlPath,
+    });
+  } else if (localLmdb && !readOnly) {
+    await assertLocalStoreNotHosted({ storePath: configuration.controlPath });
+  }
   /** @type {import('../../lib/db/base.js').DBClient | undefined} */
   let db;
   /** @type {T | undefined} */
@@ -396,6 +418,15 @@ export async function withExecutionLedger(handler, options = {}) {
     const payloadStore = /** @type {ExecutionPayloadStore} */ (
       candidatePayloadStore
     );
+    if (host) {
+      host.serve(
+        async () =>
+          await createControlDBClient('lmdb', {
+            path: configuration.controlPath,
+            readOnly: true,
+          }),
+      );
+    }
     const ledger = createExecutionLedger({
       db,
       tableName: configuration.tableName,
@@ -429,10 +460,15 @@ export async function withExecutionLedger(handler, options = {}) {
   let closeError;
   let closeFailed = false;
   try {
+    // Remote facades share this environment; they must be gone before the
+    // host's own close performs the native close.
+    await host?.stopServing();
     await db?.close?.();
   } catch (error) {
     closeFailed = true;
     closeError = error;
+  } finally {
+    await host?.release();
   }
   if (handlerFailed && closeFailed) {
     throw new AggregateError(
