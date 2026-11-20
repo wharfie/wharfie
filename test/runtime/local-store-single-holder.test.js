@@ -28,6 +28,9 @@ const DIRECT_CHILD = fileURLToPath(
 const RECORDER = fileURLToPath(
   new URL('../fixtures/lmdb-open-recorder.cjs', import.meta.url),
 );
+const WAITING_RESIDENT_CHILD = fileURLToPath(
+  new URL('../fixtures/waiting-resident-child.js', import.meta.url),
+);
 const COORDINATOR_CHILD = fileURLToPath(
   new URL('../fixtures/coordinator-takeover-child.js', import.meta.url),
 );
@@ -200,6 +203,50 @@ describeOnUnix('one holder per local store', () => {
     successor.send('stop');
     await successor.next();
   }, 60_000);
+
+  test.each(['another live host', 'a direct reader inside the store'])(
+    'a waiting resident told to stop while %s holds the store ends at once without opening it',
+    async (holderKind) => {
+      const root = createRoot();
+      const parent = join(root.storePath, '..');
+      let holder;
+      if (holderKind === 'another live host') {
+        holder = startHost(root);
+        expect(await holder.next()).toMatchObject({ ready: true });
+      } else {
+        const seed = await createControlDBClient('lmdb', {
+          path: root.storePath,
+        });
+        await seed.put({
+          tableName: 'records',
+          keyName: 'pk',
+          record: { pk: 'x' },
+        });
+        await seed.close();
+        holder = start(
+          DIRECT_CHILD,
+          [root.storePath, 'read', '1000'],
+          root.openLog,
+        );
+        expect(await holder.next()).toMatchObject({ opened: true });
+      }
+      const resident = start(WAITING_RESIDENT_CHILD, [parent], root.openLog);
+      expect(await resident.next()).toMatchObject({ waiting: true });
+      // Well into the wait, but far from its 30 s bound.
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      expect(resident.pending()).toBe(0);
+      resident.send('abort');
+      const requested = await resident.next();
+      const ended = await resident.next();
+      expect(ended).toMatchObject({
+        ended: true,
+        code: 'local-store-wait-aborted',
+      });
+      expect(ended.at - requested.at).toBeLessThan(1_000);
+      expect(nativeOpensBy(root, resident.child.pid)).toEqual([]);
+    },
+    60_000,
+  );
 
   test('a host does not open the store while a direct reader is still inside it', async () => {
     const root = createRoot();

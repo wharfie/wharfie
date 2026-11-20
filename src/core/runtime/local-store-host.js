@@ -8,6 +8,10 @@ import v8 from 'node:v8';
 
 import { DB_ADAPTER_NAMES, brandDBClient } from '../lib/db/base.js';
 import {
+  LocalStoreWaitAbortedError,
+  waitForLocalStore,
+} from '../lib/db/lmdb-holder-lock.js';
+import {
   ensureLocalServiceSocketDirectory,
   getLocalServiceSessionPrincipalId,
   getLocalServiceSocketDirectory,
@@ -729,7 +733,7 @@ function heldBy(endpoint) {
  * open that follows takes the store's exclusive holder lock, which is what
  * finally excludes a second holder and waits out direct openers that were
  * already inside (lmdb-holder-lock.js).
- * @param {{storePath: string, onHeld?: 'refuse'|'wait', heldWaitMs?: number}} options - Facade path of the hosted store, and what to do while another process holds it.
+ * @param {{storePath: string, onHeld?: 'refuse'|'wait', heldWaitMs?: number, signal?: AbortSignal}} options - Facade path of the hosted store, what to do while another process holds it, and a signal that ends the wait (LocalStoreWaitAbortedError).
  * @returns {Promise<LocalStoreHost | undefined>} - Host, or undefined where unsupported.
  */
 export async function acquireLocalStoreHost(options) {
@@ -742,6 +746,9 @@ export async function acquireLocalStoreHost(options) {
   const heldWaitMs = options.heldWaitMs ?? LOCAL_STORE_HOST_HELD_WAIT_MS;
   const deadline = Date.now() + heldWaitMs;
   for (;;) {
+    if (options.signal?.aborted) {
+      throw new LocalStoreWaitAbortedError(options.signal.reason);
+    }
     const host = await bindLocalStoreHost(storeRoot);
     let other;
     try {
@@ -760,7 +767,7 @@ export async function acquireLocalStoreHost(options) {
       refusal.message += ` Waited ${heldWaitMs}ms.`;
       throw refusal;
     }
-    await delay(HELD_RETRY_INTERVAL_MS);
+    await waitForLocalStore(HELD_RETRY_INTERVAL_MS, options.signal);
   }
 }
 

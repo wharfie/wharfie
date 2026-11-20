@@ -71,6 +71,7 @@ import {
   LocalStoreHostedError,
   isLocalStoreHostClient,
 } from '../local-store-host.js';
+import { LocalStoreWaitAbortedError } from '../../lib/db/lmdb-holder-lock.js';
 import { createLedgerService } from './ledger-service.js';
 import { runResidentScheduleObserver } from './resident-schedule-observer.js';
 
@@ -1778,8 +1779,16 @@ export async function runLocalResidentActivityService(options) {
       configuration,
       hostReads: true,
       ...(options.onStoreHeld === 'wait' ? { onHostHeld: 'wait' } : {}),
+      ...(signal ? { signal } : {}),
     },
-  );
+  ).catch((error) => {
+    // Told to stop while still waiting for another holder: the resident never
+    // opened the store, so this is a clean, empty drain.
+    if (error instanceof LocalStoreWaitAbortedError) {
+      return Object.freeze({ processed: 0 });
+    }
+    throw error;
+  });
 }
 
 /**

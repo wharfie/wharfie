@@ -2,9 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { setTimeout as delay } from 'node:timers/promises';
 import paths from '../paths.js';
-import { LocalStoreBusyError } from '../db/lmdb-holder-lock.js';
+import {
+  LocalStoreBusyError,
+  LocalStoreWaitAbortedError,
+  waitForLocalStore,
+} from '../db/lmdb-holder-lock.js';
 import { assertDomainSeparatedSha256Id } from '../../runtime/content-id.js';
 import { assertLogicalId } from '../../runtime/logical-id.js';
 import { getLocalAppStorageLayout } from './local-app-storage-context.js';
@@ -537,12 +540,15 @@ const LOCAL_STORE_LOCK_RETRY_MS = 25;
  * holder that has just bound its endpoint takes the lock before it serves.
  * @param {(options: {path: string, readOnly: boolean, holderLock: boolean}) => import('../db/base.js').DBClient} createLMDB - Adapter factory.
  * @param {{path: string, readOnly: boolean}} options - Store and mode.
- * @param {{lockWaitMs: number, route?: () => Promise<import('../db/base.js').DBClient | undefined>}} wait - Bound, and how to look for a host again.
+ * @param {{lockWaitMs: number, signal?: AbortSignal, route?: () => Promise<import('../db/base.js').DBClient | undefined>}} wait - Bound, the caller's stop signal, and how to look for a host again.
  * @returns {Promise<import('../db/base.js').DBClient>} - Locked native client, or a hosted one.
  */
 async function openHeldLmdb(createLMDB, options, wait) {
   const deadline = Date.now() + wait.lockWaitMs;
   for (;;) {
+    if (wait.signal?.aborted) {
+      throw new LocalStoreWaitAbortedError(wait.signal.reason);
+    }
     try {
       return createLMDB({ ...options, holderLock: true });
     } catch (error) {
@@ -559,14 +565,14 @@ async function openHeldLmdb(createLMDB, options, wait) {
     }
     const hosted = await wait.route?.();
     if (hosted) return hosted;
-    await delay(LOCAL_STORE_LOCK_RETRY_MS);
+    await waitForLocalStore(LOCAL_STORE_LOCK_RETRY_MS, wait.signal);
   }
 }
 
 /**
  * Create the dedicated durable control-store DB client.
  * @param {DBAdapterName} [adapterName] - Explicit adapter override.
- * @param {{readOnly?: boolean, routeWrites?: boolean, path?: string, region?: string, lockWaitMs?: number}} [options] - Access mode, already-resolved routing, and how long a local open waits for a conflicting holder. `routeWrites` lets a writable client write through the store's live host instead of refusing beside it; only commands that must change a held store use it.
+ * @param {{readOnly?: boolean, routeWrites?: boolean, path?: string, region?: string, lockWaitMs?: number, signal?: AbortSignal}} [options] - Access mode, already-resolved routing, how long a local open waits for a conflicting holder, and a signal that ends that wait. `routeWrites` lets a writable client write through the store's live host instead of refusing beside it; only commands that must change a held store use it.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function createControlDBClient(
@@ -617,6 +623,7 @@ export async function createControlDBClient(
       { path: controlPath, readOnly },
       {
         lockWaitMs: options.lockWaitMs ?? LOCAL_STORE_LOCK_WAIT_MS,
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(route ? { route } : {}),
       },
     );

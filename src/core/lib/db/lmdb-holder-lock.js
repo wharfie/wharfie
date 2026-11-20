@@ -50,6 +50,44 @@ export class LocalStoreBusyError extends Error {
 }
 
 /**
+ * A wait for a store's holder was abandoned because its caller was told to
+ * stop. Nothing was opened.
+ */
+export class LocalStoreWaitAbortedError extends Error {
+  /** @param {unknown} [cause] - The abort reason. */
+  constructor(cause) {
+    super(
+      'Stopped waiting for this local store because the process was asked to stop; it did not open the store.',
+    );
+    this.name = 'LocalStoreWaitAbortedError';
+    this.code = 'local-store-wait-aborted';
+    if (cause !== undefined) this.cause = cause;
+  }
+}
+
+/**
+ * Wait between attempts to take a store, ending early when told to stop.
+ * @param {number} milliseconds - Retry interval.
+ * @param {AbortSignal | undefined} signal - Caller's stop signal.
+ * @returns {Promise<void>} - Resolves after the interval.
+ * @throws {LocalStoreWaitAbortedError} - When the signal aborts first.
+ */
+export async function waitForLocalStore(milliseconds, signal) {
+  if (signal?.aborted) throw new LocalStoreWaitAbortedError(signal.reason);
+  await new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new LocalStoreWaitAbortedError(signal?.reason));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve(undefined);
+    }, milliseconds);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
  * @typedef {{pid: number, startedAt: number, command: string}} LmdbHolderRecord
  */
 
@@ -331,6 +369,8 @@ export default {
   LMDB_HOLDER_LOCK_FILE,
   LMDB_HOLDER_RECORD_FILE,
   LocalStoreBusyError,
+  LocalStoreWaitAbortedError,
+  waitForLocalStore,
   describeLmdbHolder,
   readLmdbHolderRecord,
   tryAcquireLmdbHolderLock,
