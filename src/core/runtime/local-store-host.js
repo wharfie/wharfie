@@ -1,5 +1,6 @@
+import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { promises as fsp, realpathSync } from 'node:fs';
+import { promises as fsp, readFileSync, realpathSync } from 'node:fs';
 import net from 'node:net';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -33,6 +34,14 @@ export const LOCAL_STORE_HOST_MAX_REQUEST_BYTES = 1024 * 1024;
 export const LOCAL_STORE_HOST_MAX_RESPONSE_BYTES = 256 * 1024 * 1024;
 /** How long a client waits for a starting or stopping host before failing. */
 export const LOCAL_STORE_HOST_ACCEPT_TIMEOUT_MS = 10_000;
+/**
+ * How long a host may take to answer the open handshake. A live host answers
+ * at once, with `opened` or `unavailable`; silence means it is paused (for
+ * example in a debugger or by SIGSTOP) or its event loop is blocked.
+ */
+export const LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS = 10_000;
+/** How long one remote read may take before the connection is abandoned. */
+export const LOCAL_STORE_HOST_CALL_TIMEOUT_MS = 60_000;
 /**
  * Delay between binding a host endpoint and the host's native open. A direct
  * reader that probed just before the bind normally finishes within it.
@@ -82,12 +91,14 @@ export class LocalStoreHostedError extends Error {
 export class LocalStoreHostReadError extends Error {
   /**
    * @param {string} message - Safe operator-facing diagnostic.
-   * @param {{cause?: unknown}} [options] - Safe context.
+   * @param {{cause?: unknown, timedOut?: boolean}} [options] - Safe context.
    */
   constructor(message, options = {}) {
     super(message);
     this.name = 'LocalStoreHostReadError';
     this.code = 'local-store-host-read';
+    /** Whether a live host stopped answering, rather than going away. */
+    this.timedOut = options.timedOut === true;
     if (options.cause !== undefined) this.cause = options.cause;
   }
 }
@@ -377,7 +388,7 @@ function listen(server, endpoint) {
 
 /**
  * @param {string} endpoint - Candidate host endpoint.
- * @returns {Promise<'live'|'absent'>} - Whether a listener answers.
+ * @returns {Promise<'live'|'refused'|'absent'>} - Whether a listener answers, refuses, or the path is gone.
  */
 function probeEndpoint(endpoint) {
   return new Promise((resolve, reject) => {
@@ -388,10 +399,90 @@ function probeEndpoint(endpoint) {
     });
     socket.once('error', (error) => {
       socket.destroy();
-      if (isAbsentEndpointError(error)) resolve('absent');
-      else reject(error);
+      if (!isAbsentEndpointError(error)) {
+        reject(error);
+        return;
+      }
+      resolve(
+        /** @type {NodeJS.ErrnoException} */ (error).code === 'ECONNREFUSED'
+          ? 'refused'
+          : 'absent',
+      );
     });
   });
+}
+
+/**
+ * @param {number} pid - Candidate process.
+ * @returns {number | undefined} - Process start time in ms since the epoch, if known.
+ */
+function processStartedAtMs(pid) {
+  try {
+    if (process.platform === 'linux') {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+      const startTicks = Number(fields[19]);
+      const bootLine = readFileSync('/proc/stat', 'utf8')
+        .split('\n')
+        .find((line) => line.startsWith('btime '));
+      const bootSeconds = Number(bootLine?.split(' ')[1]);
+      // CLK_TCK is 100 on every Linux target Wharfie supports.
+      const startedAt = (bootSeconds + startTicks / 100) * 1000;
+      return Number.isFinite(startedAt) ? startedAt : undefined;
+    }
+    const result = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      timeout: 2_000,
+    });
+    const startedAt = Date.parse(result.stdout.trim());
+    return Number.isFinite(startedAt) ? startedAt : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Decide whether the process that bound a host endpoint can still hold the
+ * store. A host binds before its native open and closes its endpoint only
+ * after its native close, so a refused connect normally means the store is
+ * released. That is only trusted once the process named in the endpoint is
+ * gone, or its pid now belongs to a process started after the endpoint was
+ * bound. Otherwise the original host is alive (for example between closing
+ * its endpoint and exiting) and the store must not be opened yet.
+ * @param {string} endpoint - Refused host endpoint.
+ * @returns {Promise<'gone'|'alive'>} - Whether the original host process lives.
+ */
+async function refusedEndpointProcess(endpoint) {
+  const match = /-(\d+)-[0-9a-f]+\.sock$/.exec(endpoint);
+  if (!match) return 'gone';
+  const pid = Number(match[1]);
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ESRCH') {
+      return 'gone';
+    }
+  }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      // A killed process that is not yet reaped holds no files.
+      if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z')) return 'gone';
+    } catch {
+      return 'gone';
+    }
+  }
+  let boundAt;
+  try {
+    boundAt = (await fsp.lstat(endpoint)).mtimeMs;
+  } catch {
+    // The host unlinks its endpoint after its native close.
+    return 'gone';
+  }
+  const startedAt = processStartedAtMs(pid);
+  // Allow clock-granularity slack: ps reports whole seconds.
+  if (startedAt !== undefined && startedAt > boundAt + 2_000) return 'gone';
+  return 'alive';
 }
 
 /**
@@ -412,7 +503,10 @@ async function removeStaleEndpoints(directory, prefix, own) {
     try {
       const stats = await fsp.lstat(endpoint);
       if (Date.now() - stats.mtimeMs < STALE_ENDPOINT_MIN_AGE_MS) continue;
-      if ((await probeEndpoint(endpoint)) === 'absent') {
+      if (
+        (await probeEndpoint(endpoint)) === 'refused' &&
+        (await refusedEndpointProcess(endpoint)) === 'gone'
+      ) {
         await fsp.unlink(endpoint);
       }
     } catch {
@@ -544,34 +638,56 @@ async function listHostEndpoints(storeRoot) {
 }
 
 /**
- * @typedef {{kind: 'absent'} | {kind: 'unavailable'} | {kind: 'opened', processId: number, socket: import('node:net').Socket, call: (method: string, params: Record<string, any>) => Promise<any>, close: () => void}} HostConnection
+ * @typedef {{kind: 'absent', refused?: boolean} | {kind: 'unavailable'} | {kind: 'opened', processId: number, socket: import('node:net').Socket, call: (method: string, params: Record<string, any>) => Promise<any>, close: () => void}} HostConnection
  */
 
 /**
- * Open one remote facade on one host endpoint.
+ * @param {string} endpoint - Host endpoint.
+ * @returns {string} - " (pid N)" when the endpoint name carries one.
+ */
+function describeHostProcess(endpoint) {
+  const match = /-(\d+)-[0-9a-f]+\.sock$/.exec(endpoint);
+  return match ? ` (pid ${match[1]})` : '';
+}
+
+/**
+ * Open one remote facade on one host endpoint. Both the handshake and every
+ * call are bounded: a host that is alive but not answering (paused, stopped,
+ * or blocked) fails the request with a timed-out read error instead of
+ * holding the caller forever.
  * @param {string} endpoint - Host endpoint.
  * @param {string} storeRoot - Canonical store root.
+ * @param {{responseTimeoutMs: number, callTimeoutMs: number}} timeouts - Bounds.
  * @returns {Promise<HostConnection>} - Connection outcome.
  */
-function connectHost(endpoint, storeRoot) {
+function connectHost(endpoint, storeRoot, timeouts) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint);
     let connected = false;
     let settled = false;
     let nextId = 1;
-    /** @type {Map<number, {resolve: (value: any) => void, reject: (error: Error) => void}>} */
+    /** @type {Map<number, {resolve: (value: any) => void, reject: (error: Error) => void, timer: ReturnType<typeof setTimeout>}>} */
     const pending = new Map();
     /** @type {Error | undefined} */
     let broken;
     /** @param {Error} error - Transport failure. */
     const fail = (error) => {
+      clearTimeout(handshakeTimer);
       broken ??= error;
-      for (const waiter of pending.values()) waiter.reject(broken);
+      for (const waiter of pending.values()) {
+        clearTimeout(waiter.timer);
+        waiter.reject(broken);
+      }
       pending.clear();
       if (!settled) {
         settled = true;
         if (!connected && isAbsentEndpointError(error.cause)) {
-          resolve({ kind: 'absent' });
+          resolve({
+            kind: 'absent',
+            refused:
+              /** @type {NodeJS.ErrnoException} */ (error.cause)?.code ===
+              'ECONNREFUSED',
+          });
         } else if (!connected) {
           reject(error);
         } else {
@@ -579,6 +695,24 @@ function connectHost(endpoint, storeRoot) {
         }
       }
     };
+    /**
+     * @param {string} what - What the host did not answer.
+     * @param {number} timeoutMs - The bound that expired.
+     * @returns {LocalStoreHostReadError} - Timed-out read error.
+     */
+    const timedOut = (what, timeoutMs) =>
+      new LocalStoreHostReadError(
+        `The process serving this local store${describeHostProcess(endpoint)} did not answer ${what} within ${timeoutMs}ms; it may be paused or stuck. Retry, or stop that process.`,
+        { timedOut: true },
+      );
+    const handshakeTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const error = timedOut('the read handshake', timeouts.responseTimeoutMs);
+      broken = error;
+      socket.destroy();
+      reject(error);
+    }, timeouts.responseTimeoutMs);
     socket.once('connect', () => {
       connected = true;
       socket.write(
@@ -629,6 +763,7 @@ function connectHost(endpoint, storeRoot) {
         }
         if (!settled) {
           settled = true;
+          clearTimeout(handshakeTimer);
           if (message?.kind === 'opened') {
             resolve({
               kind: 'opened',
@@ -641,7 +776,13 @@ function connectHost(endpoint, storeRoot) {
                     return;
                   }
                   const id = nextId++;
-                  pending.set(id, { resolve, reject });
+                  const timer = setTimeout(() => {
+                    // Responses are serial, so a connection with a lost
+                    // answer cannot be reused.
+                    socket.destroy();
+                    fail(timedOut(`a ${method} read`, timeouts.callTimeoutMs));
+                  }, timeouts.callTimeoutMs);
+                  pending.set(id, { resolve, reject, timer });
                   socket.write(
                     frame(
                       Buffer.from(
@@ -684,6 +825,7 @@ function connectHost(endpoint, storeRoot) {
           return;
         }
         pending.delete(message.id);
+        clearTimeout(waiter.timer);
         if (message.kind === 'result') waiter.resolve(message.value);
         else waiter.reject(rebuildError(message.error));
       },
@@ -733,11 +875,13 @@ function createHostClient(connection, reopen) {
           return await /** @type {any} */ (rerouted)[method](params);
         return await connection.call(method, params);
       } catch (error) {
-        // Only a lost transport is rerouted; an error the host answered is
-        // the read's own result.
+        // Only a lost transport is rerouted. An error the host answered is
+        // the read's own result, and a host that stopped answering is still
+        // alive, so waiting on it again would only repeat the timeout.
         if (
           !reopen ||
           !(error instanceof LocalStoreHostReadError) ||
+          error.timedOut ||
           attempt >= MAX_READ_REROUTES
         ) {
           throw error;
@@ -786,7 +930,7 @@ export function isLocalStoreHostClient(db) {
  * undefined when no other process hosts it, which is the only case in which a
  * caller may open the store natively. A host that is starting or stopping is
  * retried; one that never accepts fails closed.
- * @param {{storePath: string, timeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store, and how to re-resolve it if its host is lost mid-operation.
+ * @param {{storePath: string, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; how long to wait for a starting host, for a handshake answer, and for one read; and how to re-resolve the store if its host is lost mid-operation.
  * @returns {Promise<import('../lib/db/base.js').DBClient | undefined>} - Remote client or undefined.
  */
 export async function connectLocalStoreHost(options) {
@@ -799,16 +943,28 @@ export async function connectLocalStoreHost(options) {
     const endpoints = await listHostEndpoints(storeRoot);
     let unavailable = false;
     for (const endpoint of endpoints) {
-      const connection = await connectHost(endpoint, storeRoot);
+      const connection = await connectHost(endpoint, storeRoot, {
+        responseTimeoutMs:
+          options.responseTimeoutMs ?? LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
+        callTimeoutMs:
+          options.callTimeoutMs ?? LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
+      });
       if (connection.kind === 'opened') {
         return createHostClient(connection, options.reopen);
       }
       if (connection.kind === 'unavailable') unavailable = true;
+      if (
+        connection.kind === 'absent' &&
+        connection.refused &&
+        (await refusedEndpointProcess(endpoint)) === 'alive'
+      ) {
+        unavailable = true;
+      }
     }
     if (!unavailable) return undefined;
     if (Date.now() >= deadline) {
       throw new LocalStoreHostReadError(
-        `The process serving this local store did not accept reads within ${options.timeoutMs ?? LOCAL_STORE_HOST_ACCEPT_TIMEOUT_MS}ms; retry when it is ready.`,
+        `The process that holds this local store did not accept reads within ${options.timeoutMs ?? LOCAL_STORE_HOST_ACCEPT_TIMEOUT_MS}ms (it is starting, stopping, or not serving reads); retry when it is ready.`,
       );
     }
     await delay(RETRY_INTERVAL_MS);
@@ -825,7 +981,14 @@ export async function findLocalStoreHost(options) {
   const storeRoot = resolveStoreRoot(options.storePath);
   if (storeRoot === undefined) return undefined;
   for (const endpoint of await listHostEndpoints(storeRoot)) {
-    if ((await probeEndpoint(endpoint)) === 'live') return endpoint;
+    const probe = await probeEndpoint(endpoint);
+    if (probe === 'live') return endpoint;
+    if (
+      probe === 'refused' &&
+      (await refusedEndpointProcess(endpoint)) === 'alive'
+    ) {
+      return endpoint;
+    }
   }
   return undefined;
 }
@@ -842,7 +1005,9 @@ export async function assertLocalStoreNotHosted(options) {
   const match = /-(\d+)-[0-9a-f]+\.sock$/.exec(endpoint);
   const processId = match ? Number(match[1]) : undefined;
   throw new LocalStoreHostedError(
-    `Another Wharfie process${processId === undefined ? '' : ` (pid ${processId})`} is serving this local control store, so this command cannot open it for writing. Route the change through that process, or stop it first.`,
+    // Keep the established refusal wording first: operators and scripts match
+    // it, and the ownership fence used to produce it after an open.
+    `Local service session is already active for this local control store: another Wharfie process${processId === undefined ? '' : ` (pid ${processId})`} is serving it, so this command cannot open it for writing. Route the change through that process, or stop it first.`,
     processId === undefined ? {} : { processId },
   );
 }
@@ -852,6 +1017,8 @@ export default {
   LOCAL_STORE_HOST_MAX_REQUEST_BYTES,
   LOCAL_STORE_HOST_MAX_RESPONSE_BYTES,
   LOCAL_STORE_HOST_PROTOCOL_VERSION,
+  LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
+  LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
   LOCAL_STORE_HOST_SETTLE_MS,
   LocalStoreHostReadError,
   LocalStoreHostedError,

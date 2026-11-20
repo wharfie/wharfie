@@ -1,15 +1,21 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, utimesSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  utimesSync,
+} from 'node:fs';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, test } from '@jest/globals';
+import { afterEach, describe, expect, jest, test } from '@jest/globals';
 
 import {
   createControlDBClient,
@@ -43,11 +49,11 @@ function createRoot() {
   return root;
 }
 
-/** @param {string} storePath @param {number} [serveDelayMs] */
-async function startHostChild(storePath, serveDelayMs = 0) {
+/** @param {string} storePath @param {number} [serveDelayMs] @param {string[]} [nodeArgs] */
+async function startHostChild(storePath, serveDelayMs = 0, nodeArgs = []) {
   const child = spawn(
     process.execPath,
-    [CHILD, storePath, String(serveDelayMs)],
+    [...nodeArgs, CHILD, storePath, String(serveDelayMs)],
     { cwd: REPO_ROOT, stdio: ['pipe', 'pipe', 'pipe'] },
   );
   let stderr = '';
@@ -66,6 +72,8 @@ async function startHostChild(storePath, serveDelayMs = 0) {
   const started = await next();
   const handle = {
     child,
+    next,
+    stderr: () => stderr,
     endpoint: /** @type {string} */ (started.endpoint),
     exited,
     stop: async () => {
@@ -276,6 +284,199 @@ describeOnUnix('local store host', () => {
     expect(await findLocalStoreHost({ storePath })).toBeUndefined();
     expect(await read()).toEqual({ pk: 'item', sk: 's-c', n: 99 });
     await client.close();
+  }, 30_000);
+
+  // A host that is alive but not answering (paused in a debugger, SIGSTOP,
+  // blocked event loop) still has its socket bound, so the kernel accepts a
+  // connection that nobody reads. Every request to it must time out.
+  // The packaged SEA verifier held a hosting `activity run` at a debugger
+  // breakpoint and then read the store, which routed to that same paused
+  // process: a cycle that hung CI until the job was cancelled.
+  test('bounds a read that routes to a host its own caller holds paused in the debugger', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath, 0, ['--inspect=127.0.0.1:0']);
+    const url = /ws:\/\/\S+/.exec(host.stderr())?.[0];
+    expect(url).toBeDefined();
+    const debuggerSocket = new globalThis.WebSocket(
+      /** @type {string} */ (url),
+    );
+    await new Promise((resolve) =>
+      debuggerSocket.addEventListener('open', resolve, { once: true }),
+    );
+    cleanups.push(async () => debuggerSocket.close());
+    const paused = new Promise((resolve) =>
+      debuggerSocket.addEventListener('message', (event) => {
+        if (JSON.parse(String(event.data)).method === 'Debugger.paused') {
+          resolve(undefined);
+        }
+      }),
+    );
+    debuggerSocket.send(JSON.stringify({ id: 1, method: 'Debugger.enable' }));
+    debuggerSocket.send(JSON.stringify({ id: 2, method: 'Debugger.pause' }));
+
+    const started = Date.now();
+    const read = connectLocalStoreHost({ storePath, responseTimeoutMs: 500 });
+    await paused;
+    await expect(read).rejects.toMatchObject({
+      name: 'LocalStoreHostReadError',
+      timedOut: true,
+      message: expect.stringMatching(/may be paused or stuck/),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 15_000);
+
+  test('times out the handshake with a host that has stopped answering', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    process.kill(host.child.pid ?? 0, 'SIGSTOP');
+    cleanups.push(async () => {
+      process.kill(host.child.pid ?? 0, 'SIGCONT');
+    });
+    const started = Date.now();
+    const error = await connectLocalStoreHost({
+      storePath,
+      responseTimeoutMs: 300,
+    }).then(
+      () => undefined,
+      (/** @type {any} */ caught) => caught,
+    );
+    expect(error).toBeInstanceOf(LocalStoreHostReadError);
+    expect(error.timedOut).toBe(true);
+    expect(error.message).toMatch(
+      /did not answer the read handshake within 300ms/,
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 10_000);
+
+  test('times out a read whose host stops answering mid-session without rerouting', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    /** @type {any} */
+    const reopen = jest.fn(async () => {
+      throw new Error('A timed-out read must not be rerouted.');
+    });
+    const client = await connectLocalStoreHost({
+      storePath,
+      callTimeoutMs: 300,
+      reopen,
+    });
+    const read = async () =>
+      await client?.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'item',
+        sortKeyName: 'sk',
+        sortKeyValue: 's-d',
+      });
+    expect(await read()).toEqual({ pk: 'item', sk: 's-d', n: 100 });
+    process.kill(host.child.pid ?? 0, 'SIGSTOP');
+    cleanups.push(async () => {
+      process.kill(host.child.pid ?? 0, 'SIGCONT');
+    });
+    await expect(read()).rejects.toMatchObject({
+      name: 'LocalStoreHostReadError',
+      timedOut: true,
+    });
+    expect(reopen).not.toHaveBeenCalled();
+    await client?.close();
+  }, 10_000);
+
+  test('an operator command against a host that stopped answering exits on its own with a clear error', async () => {
+    const root = createRoot();
+    const controlPath = join(root, 'control');
+    const host = await startHostChild(controlPath);
+    process.kill(host.child.pid ?? 0, 'SIGSTOP');
+    cleanups.push(async () => {
+      process.kill(host.child.pid ?? 0, 'SIGCONT');
+    });
+    const started = Date.now();
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'bin', 'wharfie'),
+        'ops',
+        'inspect',
+        '--run-id',
+        'wlm_absent',
+        '--json',
+      ],
+      {
+        cwd: REPO_ROOT,
+        encoding: 'utf8',
+        timeout: 40_000,
+        env: {
+          ...process.env,
+          NODE_ENV: 'development',
+          NO_COLOR: '1',
+          WHARFIE_CONTROL_ADAPTER: 'lmdb',
+          WHARFIE_CONTROL_PATH: controlPath,
+          WHARFIE_EXECUTION_LEDGER_TABLE: 'records',
+          WHARFIE_EXECUTION_PAYLOAD_PATH: join(root, 'payloads'),
+          WHARFIE_LEDGER_SERVICE_SESSION_PATH: join(root, 'sessions'),
+        },
+      },
+    );
+    // Killed by spawnSync's own timeout would mean the command hung.
+    expect(result.signal).toBeNull();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /did not answer the read handshake within 10000ms; it may be paused or stuck/,
+    );
+    expect(Date.now() - started).toBeLessThan(30_000);
+  }, 60_000);
+
+  test('never treats a refused endpoint as free while the process that bound it is alive', async () => {
+    const root = createRoot();
+    const storePath = join(root, 'control');
+    const host = await startHostChild(storePath);
+    host.child.kill('SIGKILL');
+    await host.exited;
+    // The same stale endpoint, but naming a live process (this one) that was
+    // running before the endpoint was bound: the original holder is alive.
+    const heldEndpoint = host.endpoint.replace(
+      /-\d+-([0-9a-f]+\.sock)$/,
+      `-${process.pid}-$1`,
+    );
+    renameSync(host.endpoint, heldEndpoint);
+    const now = new Date();
+    utimesSync(heldEndpoint, now, now);
+    cleanups.push(async () => rmSync(heldEndpoint, { force: true }));
+
+    expect(await findLocalStoreHost({ storePath })).toBe(heldEndpoint);
+    await expect(
+      connectLocalStoreHost({ storePath, timeoutMs: 300 }),
+    ).rejects.toBeInstanceOf(LocalStoreHostReadError);
+    const payloadPath = join(root, 'payloads');
+    await expect(
+      withExecutionLedger(async () => 'opened', {
+        configuration: {
+          adapterName: 'lmdb',
+          controlPath: storePath,
+          tableName: 'records',
+          payloadPath,
+          payloadStoreId: resolveExecutionPayloadStoreId(payloadPath),
+          sessionPath: join(root, 'sessions'),
+        },
+      }),
+    ).rejects.toBeInstanceOf(LocalStoreHostedError);
+
+    // A pid that was reused after the endpoint was bound holds nothing.
+    const longAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    utimesSync(heldEndpoint, longAgo, longAgo);
+    expect(await findLocalStoreHost({ storePath })).toBeUndefined();
+    expect(await connectLocalStoreHost({ storePath })).toBeUndefined();
+  }, 30_000);
+
+  test("answers a read from the resident's own child while the resident waits for it", async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    host.child.stdin?.write('child-read\n');
+    const reported = await host.next();
+    expect(reported.childExit).toBe(0);
+    expect(JSON.parse(reported.childOutput)).toEqual({
+      hosted: true,
+      record: { pk: 'item', sk: 's-b', n: 98 },
+    });
   }, 30_000);
 
   test('fails a read when its host dies and then treats the stale endpoint as absent', async () => {
