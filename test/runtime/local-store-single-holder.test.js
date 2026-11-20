@@ -2,7 +2,13 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -10,9 +16,13 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, test } from '@jest/globals';
 
-import { createControlDBClient } from '../../src/core/lib/config/db.js';
+import {
+  createControlDBClient,
+  resolveExecutionPayloadStoreId,
+} from '../../src/core/lib/config/db.js';
 import { createCoordinatorAuthority } from '../../src/core/lib/db/tables/coordinator-authority.js';
 import { takeoverCoordinatorAuthority } from '../../src/core/runtime/operator/coordinator-authority-command.js';
+import { withExecutionLedger } from '../../src/core/runtime/operator/execution-ledger-store.js';
 
 // At most one process holds a local store's LMDB environment. Every other
 // process reads through it, or is refused before any native open. These
@@ -176,6 +186,38 @@ describeOnUnix('one holder per local store', () => {
       expect(await winner?.next()).toMatchObject({ stopped: true });
     }
   }, 120_000);
+
+  test('a host that loses the lock race to another host is refused as already active', async () => {
+    // Two hosts that bind at nearly the same moment can both pass the bind
+    // check; the one that loses at the holder lock must then follow, like a
+    // host refused at bind time, not fail. Make this process's endpoint look
+    // earlier than a live host's so it reaches the lock and loses there.
+    const root = createRoot();
+    const holder = startHost(root);
+    const ready = await holder.next();
+    expect(ready).toMatchObject({ ready: true });
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(ready.endpoint, future, future);
+    const payloadPath = join(root.storePath, '..', 'payloads');
+    const refused = await withExecutionLedger(async () => 'opened', {
+      configuration: {
+        adapterName: 'lmdb',
+        controlPath: root.storePath,
+        tableName: 'lock-race',
+        payloadPath,
+        payloadStoreId: resolveExecutionPayloadStoreId(payloadPath),
+        sessionPath: join(root.storePath, '..', 'sessions'),
+      },
+      hostReads: true,
+    }).catch((error) => error);
+    expect(refused).toMatchObject({
+      name: 'LocalServiceSessionActiveError',
+      code: 'local-store-held',
+    });
+    expect(refused.message).toContain(`pid ${holder.child.pid}`);
+    holder.send('stop');
+    expect(await holder.next()).toMatchObject({ stopped: true });
+  }, 60_000);
 
   test('a waiting host gives up after its bound, naming the holder, and takes over once it is released', async () => {
     const root = createRoot();

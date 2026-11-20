@@ -981,6 +981,26 @@ function connectHost(endpoint, storeRoot, timeouts, writable) {
                     return;
                   }
                   const id = nextId++;
+                  const body = Buffer.from(
+                    JSON.stringify({
+                      version: LOCAL_STORE_HOST_PROTOCOL_VERSION,
+                      kind: 'call',
+                      id,
+                      method,
+                      params,
+                    }),
+                    'utf8',
+                  );
+                  // The host drops a larger request; refuse it here, where it
+                  // is certain that nothing was sent or applied.
+                  if (body.byteLength > LOCAL_STORE_HOST_MAX_REQUEST_BYTES) {
+                    reject(
+                      new RangeError(
+                        `This ${method} request is ${body.byteLength} bytes, over the ${LOCAL_STORE_HOST_MAX_REQUEST_BYTES}-byte limit of the process holding this local store, so it was not sent and nothing was applied.`,
+                      ),
+                    );
+                    return;
+                  }
                   const timer = setTimeout(() => {
                     // Responses are serial, so a connection with a lost
                     // answer cannot be reused.
@@ -988,20 +1008,7 @@ function connectHost(endpoint, storeRoot, timeouts, writable) {
                     fail(timedOut(`a ${method} call`, callTimeoutMs));
                   }, callTimeoutMs);
                   pending.set(id, { resolve, reject, timer });
-                  socket.write(
-                    frame(
-                      Buffer.from(
-                        JSON.stringify({
-                          version: LOCAL_STORE_HOST_PROTOCOL_VERSION,
-                          kind: 'call',
-                          id,
-                          method,
-                          params,
-                        }),
-                        'utf8',
-                      ),
-                    ),
-                  );
+                  socket.write(frame(body));
                 }),
               close: () => {
                 broken ??= new Error('LMDB client is closed.');

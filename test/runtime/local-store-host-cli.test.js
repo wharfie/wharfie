@@ -41,6 +41,9 @@ const BIN_PATH = join(REPO_ROOT, 'bin', 'wharfie');
 const RECORDER = fileURLToPath(
   new URL('../fixtures/lmdb-open-recorder.cjs', import.meta.url),
 );
+const DIRECT_WRITER = fileURLToPath(
+  new URL('../fixtures/lmdb-holder-lock-child.js', import.meta.url),
+);
 const OBSERVER = fileURLToPath(
   new URL('../fixtures/local-store-host-observer.js', import.meta.url),
 );
@@ -388,5 +391,69 @@ describe('operator reads while a resident hosts its control store', () => {
       }
     },
     120_000,
+  );
+
+  testOnUnix(
+    'refuse an inspect beside a direct writer after a bounded wait, naming it',
+    async () => {
+      const fixture = createFixture();
+      // No resident: the store is created by a direct submit, then held
+      // exclusively by a direct writer (as `ops recover` would hold it).
+      const accepted = submit(fixture, 'direct-writer-held');
+      const writer = spawn(
+        process.execPath,
+        [DIRECT_WRITER, fixture.controlPath, 'write', '10000'],
+        {
+          cwd: REPO_ROOT,
+          env: fixture.env,
+          stdio: ['pipe', 'pipe', 'inherit'],
+        },
+      );
+      try {
+        const [line] = await once(
+          /** @type {import('node:stream').Readable} */ (writer.stdout),
+          'data',
+        );
+        expect(JSON.parse(String(line))).toMatchObject({ opened: true });
+        const started = Date.now();
+        const inspect = spawnSync(
+          process.execPath,
+          [
+            '--require',
+            RECORDER,
+            BIN_PATH,
+            'ops',
+            'inspect',
+            '--run-id',
+            accepted.runId,
+            '--json',
+          ],
+          {
+            cwd: REPO_ROOT,
+            encoding: 'utf8',
+            timeout: WAIT_TIMEOUT_MS,
+            env: {
+              ...fixture.env,
+              WHARFIE_TEST_LMDB_OPEN_LOG: fixture.openLog,
+            },
+          },
+        );
+        const elapsed = Date.now() - started;
+        expect(inspect.status).toBe(1);
+        expect(inspect.stderr).toContain(`held by pid ${writer.pid}`);
+        expect(inspect.stderr).toContain('Waited 10000ms');
+        expect(elapsed).toBeGreaterThanOrEqual(10_000);
+        expect(
+          controlStoreOpens(fixture).filter(
+            (entry) => entry.pid === inspect.pid,
+          ),
+        ).toEqual([]);
+      } finally {
+        writer.kill('SIGKILL');
+        await once(writer, 'close').catch(() => undefined);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    90_000,
   );
 });

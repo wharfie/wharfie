@@ -4171,8 +4171,24 @@ export function createSystemdUserServiceOperator(options = {}) {
      * @param {'get'|'query'|'queryPage'|'put'|'update'|'remove'|'batchWrite'|'transactionWrite'} method - DB method.
      * @returns {(params: any) => Promise<any>} - Call on the current access.
      */
-    const call = (method) => async (params) =>
-      await /** @type {any} */ (await resolveCurrent())[method](params);
+    const call = (method) => async (params) => {
+      const pending = resolveCurrent();
+      try {
+        return await /** @type {any} */ (await pending)[method](params);
+      } catch (error) {
+        // A lost connection to a resident's host stays lost; the next call
+        // resolves the store again instead of reusing it.
+        if (
+          /** @type {{code?: unknown}} */ (error)?.code ===
+            'local-store-host-read' &&
+          current === pending
+        ) {
+          current = undefined;
+          await (await pending).close?.().catch(() => undefined);
+        }
+        throw error;
+      }
+    };
     const db = brandDBClient(
       {
         get: call('get'),

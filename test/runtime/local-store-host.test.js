@@ -534,6 +534,37 @@ describeOnUnix('local store host', () => {
     expect(received[0].writable).toBe(true);
   }, 30_000);
 
+  test('refuses a write over the request limit as not applied, and keeps the connection', async () => {
+    const storePath = join(createRoot(), 'control');
+    await startHostChild(storePath);
+    const writer = await connectLocalStoreHost({ storePath, writable: true });
+    await expect(
+      writer?.put({
+        tableName: 'records',
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'big', sk: 'one', blob: 'x'.repeat(2 * 1024 * 1024) },
+      }),
+    ).rejects.toThrow(/was not sent and nothing was applied/);
+    // Nothing went over the connection, so it is still usable.
+    await writer?.put({
+      tableName: 'records',
+      keyName: 'pk',
+      sortKeyName: 'sk',
+      record: { pk: 'small', sk: 'one' },
+    });
+    expect(
+      await writer?.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'big',
+        sortKeyName: 'sk',
+        sortKeyValue: 'one',
+      }),
+    ).toBeUndefined();
+    await writer?.close();
+  }, 30_000);
+
   test('reroutes a read whose host stops mid-operation instead of failing the command', async () => {
     const storePath = join(createRoot(), 'control');
     const first = await startHostChild(storePath);
