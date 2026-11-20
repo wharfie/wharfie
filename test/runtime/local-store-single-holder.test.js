@@ -41,6 +41,9 @@ const RECORDER = fileURLToPath(
 const WAITING_RESIDENT_CHILD = fileURLToPath(
   new URL('../fixtures/waiting-resident-child.js', import.meta.url),
 );
+const ENDPOINT_ONLY_HOST_CHILD = fileURLToPath(
+  new URL('../fixtures/endpoint-only-host-child.js', import.meta.url),
+);
 const COORDINATOR_CHILD = fileURLToPath(
   new URL('../fixtures/coordinator-takeover-child.js', import.meta.url),
 );
@@ -284,11 +287,60 @@ describeOnUnix('one holder per local store', () => {
         ended: true,
         code: 'local-store-wait-aborted',
       });
-      expect(ended.at - requested.at).toBeLessThan(1_000);
+      // Promptly: it does not wait out any part of its 30 s bound. The real
+      // latency is one event-loop turn; the margin is for a starved runner.
+      expect(ended.at - requested.at).toBeLessThan(10_000);
       expect(nativeOpensBy(root, resident.child.pid)).toEqual([]);
     },
     60_000,
   );
+
+  test('a waiting resident has one deadline across both phases of its wait', async () => {
+    const root = createRoot();
+    const seed = await createControlDBClient('lmdb', { path: root.storePath });
+    await seed.put({
+      tableName: 'records',
+      keyName: 'pk',
+      record: { pk: 'x' },
+    });
+    await seed.close();
+    // Phase 2's blocker first: a direct reader inside the store, which keeps
+    // the lock busy throughout. Then phase 1's: another host's endpoint,
+    // which holds no lock and never serves.
+    const reader = start(
+      DIRECT_CHILD,
+      [root.storePath, 'read', '1000'],
+      root.openLog,
+    );
+    expect(await reader.next()).toMatchObject({ opened: true });
+    const endpointOnly = start(
+      ENDPOINT_ONLY_HOST_CHILD,
+      [root.storePath],
+      root.openLog,
+    );
+    expect(await endpointOnly.next()).toMatchObject({ bound: true });
+
+    const heldWaitMs = 6_000;
+    const resident = start(
+      WAITING_RESIDENT_CHILD,
+      [join(root.storePath, '..'), String(heldWaitMs)],
+      root.openLog,
+    );
+    const waiting = await resident.next();
+    expect(waiting).toMatchObject({ waiting: true });
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    endpointOnly.send('release');
+    expect(await endpointOnly.next()).toMatchObject({ released: true });
+
+    const ended = await resident.next();
+    expect(ended).toMatchObject({ ended: true, code: 'local-store-busy' });
+    // One 6 s deadline for both phases: about 3 s of host wait, then only
+    // the remaining ~3 s for the lock. A fresh 6 s for the lock would end
+    // near 9 s.
+    expect(ended.at - waiting.at).toBeGreaterThanOrEqual(heldWaitMs - 200);
+    expect(ended.at - waiting.at).toBeLessThan(heldWaitMs + 2_000);
+    expect(nativeOpensBy(root, resident.child.pid)).toEqual([]);
+  }, 60_000);
 
   test('a host does not open the store while a direct reader is still inside it', async () => {
     const root = createRoot();

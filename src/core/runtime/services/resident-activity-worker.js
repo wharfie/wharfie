@@ -1785,6 +1785,10 @@ export async function runLocalResidentActivityService(options) {
     // Told to stop while still waiting for another holder: the resident never
     // opened the store, so this is a clean, empty drain.
     if (error instanceof LocalStoreWaitAbortedError) {
+      // The only trace this run leaves, so the journal says why it ended.
+      process.stderr.write(
+        `Resident stopped before starting: ${error.message}\n`,
+      );
       return Object.freeze({ processed: 0 });
     }
     throw error;

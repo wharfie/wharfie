@@ -1,13 +1,14 @@
 // Starts the way the service manager's resident does (hosting the control
 // store, waiting for another holder) and reports how it ended.
-// argv: <root>. stdin "abort\n" sends the resident its stop signal.
+// argv: <root> [heldWaitMs]. stdin "abort\n" sends the resident its stop
+// signal.
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { resolveExecutionPayloadStoreId } from '../../src/core/lib/config/db.js';
 import { withExecutionLedger } from '../../src/core/runtime/operator/execution-ledger-store.js';
 
-const [root] = process.argv.slice(2);
+const [root, heldWaitArg] = process.argv.slice(2);
 const payloadPath = join(root, 'payloads');
 const controller = new AbortController();
 const report = (/** @type {Record<string, unknown>} */ message) =>
@@ -35,6 +36,7 @@ try {
       },
       hostReads: true,
       onHostHeld: 'wait',
+      ...(heldWaitArg ? { heldWaitMs: Number(heldWaitArg) } : {}),
       signal: controller.signal,
     },
   );

@@ -1,11 +1,15 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 import {
   APPLICATION_STATE_TABLE_NAME,
@@ -322,4 +326,64 @@ describe('local resident activity service', () => {
       { configuration, readOnly: true },
     );
   });
+
+  it('a resident told to stop while another process holds its store says so and opens nothing', async () => {
+    const { configuration, applicationStateConfiguration } =
+      createConfigurations();
+    const holder = spawn(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL('../../fixtures/local-store-host-child.js', import.meta.url),
+        ),
+        configuration.controlPath,
+        '0',
+      ],
+      {
+        cwd: fileURLToPath(new URL('../../..', import.meta.url)),
+        stdio: ['pipe', 'pipe', 'inherit'],
+      },
+    );
+    const exited = once(holder, 'exit');
+    try {
+      const lines = createInterface({
+        input: /** @type {import('node:stream').Readable} */ (holder.stdout),
+      })[Symbol.asyncIterator]();
+      expect(JSON.parse(String((await lines.next()).value))).toMatchObject({
+        ready: true,
+      });
+      /** @type {string[]} */
+      const written = [];
+      const write = jest
+        .spyOn(process.stderr, 'write')
+        .mockImplementation((chunk) => {
+          written.push(String(chunk));
+          return true;
+        });
+      try {
+        const shutdown = new AbortController();
+        setTimeout(() => shutdown.abort(new Error('test shutdown')), 500);
+        await expect(
+          runLocalResidentActivityService({
+            execution: makeEmbeddedExecution('held-store-app'),
+            signal: shutdown.signal,
+            pollIntervalMs: 1,
+            drainTimeoutMs: 1,
+            configuration,
+            applicationStateConfiguration,
+            onStoreHeld: 'wait',
+          }),
+        ).resolves.toEqual({ processed: 0 });
+      } finally {
+        write.mockRestore();
+      }
+      const journal = written.join('');
+      expect(journal).toContain('Resident stopped before starting');
+      expect(journal).toContain('it did not open the store');
+      expect(journal).toContain(`pid ${holder.pid}`);
+    } finally {
+      holder.kill('SIGKILL');
+      await exited;
+    }
+  }, 30_000);
 });

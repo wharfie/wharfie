@@ -769,7 +769,11 @@ export async function acquireLocalStoreHost(options) {
       refusal.message += ` Waited ${heldWaitMs}ms.`;
       throw refusal;
     }
-    await waitForLocalStore(HELD_RETRY_INTERVAL_MS, options.signal);
+    await waitForLocalStore(
+      HELD_RETRY_INTERVAL_MS,
+      options.signal,
+      refusal.message,
+    );
   }
 }
 

@@ -545,11 +545,14 @@ const LOCAL_STORE_LOCK_RETRY_MS = 25;
 async function openHeldLmdb(createLMDB, options, wait) {
   const deadline = Date.now() + wait.lockWaitMs;
   // The signal ends a wait, not an attempt (waitForLocalStore).
+  /** @type {string | undefined} */
+  let waitingFor;
   for (;;) {
     try {
       return createLMDB({ ...options, holderLock: true });
     } catch (error) {
       if (!(error instanceof LocalStoreBusyError)) throw error;
+      waitingFor = error.message;
       if (Date.now() >= deadline) {
         throw new LocalStoreBusyError(
           `${error.message} Waited ${wait.lockWaitMs}ms.`,
@@ -562,7 +565,7 @@ async function openHeldLmdb(createLMDB, options, wait) {
     }
     const hosted = await wait.route?.();
     if (hosted) return hosted;
-    await waitForLocalStore(LOCAL_STORE_LOCK_RETRY_MS, wait.signal);
+    await waitForLocalStore(LOCAL_STORE_LOCK_RETRY_MS, wait.signal, waitingFor);
   }
 }
 

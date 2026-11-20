@@ -363,11 +363,12 @@ function validateResidentReplacementApplicationStateTransport(
  *
  * A host refuses with LocalStoreHeldError while another process holds the
  * store; with `onHostHeld: 'wait'` (the service manager's resident) it waits
- * up to 30 s in total for that process to release it first. `signal` ends
+ * up to 30 s in total (`heldWaitMs`) for that process to release it first,
+ * across both phases of the wait. `signal` ends
  * any such wait with LocalStoreWaitAbortedError, before anything is opened.
  * @template T
  * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean, payloadStore: ExecutionPayloadStore}) => Promise<T>} handler - Work to run against the ledger.
- * @param {{readOnly?: boolean, hostReads?: boolean, onHostHeld?: 'refuse'|'wait', signal?: AbortSignal, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
+ * @param {{readOnly?: boolean, hostReads?: boolean, onHostHeld?: 'refuse'|'wait', heldWaitMs?: number, signal?: AbortSignal, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
  * @returns {Promise<T>} - Handler result.
  */
 export async function withExecutionLedger(handler, options = {}) {
@@ -377,18 +378,15 @@ export async function withExecutionLedger(handler, options = {}) {
   const localLmdb = configuration.adapterName === 'lmdb';
   // A waiting host has one bound for both phases of its wait: for an earlier
   // host to leave, then for the holder lock.
+  const heldWaitMs = options.heldWaitMs ?? LOCAL_STORE_HOST_HELD_WAIT_MS;
   const waitDeadline =
-    options.onHostHeld === 'wait'
-      ? Date.now() + LOCAL_STORE_HOST_HELD_WAIT_MS
-      : undefined;
+    options.onHostHeld === 'wait' ? Date.now() + heldWaitMs : undefined;
   /** @type {import('../local-store-host.js').LocalStoreHost | undefined} */
   let host;
   if (localLmdb && !readOnly && options.hostReads === true) {
     host = await acquireLocalStoreHost({
       storePath: configuration.controlPath,
-      ...(options.onHostHeld === 'wait'
-        ? { onHeld: 'wait', heldWaitMs: LOCAL_STORE_HOST_HELD_WAIT_MS }
-        : {}),
+      ...(options.onHostHeld === 'wait' ? { onHeld: 'wait', heldWaitMs } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
     });
   } else if (localLmdb && !readOnly) {
