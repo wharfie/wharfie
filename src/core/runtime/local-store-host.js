@@ -6,7 +6,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import v8 from 'node:v8';
 
 import { DB_ADAPTER_NAMES, brandDBClient } from '../lib/db/base.js';
-import { LMDBReadOnlyStoreNotFoundError } from '../lib/db/adapters/lmdb.js';
 import {
   ensureLocalServiceSocketDirectory,
   getLocalServiceSessionPrincipalId,
@@ -200,15 +199,16 @@ function describeError(error) {
 }
 
 /**
+ * Rebuild a host-side error with its name, message, and code. Callers branch
+ * on `code` (for example WHARFIE_READ_ONLY_STORE_NOT_FOUND). This module must
+ * not import the LMDB adapter statically: that would load the native module
+ * resolver in every process, including SEA bundles that never open LMDB.
  * @param {{name?: unknown, message?: unknown, code?: unknown}} described - Transported error.
  * @returns {Error} - Equivalent local error.
  */
 function rebuildError(described) {
   const message =
     typeof described?.message === 'string' ? described.message : 'Error';
-  if (described?.code === 'WHARFIE_READ_ONLY_STORE_NOT_FOUND') {
-    return new LMDBReadOnlyStoreNotFoundError(message);
-  }
   const ErrorClass =
     described?.name === 'TypeError'
       ? TypeError

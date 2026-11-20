@@ -38,16 +38,11 @@ function countBySourceFile(pattern) {
 
 describe('LMDB open choke point', () => {
   test('only the DB config module loads the LMDB adapter factory', () => {
+    // Only lazily, from the DB config module: a static import elsewhere would
+    // load the native module resolver in every process, including SEAs.
     expect(countBySourceFile(/['"][./a-z]*\/adapters\/lmdb\.js['"]/g)).toEqual({
       'src/core/lib/config/db.js': 4,
-      // Named import of the read-only not-found error class only.
-      'src/core/runtime/local-store-host.js': 1,
     });
-    expect(
-      readFileSync(join(SRC, 'core/runtime/local-store-host.js'), 'utf8'),
-    ).toMatch(
-      /import \{ LMDBReadOnlyStoreNotFoundError \} from '\.\.\/lib\/db\/adapters\/lmdb\.js';/,
-    );
     expect(countBySourceFile(/\bcreateLMDB\(/g)).toEqual({
       'src/core/lib/config/db.js': 4,
       'src/core/lib/db/adapters/lmdb.js': 1,
