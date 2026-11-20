@@ -61,7 +61,7 @@ describe('LMDB open choke point', () => {
       source.indexOf('export async function createApplicationStateDBClient('),
     );
     expect(branch).toMatch(
-      /if \(options\.readOnly === true && !hasOpenLmdbEnvironment\(controlPath\)\) \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+const hosted = await connectLocalStoreHost\(\{ storePath: controlPath \}\);\s+if \(hosted\) return hosted;\s+\}\s+return createLMDB\(/,
+      /if \(options\.readOnly === true && !hasOpenLmdbEnvironment\(controlPath\)\) \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+const hosted = await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?\}\);\s+if \(hosted\) return hosted;\s+\}\s+return createLMDB\(/,
     );
   });
 
@@ -82,7 +82,8 @@ describe('LMDB open choke point', () => {
         /\b(?:createControlDBClient|createControlDB|createDB)\((?!\s*\))/g,
       ),
     ).toEqual({
-      'src/core/lib/config/db.js': 1,
+      // The definition, plus the reroute after a lost host (read-only).
+      'src/core/lib/config/db.js': 2,
       'src/core/runtime/operator/coordinator-authority-command.js': 1,
       'src/core/runtime/operator/execution-ledger-store.js': 2,
       'src/core/runtime/services/systemd-user-service-manager.js': 4,

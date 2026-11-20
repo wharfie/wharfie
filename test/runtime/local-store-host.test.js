@@ -248,6 +248,36 @@ describeOnUnix('local store host', () => {
     await client?.close();
   }, 30_000);
 
+  test('reroutes a read whose host stops mid-operation instead of failing the command', async () => {
+    const storePath = join(createRoot(), 'control');
+    const first = await startHostChild(storePath);
+    const client = await createControlDBClient('lmdb', {
+      path: storePath,
+      readOnly: true,
+    });
+    expect(isLocalStoreHostClient(client)).toBe(true);
+    const read = async () =>
+      await client.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'item',
+        sortKeyName: 'sk',
+        sortKeyValue: 's-c',
+      });
+    expect(await read()).toEqual({ pk: 'item', sk: 's-c', n: 99 });
+
+    // A restarted host serves the next read through the same client.
+    await first.stop();
+    const second = await startHostChild(storePath);
+    expect(await read()).toEqual({ pk: 'item', sk: 's-c', n: 99 });
+
+    // With no host left, the read opens the store directly.
+    await second.stop();
+    expect(await findLocalStoreHost({ storePath })).toBeUndefined();
+    expect(await read()).toEqual({ pk: 'item', sk: 's-c', n: 99 });
+    await client.close();
+  }, 30_000);
+
   test('fails a read when its host dies and then treats the stale endpoint as absent', async () => {
     const storePath = join(createRoot(), 'control');
     const host = await startHostChild(storePath);

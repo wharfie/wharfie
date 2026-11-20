@@ -551,7 +551,14 @@ export async function createControlDBClient(
     if (options.readOnly === true && !hasOpenLmdbEnvironment(controlPath)) {
       const { connectLocalStoreHost } =
         await import('../../runtime/local-store-host.js');
-      const hosted = await connectLocalStoreHost({ storePath: controlPath });
+      const hosted = await connectLocalStoreHost({
+        storePath: controlPath,
+        reopen: async () =>
+          await createControlDBClient(adapterName, {
+            path: controlPath,
+            readOnly: true,
+          }),
+      });
       if (hosted) return hosted;
     }
     return createLMDB({

@@ -700,23 +700,55 @@ function connectHost(endpoint, storeRoot) {
   });
 }
 
+/** Transport losses tolerated per read before it fails closed. */
+const MAX_READ_REROUTES = 3;
+
 /**
- * Wrap one remote facade as a read-only LMDB DB client.
+ * Wrap one remote facade as a read-only LMDB DB client. If the host goes away
+ * mid-operation (it stops, or crashes and restarts), the failed read is
+ * re-resolved through `reopen`: that waits for a stopping host to unbind,
+ * routes to a host that serves, and opens natively only when no host is left.
+ * Each read is independent, so a reroute between reads gives the same
+ * per-read consistency as a direct open.
  * @param {Extract<HostConnection, {kind: 'opened'}>} connection - Opened remote facade.
+ * @param {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} reopen - Re-resolve the store after a lost host.
  * @returns {import('../lib/db/base.js').DBClient} - Remote read-only client.
  */
-function createHostClient(connection) {
+function createHostClient(connection, reopen) {
   const readOnly = async () => {
     throw new Error('LMDB client is read-only.');
   };
   let closed = false;
+  /** @type {import('../lib/db/base.js').DBClient | undefined} */
+  let rerouted;
   /**
-   * @param {string} method - Read method.
+   * @param {'get'|'query'|'queryPage'} method - Read method.
    * @returns {(params: any) => Promise<any>} - Remote call.
    */
   const remote = (method) => async (params) => {
-    if (closed) throw new Error('LMDB client is closed.');
-    return await connection.call(method, params);
+    for (let attempt = 0; ; attempt += 1) {
+      if (closed) throw new Error('LMDB client is closed.');
+      try {
+        if (rerouted)
+          return await /** @type {any} */ (rerouted)[method](params);
+        return await connection.call(method, params);
+      } catch (error) {
+        // Only a lost transport is rerouted; an error the host answered is
+        // the read's own result.
+        if (
+          !reopen ||
+          !(error instanceof LocalStoreHostReadError) ||
+          attempt >= MAX_READ_REROUTES
+        ) {
+          throw error;
+        }
+        const previous = rerouted;
+        rerouted = undefined;
+        if (previous) await previous.close?.().catch(() => undefined);
+        else connection.close();
+        rerouted = await reopen();
+      }
+    }
   };
   const client = brandDBClient(
     {
@@ -732,6 +764,7 @@ function createHostClient(connection) {
         if (closed) return;
         closed = true;
         connection.close();
+        await rerouted?.close?.();
       },
     },
     DB_ADAPTER_NAMES.LMDB,
@@ -753,7 +786,7 @@ export function isLocalStoreHostClient(db) {
  * undefined when no other process hosts it, which is the only case in which a
  * caller may open the store natively. A host that is starting or stopping is
  * retried; one that never accepts fails closed.
- * @param {{storePath: string, timeoutMs?: number}} options - Facade path of the store.
+ * @param {{storePath: string, timeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store, and how to re-resolve it if its host is lost mid-operation.
  * @returns {Promise<import('../lib/db/base.js').DBClient | undefined>} - Remote client or undefined.
  */
 export async function connectLocalStoreHost(options) {
@@ -767,7 +800,9 @@ export async function connectLocalStoreHost(options) {
     let unavailable = false;
     for (const endpoint of endpoints) {
       const connection = await connectHost(endpoint, storeRoot);
-      if (connection.kind === 'opened') return createHostClient(connection);
+      if (connection.kind === 'opened') {
+        return createHostClient(connection, options.reopen);
+      }
       if (connection.kind === 'unavailable') unavailable = true;
     }
     if (!unavailable) return undefined;
