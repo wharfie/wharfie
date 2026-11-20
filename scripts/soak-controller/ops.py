@@ -19,10 +19,19 @@ import time
 from datetime import datetime, timezone
 
 from template import render, runtime_bundle, RUNTIME_FILES
-from supervisor import atomic_json, read_json, MAX_JSON, never_created_evidence, soak_hours
+from supervisor import (atomic_json, read_json, MAX_JSON, never_created_evidence, soak_hours,
+                        latest_start, SETUP_BUDGET)
 
 HERE = Path(__file__).resolve().parent
 ACCOUNT = '411430101559'
+# Consecutive watch cycles with a failed read before `authorize` stops, and the
+# longest period without a fully successful cycle.
+MAX_POLL_FAILURES = 10
+MAX_POLL_FAILURE_SECONDS = 900
+# Least time `prepare` must leave before `latest_start` for apply, bootstrap,
+# token, and start. Measured: 9 min on 2026-11-05 and 46 min on 2026-11-19.
+PROVISION_BUDGET = 3600
+DEFAULT_SSM_KEY = 'alias/aws/ssm'
 
 
 def asset_names(version):
@@ -97,6 +106,9 @@ def prepare(options):
             *RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py']},
     }
     config['specSha256'] = canonical_digest(config)
+    # The same rule `apply` and `start` enforce, applied before anything is written.
+    if latest_start(config) - created < PROVISION_BUDGET:
+        raise RuntimeError('campaign-window-cannot-hold-setup-and-full-soak')
     atomic_json(root / 'campaign.json', config)
     template = render(config)
     atomic_json(root / 'cloudformation.json', template)
@@ -107,7 +119,8 @@ def prepare(options):
         'assetsDirectory': str(assets),
     })
     print(json.dumps({'status': 'prepared', 'state': str(root), 'stopAtUtc':
-        datetime.fromtimestamp(config['stopAt'], timezone.utc).isoformat()}))
+        datetime.fromtimestamp(config['stopAt'], timezone.utc).isoformat(), 'startByUtc':
+        datetime.fromtimestamp(latest_start(config), timezone.utc).isoformat()}))
 
 
 class Operator:
@@ -128,8 +141,10 @@ class Operator:
     def save(self):
         atomic_json(self.root / 'ownership.json', self.ownership)
 
-    def aws(self, service, action, value=None, timeout=120, extra=()):
-        # Secret values never appear in argv or CLI debug output.
+    def aws(self, service, action, value=None, timeout=120, extra=(), secret_stdin=None):
+        # Secret values never appear in argv or CLI debug output. A secret is
+        # passed as `secret_stdin` and named by the caller as file:///dev/stdin,
+        # so it reaches the CLI through a pipe and is never written to disk.
         request_value = dict(value or {})
         named_arguments = []
         streaming_get = (service, action) == ('s3api', 'get-object')
@@ -155,13 +170,17 @@ class Operator:
                    '--no-cli-pager', '--output', 'json', '--cli-connect-timeout', '10',
                    '--cli-read-timeout', '60', service, action,
                    *input_arguments, *named_arguments, *extra]
+        stdin = {'stdin': subprocess.DEVNULL} if secret_stdin is None else {'input': secret_stdin}
         try:
-            response = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+            response = subprocess.run(command, **stdin, capture_output=True,
                                       timeout=timeout, env={**os.environ, 'AWS_PAGER': ''})
             if response.returncode or len(response.stdout) > 1048576:
-                match = re.search(rb'An error occurred \((NoSuchEntity|ResourceNotFoundException)\)', response.stderr)
-                raise AwsError(service, action, response.returncode,
-                               match.group(1).decode() if match else None)
+                match = re.search(rb'An error occurred \((NoSuchEntity|ResourceNotFoundException|ParameterNotFound)\)', response.stderr)
+                code = match.group(1).decode() if match else None
+                if code is None and re.search(rb'An error occurred \(ValidationError\) when calling the '
+                                              rb'DescribeStacks operation: Stack with id \S+ does not exist', response.stderr):
+                    code = 'StackNotFound'
+                raise AwsError(service, action, response.returncode, code)
             return json.loads(response.stdout) if response.stdout.strip() else {}
         finally:
             if request_path is not None:
@@ -178,8 +197,8 @@ class Operator:
         self.verify_operations_files()
         if sha256(self.root / 'cloudformation.json') != self.ownership['templateSha256']:
             raise RuntimeError('reviewed-template-changed')
-        if self.config['stopAt'] - time.time() < (soak_hours(self.config) + 3) * 3600:
-            raise RuntimeError('prepared-deadline-too-old-create-new-unlaunched-campaign')
+        if time.time() > latest_start(self.config):
+            raise RuntimeError('campaign-start-window-passed-prepare-new-campaign')
 
     def identity(self):
         account = self.aws('sts', 'get-caller-identity')['Account']
@@ -198,6 +217,15 @@ class Operator:
         if self.ownership['stackId'] and value['StackId'] != self.ownership['stackId']:
             raise RuntimeError('changed-stack-authority')
         return value
+
+    def existing_stack(self):
+        """The exact campaign stack, or None only when CloudFormation reports none."""
+        try:
+            return self.stack()
+        except AwsError as error:
+            if error.provider_code != 'StackNotFound':
+                raise
+            return None
 
     def wait_stack(self, acceptable, timeout=1200):
         deadline = time.monotonic() + timeout
@@ -220,26 +248,46 @@ class Operator:
         image = self.aws('ec2', 'describe-images', {'ImageIds': [self.config['imageId']], 'Owners': ['099720109477']})
         if len(image['Images']) != 1 or image['Images'][0]['State'] != 'available':
             raise RuntimeError('pinned-image-unavailable')
-        if not self.ownership.get('createAttempted'):
-            self.ownership['createAttempted'] = True
-            self.save()  # Lost create response is reconciled, never blindly recreated.
-            template = (self.root / 'cloudformation.json').read_text()
-            try:
-                result = self.aws('cloudformation', 'create-stack', {
-                    'StackName': self.config['campaignId'], 'TemplateBody': template,
-                    'Capabilities': ['CAPABILITY_NAMED_IAM'],
-                    'ClientRequestToken': self.config['campaignId'] + '-create',
-                    'OnFailure': 'DO_NOTHING',
-                    'Tags': [{'Key': 'wharfie:soak-campaign', 'Value': self.config['campaignId']},
-                             {'Key': 'wharfie:soak-spec', 'Value': self.config['specSha256']}],
-                })
-                self.ownership['stackId'] = result['StackId']
+        if not self.ownership.get('stackId'):
+            # A previous attempt is reconciled before anything else. Only
+            # CloudFormation's own report that no stack has the campaign name
+            # permits another create; that name is unique among live stacks and
+            # the request token is unchanged, so a retry cannot add a second stack.
+            found = self.existing_stack() if self.ownership.get('createAttempted') else None
+            if found is None:
+                if self.ownership.get('status') != 'prepared':
+                    raise RuntimeError('campaign-not-in-prepared-state')
+                # The retained proof bucket has a fixed name. If it exists, an
+                # earlier create got that far and its stack was deleted outside
+                # this tool; creating again would fail on the bucket after
+                # launching a billed controller. Only a 404 shows it absent; any
+                # other head-bucket failure may be transient, so a rerun can recover.
+                if self.ownership.get('createAttempted'):
+                    bucket = self.bucket_state()
+                    if bucket == 'present':
+                        raise RuntimeError('campaign-bucket-exists-without-stack-prepare-new-campaign')
+                    if bucket != 'absent':
+                        raise RuntimeError('campaign-bucket-absence-unverified-rerun-apply')
+                self.ownership['createAttempted'] = True
                 self.save()
-            except (AwsError, subprocess.TimeoutExpired):
-                # A matching existing stack is the only acceptable lost-response outcome.
-                found = self.stack()
-                self.ownership['stackId'] = found['StackId']
-                self.save()
+                template = (self.root / 'cloudformation.json').read_text()
+                try:
+                    found = self.aws('cloudformation', 'create-stack', {
+                        'StackName': self.config['campaignId'], 'TemplateBody': template,
+                        'Capabilities': ['CAPABILITY_NAMED_IAM'],
+                        'ClientRequestToken': self.config['campaignId'] + '-create',
+                        'OnFailure': 'DO_NOTHING',
+                        'Tags': [{'Key': 'wharfie:soak-campaign', 'Value': self.config['campaignId']},
+                                 {'Key': 'wharfie:soak-spec', 'Value': self.config['specSha256']}],
+                    })
+                except (AwsError, subprocess.TimeoutExpired):
+                    # A matching existing stack is the only acceptable lost-response outcome.
+                    found = self.existing_stack()
+                    if found is None:
+                        # Nothing was created; rerunning `apply` retries the create.
+                        raise RuntimeError('campaign-stack-create-failed-rerun-apply') from None
+            self.ownership['stackId'] = found['StackId']
+            self.save()
         self.wait_stack({'CREATE_COMPLETE', 'UPDATE_COMPLETE'})
         instances = self.aws('ec2', 'describe-instances', {
             'InstanceIds': [self.ownership['outputs']['ControllerId']]})
@@ -287,53 +335,101 @@ class Operator:
     def token(self):
         self.verify_operations_files()
         self.identity()
+        # CLI history records request and response bodies, including the
+        # secret, in ~/.aws/cli/history/history.db, and no option disables it
+        # for one command.
+        if self.cli_history_possible():
+            raise RuntimeError('aws-cli-history-must-be-disabled-for-token')
         token = sys.stdin.read(4097).strip()
         if not 20 <= len(token) <= 4096 or '\n' in token:
             raise RuntimeError('token-input-invalid')
-        if self.ownership.get('tokenAttempted'):
-            current = self.aws('ssm', 'get-parameter', {
-                'Name': self.config['tokenParameter'], 'WithDecryption': True})
-            if current['Parameter']['Value'] != token or current['Parameter']['Type'] != 'SecureString':
-                raise RuntimeError('existing-campaign-token-mismatch')
-        else:
+        current = self.stored_token() if self.ownership.get('tokenAttempted') else None
+        if current is None:
             self.ownership['tokenAttempted'] = True
             self.save()
-            self.aws('ssm', 'put-parameter', {
-                'Name': self.config['tokenParameter'], 'Value': token, 'Type': 'SecureString',
-                'Tier': 'Standard', 'Overwrite': False,
-                'Tags': [{'Key': 'wharfie:soak-campaign', 'Value': self.config['campaignId']},
-                         {'Key': 'wharfie:soak-spec', 'Value': self.config['specSha256']}],
-            })
+            try:
+                # Overwrite is false: a retry can never replace a stored token.
+                self.aws('ssm', 'put-parameter', {
+                    'Name': self.config['tokenParameter'], 'Type': 'SecureString',
+                    'Tier': 'Standard', 'Overwrite': False,
+                    'Tags': [{'Key': 'wharfie:soak-campaign', 'Value': self.config['campaignId']},
+                             {'Key': 'wharfie:soak-spec', 'Value': self.config['specSha256']}],
+                }, extra=('--value', 'file:///dev/stdin'), secret_stdin=token.encode())
+            except (AwsError, subprocess.TimeoutExpired):
+                pass  # Only the independent read below can accept this attempt.
+            current = self.stored_token()
+            if current is None:
+                # Nothing was stored; rerunning `token` retries the put.
+                raise RuntimeError('campaign-token-not-stored-rerun-token')
+        if current['Value'] != token or current['Type'] != 'SecureString':
+            raise RuntimeError('existing-campaign-token-mismatch')
+        # get-parameter does not report the KMS key; only the AWS-managed SSM
+        # key, which the put above uses, is accepted.
+        metadata = self.aws('ssm', 'describe-parameters', {'ParameterFilters': [
+            {'Key': 'Name', 'Option': 'Equals', 'Values': [self.config['tokenParameter']]}]})['Parameters']
+        if len(metadata) != 1 or metadata[0].get('KeyId') != DEFAULT_SSM_KEY:
+            raise RuntimeError('existing-campaign-token-key-mismatch')
         self.ownership['tokenStored'] = True
         self.save()
         print('{"status":"secure-string-stored"}')
 
+    def cli_history_possible(self):
+        """True unless the effective profile leaves cli_history unset or disabled."""
+        result = subprocess.run(['aws', '--profile', 'wharfie', 'configure', 'get', 'cli_history'],
+                                stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+        if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+            return False
+        return result.returncode != 0 or result.stdout.strip() != b'disabled'
+
+    def stored_token(self):
+        """The campaign parameter, or None only when SSM reports it absent."""
+        try:
+            return self.aws('ssm', 'get-parameter', {
+                'Name': self.config['tokenParameter'], 'WithDecryption': True})['Parameter']
+        except AwsError as error:
+            if error.provider_code != 'ParameterNotFound':
+                raise
+            return None
+
     def remote_json(self, suffix, optional=False):
         target = self.root / 'download.tmp.json'
-        target.unlink(missing_ok=True)
-        try:
-            result = self.aws('s3api', 'get-object', {'Bucket': self.config['bucket'],
-                'Key': self.config['campaignId'] + '/' + suffix,
-                'Range': 'bytes=0-' + str(MAX_JSON)}, extra=(str(target),))
-            if result.get('ContentLength', 0) > MAX_JSON or target.stat().st_size > MAX_JSON:
-                raise RuntimeError('remote-proof-limit')
-            return read_json(target)
-        except AwsError:
-            if optional:
+        # An optional object can appear between the failed get and its
+        # confirming head (a gate request is written while `authorize` polls).
+        # S3 reads are strongly consistent, so that object is read again; an
+        # object that stays present but unreadable still fails closed.
+        for _ in range(3):
+            target.unlink(missing_ok=True)
+            try:
+                result = self.aws('s3api', 'get-object', {'Bucket': self.config['bucket'],
+                    'Key': self.config['campaignId'] + '/' + suffix,
+                    'Range': 'bytes=0-' + str(MAX_JSON)}, extra=(str(target),))
+                if result.get('ContentLength', 0) > MAX_JSON or target.stat().st_size > MAX_JSON:
+                    raise RuntimeError('remote-proof-limit')
+                return read_json(target)
+            except AwsError:
+                if not optional:
+                    raise
                 # Optional does not conflate IAM/network failures with absence:
                 # head-object must independently return a 404, inspected privately.
-                if self.object_absent(suffix):
+                state = self.object_state(suffix)
+                if state == 'absent':
                     return None
-            raise
-        finally:
-            target.unlink(missing_ok=True)
+                if state != 'present':
+                    raise
+            finally:
+                target.unlink(missing_ok=True)
+        raise AwsError('s3api', 'get-object', 'present-but-unreadable')
 
-    def object_absent(self, suffix):
+    def object_state(self, suffix):
         command = ['aws', '--profile', 'wharfie', '--region', 'us-east-2', '--no-cli-pager',
                    's3api', 'head-object', '--bucket', self.config['bucket'], '--key',
                    self.config['campaignId'] + '/' + suffix]
         result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
-        return result.returncode != 0 and b'(404)' in result.stderr and b'HeadObject' in result.stderr
+        if result.returncode == 0:
+            return 'present'
+        if b'(404)' in result.stderr and b'HeadObject' in result.stderr:
+            return 'absent'
+        return None
 
     def verify_deadman(self):
         outputs = self.ownership['outputs']
@@ -341,9 +437,11 @@ class Operator:
             'Name': self.config['campaignId'] + '-stop', 'GroupName': self.config['campaignId']})
         expected = datetime.fromtimestamp(self.config['stopAt'], timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
         hours = soak_hours(self.config)
-        if (self.config['stopAt'] != self.config['createdAt'] + (hours + 6) * 3600
-                or self.config['stopAt'] - time.time() < (hours + 3) * 3600):
+        if self.config['stopAt'] != self.config['createdAt'] + (hours + 6) * 3600:
             raise RuntimeError('external-stop-deadline-invalid')
+        # Starting later guarantees the full soak is refused after both rehearsals.
+        if time.time() > latest_start(self.config):
+            raise RuntimeError('campaign-start-window-passed-prepare-new-campaign')
         if schedule['State'] != 'ENABLED' or schedule['ScheduleExpression'] != 'at(' + expected + ')':
             raise RuntimeError('external-stop-authority-mismatch')
         if json.loads(schedule['Target']['Input']) != {'InstanceIds': [outputs['ControllerId']], 'Force': True}:
@@ -479,23 +577,45 @@ class Operator:
         self.verify_operations_files()
         self.identity()
         # Both rehearsals and long AWS setup must fit in the fixed setup window.
-        deadline = time.monotonic() + 7200
+        deadline = time.monotonic() + SETUP_BUDGET
         done = set()
+        failures = 0
+        last_healthy = time.monotonic()
         while time.monotonic() < deadline:
+            healthy = True
             for label in ('rehearsal-aws', 'soak-aws'):
                 if label in done:
                     continue
-                gate = self.remote_json('gates/' + label + '/request.json', optional=True)
+                gate, ok = self.poll_json('gates/' + label + '/request.json', deadline)
+                healthy = healthy and ok
                 if gate is not None:
                     self.approve(gate, label)
                     done.add(label)
             if len(done) == 2:
                 return
-            state = self.remote_json('supervisor.json', optional=True)
+            state, ok = self.poll_json('supervisor.json', deadline)
+            healthy = healthy and ok
             if state is not None and state.get('status') == 'failed':
                 raise RuntimeError('campaign-failed-during-setup')
+            failures = 0 if healthy else failures + 1
+            if healthy:
+                last_healthy = time.monotonic()
+            if failures >= MAX_POLL_FAILURES or time.monotonic() - last_healthy >= MAX_POLL_FAILURE_SECONDS:
+                raise RuntimeError('local-gate-watch-read-failures')
             time.sleep(5)
         raise RuntimeError('local-gate-watch-deadline')
+
+    def poll_json(self, suffix, deadline):
+        """One watch read. A failed read is only retried later, never treated as
+        absence or approval; approval itself still fails closed in `approve`."""
+        if time.monotonic() >= deadline:
+            raise RuntimeError('local-gate-watch-deadline')
+        try:
+            return self.remote_json(suffix, optional=True), True
+        except (AwsError, subprocess.TimeoutExpired) as error:
+            print(json.dumps({'status': 'watch-read-failed', 'object': suffix, 'error': type(error).__name__,
+                              'at': datetime.now(timezone.utc).isoformat()}), file=sys.stderr, flush=True)
+            return None, False
 
     def collect(self):
         self.verify_operations_files()
@@ -783,11 +903,18 @@ class Operator:
         self.save()
         print('{"status":"all-campaign-resources-cleaned"}')
 
-    def bucket_absent(self):
+    def bucket_state(self):
         result = subprocess.run(['aws', '--profile', 'wharfie', '--region', 'us-east-2', '--no-cli-pager',
                                  's3api', 'head-bucket', '--bucket', self.config['bucket']],
                                 stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
-        return result.returncode != 0 and b'(404)' in result.stderr and b'HeadBucket' in result.stderr
+        if result.returncode == 0:
+            return 'present'
+        if b'(404)' in result.stderr and b'HeadBucket' in result.stderr:
+            return 'absent'
+        return None
+
+    def bucket_absent(self):
+        return self.bucket_state() == 'absent'
 
 
 def main():

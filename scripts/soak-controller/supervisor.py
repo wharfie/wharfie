@@ -32,6 +32,26 @@ REPORT_NAMES = (
     'gate-request.json', 'gate-approved.json',
 )
 SOAK_HOURS = (48, 72)
+# Observation exports retried after a failure, and the first backoff in seconds.
+# No retry starts once EXPORT_RETRY_ALLOWANCE has passed since the first attempt.
+EXPORT_ATTEMPTS = 4
+EXPORT_BACKOFF = 15
+EXPORT_RETRY_ALLOWANCE = 600
+# A resumed observation, including the final one and the runner's teardown, may
+# use this budget. Its child limit is also capped at the campaign deadline, so a
+# full soak must end early enough for that budget, five minutes of scheduling
+# slack, and the export retries that precede the final observation, or the
+# final teardown would be terminated.
+RESUME_BUDGET = 1800
+SCHEDULING_SLACK = 300
+FINAL_OBSERVATION_MARGIN = RESUME_BUDGET + SCHEDULING_SLACK + EXPORT_RETRY_ALLOWANCE
+# The supervisor stops this long before the external stop, so settlement fits.
+SUPERVISOR_STOP_RESERVE = 7200
+# Time from `start` until the later full soak has begun: both rehearsals, their
+# gate approvals, and both full builds. It equals the operator's gate-watch
+# window. Measured: 57 min on 2026-11-19, including a 37 min gap partly caused
+# by an operator crash.
+SETUP_BUDGET = 7200
 # Runner phases that finish before `prepare-apply` persists a possible provider
 # mutation (scripts/verify-live-deployment.js). A run that stopped in these
 # phases, then removed its workspace, never created a guest. `preview-next` is
@@ -47,6 +67,10 @@ def request_stop(cause, signum=None):
         STOP_REASON = {'cause': cause, 'signal': signum, 'at': time.time(),
                        'monotonicAt': time.monotonic()}
     STOP.set()
+
+
+class CampaignTimeRefused(RuntimeError):
+    """The remaining campaign time cannot hold a full soak and its final teardown."""
 
 
 def read_json(path):
@@ -102,6 +126,20 @@ def soak_hours(config):
     if type(value) is not int or value not in SOAK_HOURS:
         raise RuntimeError('invalid-soak-hours')
     return value
+
+
+def supervisor_deadline(config, started_at):
+    return min(config['stopAt'] - SUPERVISOR_STOP_RESERVE,
+               started_at + (soak_hours(config) + 4) * 3600)
+
+
+def latest_start(config):
+    """Latest supervisor start whose deadline still holds the setup budget, a
+    full soak, and its final observation; the operator refuses later launches.
+    The (soak + 4 h) term of the deadline always holds them (asserted in tests),
+    so only the external stop limits this."""
+    return (config['stopAt'] - SUPERVISOR_STOP_RESERVE - SETUP_BUDGET
+            - soak_hours(config) * 3600 - FINAL_OBSERVATION_MARGIN)
 
 
 def cleanup_verified(run_dir):
@@ -268,8 +306,7 @@ class Campaign:
                           'campaignId': config['campaignId'], 'startedAt': time.time(), 'runs': {}}
             self.save()
         self.soak_hours = soak_hours(config)
-        self.deadline = min(config['stopAt'] - 7200,
-                            self.state['startedAt'] + (self.soak_hours + 4) * 3600)
+        self.deadline = supervisor_deadline(config, self.state['startedAt'])
         self.monotonic_deadline = time.monotonic() + max(0, self.deadline - time.time())
         self.lock = threading.Lock()
         self.event_lock = threading.Lock()
@@ -416,6 +453,27 @@ class Campaign:
                               'optionalDiagnosticsUnavailable': diagnostic_failures})
         self.evidence.put_file('runs/' + label + '/export.json', manifest)
 
+    def export_observation(self, label):
+        """Export a running soak's evidence; a transient failure is retried.
+
+        Attempts and backoff are bounded (15 + 30 + 60 s), and no retry starts
+        after EXPORT_RETRY_ALLOWANCE, which the final-observation margin
+        reserves. A persistent failure still raises and fails the run: a soak
+        whose evidence cannot be exported is not a pass.
+        """
+        started = time.monotonic()
+        for attempt in range(EXPORT_ATTEMPTS):
+            try:
+                return self.export_run(label)
+            except Exception as error:
+                backoff = EXPORT_BACKOFF * 2 ** attempt
+                if (attempt + 1 == EXPORT_ATTEMPTS or STOP.is_set()
+                        or time.monotonic() - started + backoff > EXPORT_RETRY_ALLOWANCE):
+                    raise
+                self.event(label, 'export-retry', attempt=attempt + 1, failureType=type(error).__name__)
+                if STOP.wait(backoff):
+                    raise
+
     def transfer_gate(self, label):
         run_dir = safe_relative_run(label)
         request = run_dir / 'gate-request.json'
@@ -468,7 +526,7 @@ class Campaign:
                             pass
             pump = threading.Thread(target=drain, daemon=True)
             pump.start()
-            operation_budget = 1200 if cleanup else 1800 if '--resume' in arguments else 7200
+            operation_budget = 1200 if cleanup else RESUME_BUDGET if '--resume' in arguments else 7200
             wall_limit = time.time() + operation_budget if cleanup else min(self.deadline, time.time() + operation_budget)
             mono_limit = time.monotonic() + operation_budget if cleanup else min(self.monotonic_deadline, time.monotonic() + operation_budget)
             term_at = None
@@ -533,8 +591,8 @@ class Campaign:
             if STOP.is_set() or time.time() >= self.deadline:
                 raise RuntimeError('campaign-deadline')
             if not run_dir.exists():
-                if label.startswith('soak-') and time.time() + self.soak_hours * 3600 + 300 > self.deadline:
-                    raise RuntimeError('insufficient-campaign-time-before-full-soak')
+                if label.startswith('soak-') and time.time() + self.soak_hours * 3600 + FINAL_OBSERVATION_MARGIN > self.deadline:
+                    raise CampaignTimeRefused('insufficient-campaign-time-for-full-soak-and-final-teardown')
                 placement = ['--region', 'us-east-2'] if provider == 'aws' else ['--location', 'fsn1']
                 code = self.invoke(label, ['--provider', provider, *placement,
                     '--allow-ssh-from', self.config['controllerIpv4'] + '/32',
@@ -552,9 +610,9 @@ class Campaign:
                 if code != 0 or report.get('status') != 'running':
                     break
                 checkpoint = read_json(run_dir / 'soak.json')
-                if checkpoint['endAt'] / 1000 + 300 > self.deadline:
-                    raise RuntimeError('full-observation-window-exceeds-campaign-budget')
-                self.export_run(label)
+                if checkpoint['endAt'] / 1000 + FINAL_OBSERVATION_MARGIN > self.deadline:
+                    raise CampaignTimeRefused('full-soak-end-leaves-no-final-teardown-budget')
+                self.export_observation(label)
                 self.wait_for_tick(label)
                 # A fresh packaged controller per observation; schedule remains
                 # anchored to the runner's immutable first-apply deadline.
@@ -567,6 +625,10 @@ class Campaign:
                 outcome['status'] = 'passed'
         except Exception as error:
             outcome['failureType'] = type(error).__name__
+            if isinstance(error, CampaignTimeRefused):
+                # A fixed reason, never a raw exception string.
+                outcome['failureReason'] = str(error)
+                self.event(label, 'campaign-time-refused', reason=str(error), deadline=self.deadline)
         finally:
             outcome = self.settle(label, outcome)
         return outcome

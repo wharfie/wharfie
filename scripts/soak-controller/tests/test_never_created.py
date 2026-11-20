@@ -20,6 +20,9 @@ from test_controller import config as controller_config, fake_gate
 from test_supervisor import supervisor, MemoryEvidenceClient, TOKEN
 
 RUN_ID = '00000000-0000-4000-8000-000000000001'
+# Hours before the external stop that `apply` and `start` must leave beyond the soak.
+START_RESERVE_HOURS = (ops.latest_start.__globals__['SUPERVISOR_STOP_RESERVE'] + ops.SETUP_BUDGET
+                       + ops.latest_start.__globals__['FINAL_OBSERVATION_MARGIN']) / 3600
 PRE_APPLY_PHASES = ['package', 'verify-executable', 'local-cli', 'preview']
 
 
@@ -418,6 +421,28 @@ class SoakLengthPreparationTests(unittest.TestCase):
                 self.assertEqual(config['soakHours'], hours)
                 self.assertEqual(config['stopAt'], config['createdAt'] + (hours + 6) * 3600)
 
+    def test_prepare_reports_the_start_deadline_it_enforces(self):
+        options = copy.copy(self.inputs.options)
+        options.state = self.inputs.root / 'state-start-by'
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            ops.prepare(options)
+        config = ops.read_json(options.state / 'campaign.json')
+        reported = datetime.fromisoformat(json.loads(output.getvalue())['startByUtc']).timestamp()
+        self.assertEqual(reported, ops.latest_start(config))
+        self.assertGreaterEqual(ops.latest_start(config) - config['createdAt'], ops.PROVISION_BUDGET)
+
+    def test_prepare_refuses_a_window_that_cannot_hold_setup_and_the_full_soak(self):
+        # One more hour of setup leaves less than the provisioning budget: refuse
+        # before writing anything.
+        shared = ops.latest_start.__globals__
+        options = copy.copy(self.inputs.options)
+        options.state = self.inputs.root / 'state-unworkable'
+        with patch.dict(shared, {'SETUP_BUDGET': shared['SETUP_BUDGET'] + 3600}):
+            with self.assertRaisesRegex(RuntimeError, 'campaign-window-cannot-hold-setup-and-full-soak'):
+                ops.prepare(options)
+        self.assertFalse((options.state / 'campaign.json').exists())
+
     def test_prepare_rejects_an_unsupported_soak_length(self):
         options = copy.copy(self.inputs.options)
         options.soak_hours = 24
@@ -455,7 +480,8 @@ class SoakLengthAuthorityTests(unittest.TestCase):
     def test_launch_freshness_follows_the_soak_length(self):
         with tempfile.TemporaryDirectory() as directory:
             for hours in (48, 72):
-                for remaining, accepted in ((hours + 3.02, True), (hours + 2.98, False)):
+                required = hours + START_RESERVE_HOURS
+                for remaining, accepted in ((required + 0.02, True), (required - 0.02, False)):
                     with self.subTest(hours=hours, remaining=remaining):
                         operator = self.operator(hours, remaining)
                         operator.config['operationsFiles'] = operations_files()
@@ -465,8 +491,24 @@ class SoakLengthAuthorityTests(unittest.TestCase):
                         if accepted:
                             operator.verify_local_bundle()
                         else:
-                            with self.assertRaisesRegex(RuntimeError, 'prepared-deadline-too-old'):
+                            with self.assertRaisesRegex(RuntimeError, 'campaign-start-window-passed'):
                                 operator.verify_local_bundle()
+
+    def test_launch_window_exact_boundary(self):
+        operator = self.operator(48)
+        boundary = ops.latest_start(operator.config)
+        for now, accepted in ((boundary, True), (boundary + 1, False)):
+            with self.subTest(now=now), tempfile.TemporaryDirectory() as directory:
+                operator.config['operationsFiles'] = operations_files()
+                operator.root = Path(directory)
+                (operator.root / 'cloudformation.json').write_text('{}')
+                operator.ownership['templateSha256'] = ops.sha256(operator.root / 'cloudformation.json')
+                with patch.object(ops.time, 'time', return_value=now):
+                    if accepted:
+                        operator.verify_local_bundle()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'campaign-start-window-passed'):
+                            operator.verify_local_bundle()
 
     def test_external_stop_window_follows_the_soak_length(self):
         def aws_for(operator):
@@ -483,12 +525,12 @@ class SoakLengthAuthorityTests(unittest.TestCase):
             return aws
         for hours in (48, 72):
             with self.subTest(hours=hours):
-                fresh = self.operator(hours, hours + 3.02)
+                fresh = self.operator(hours, hours + START_RESERVE_HOURS + 0.02)
                 fresh.aws = aws_for(fresh)
                 fresh.verify_deadman()
-                stale = self.operator(hours, hours + 2.98)
+                stale = self.operator(hours, hours + START_RESERVE_HOURS - 0.02)
                 stale.aws = aws_for(stale)
-                with self.assertRaisesRegex(RuntimeError, 'external-stop-deadline-invalid'):
+                with self.assertRaisesRegex(RuntimeError, 'campaign-start-window-passed'):
                     stale.verify_deadman()
                 other = self.operator(hours, hours + 5)
                 other.config['createdAt'] = other.config['stopAt'] - (120 - hours + 6) * 3600
