@@ -1,17 +1,18 @@
+import { randomBytes } from 'node:crypto';
 import {
-  chownSync,
   closeSync,
   constants as fsConstants,
   fchownSync,
+  fstatSync,
   lstatSync,
   openSync,
-  readFileSync,
+  readSync,
   renameSync,
-  statSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /**
  * A native LMDB open and close by one process while another process writes the
@@ -27,12 +28,23 @@ import { basename, join } from 'node:path';
  * callers that wait retry with their own deadline.
  */
 
+/*
+ * The store directory is untrusted input whenever this process is not its
+ * owner (for example root running a command against a user's store): its
+ * owner can replace any entry in it at any moment. So in that directory this
+ * module never follows a symbolic link, never writes or changes ownership by
+ * path, never creates anything through SQLite, and only trusts a file that is
+ * a regular file owned by the directory's owner.
+ */
+
 /** Lock file in the LMDB directory. Never written; only locked. */
 export const LMDB_HOLDER_LOCK_FILE = 'wharfie-holder.lock';
 /** Informational record of the current exclusive holder, for refusals. */
 export const LMDB_HOLDER_RECORD_FILE = 'wharfie-holder.json';
 
 const SQLITE_BUSY = 5;
+const MAX_HOLDER_RECORD_BYTES = 1024;
+const RECORDED_COMMAND = /^[A-Za-z0-9._-]{1,160}( [a-z][a-z0-9-]{0,39}){0,2}$/;
 const MAX_COMMAND_WORDS = 2;
 const COMMAND_WORD = /^[a-z][a-z0-9-]{0,39}$/;
 
@@ -76,10 +88,13 @@ export class LocalStoreLockError extends Error {
  * stop. Nothing was opened.
  */
 export class LocalStoreWaitAbortedError extends Error {
-  /** @param {unknown} [cause] - The abort reason. */
-  constructor(cause) {
+  /**
+   * @param {unknown} [cause] - The abort reason.
+   * @param {string} [waitingFor] - What the wait was for.
+   */
+  constructor(cause, waitingFor) {
     super(
-      'Stopped waiting for this local store because the process was asked to stop; it did not open the store.',
+      `Stopped waiting for this local store because the process was asked to stop; it did not open the store.${waitingFor ? ` It was waiting because: ${waitingFor}` : ''}`,
     );
     this.name = 'LocalStoreWaitAbortedError';
     this.code = 'local-store-wait-aborted';
@@ -91,15 +106,18 @@ export class LocalStoreWaitAbortedError extends Error {
  * Wait between attempts to take a store, ending early when told to stop.
  * @param {number} milliseconds - Retry interval.
  * @param {AbortSignal | undefined} signal - Caller's stop signal.
+ * @param {string} [waitingFor] - What the wait is for, for the abort error.
  * @returns {Promise<void>} - Resolves after the interval.
  * @throws {LocalStoreWaitAbortedError} - When the signal aborts first.
  */
-export async function waitForLocalStore(milliseconds, signal) {
-  if (signal?.aborted) throw new LocalStoreWaitAbortedError(signal.reason);
+export async function waitForLocalStore(milliseconds, signal, waitingFor) {
+  if (signal?.aborted) {
+    throw new LocalStoreWaitAbortedError(signal.reason, waitingFor);
+  }
   await new Promise((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new LocalStoreWaitAbortedError(signal?.reason));
+      reject(new LocalStoreWaitAbortedError(signal?.reason, waitingFor));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
@@ -180,6 +198,25 @@ function isBusy(error) {
 }
 
 /**
+ * @typedef {{uid: number, gid: number}} StoreOwner
+ */
+
+/**
+ * The owner of the store's LMDB directory, which must be a real directory.
+ * @param {string} dbRoot - LMDB directory.
+ * @returns {StoreOwner} - Its owner.
+ */
+function storeOwner(dbRoot) {
+  const stats = lstatSync(dbRoot);
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new LocalStoreLockError(
+      `The local store directory ${dbRoot} must be a directory, not a symbolic link or anything else.`,
+    );
+  }
+  return { uid: stats.uid, gid: stats.gid };
+}
+
+/**
  * Create the lock file privately, refusing a symbolic link.
  *
  * A new file is given to the owner of the LMDB directory, which is the
@@ -187,7 +224,8 @@ function isBusy(error) {
  * behind a root-owned lock file the user can no longer open, and matches the
  * store's own files: data.mdb and lock.mdb already exist when anyone but the
  * owner opens the store, so such an open never changes who owns them. A user
- * who cannot hand the file over is refused instead.
+ * who cannot hand the file over is refused instead. Ownership is changed only
+ * through the descriptor of the file this call created, never by path.
  *
  * This must never open and close an existing lock file: POSIX drops every
  * fcntl lock a process holds on a file when that process closes any
@@ -195,10 +233,11 @@ function isBusy(error) {
  * holder's lock. O_EXCL fails with EEXIST without opening a descriptor, and
  * the existing file is then only lstat'ed.
  * @param {string} file - Lock file path.
- * @param {string} dbRoot - LMDB directory.
+ * @param {StoreOwner} owner - Owner of the LMDB directory.
+ * @param {number | undefined} effectiveUid - This process's effective uid.
  * @returns {void}
  */
-function createPrivateLockFile(file, dbRoot) {
+function createPrivateLockFile(file, owner, effectiveUid) {
   let descriptor;
   try {
     descriptor = openSync(
@@ -221,16 +260,16 @@ function createPrivateLockFile(file, dbRoot) {
     return;
   }
   try {
-    const owner = statSync(dbRoot);
-    if (process.geteuid?.() !== owner.uid) {
+    if (effectiveUid !== owner.uid) {
       try {
         fchownSync(descriptor, owner.uid, owner.gid);
       } catch (cause) {
         closeSync(descriptor);
         descriptor = undefined;
+        // Removes the directory entry only; it never follows a link.
         unlinkSync(file);
         throw new LocalStoreLockError(
-          `This local store belongs to uid ${owner.uid}, and this process runs as uid ${process.geteuid?.()}; it cannot create the store's lock file ${file} for that owner. Run Wharfie as the store's owner.`,
+          `This local store belongs to uid ${owner.uid}, and this process runs as uid ${effectiveUid}; it cannot create the store's lock file ${file} for that owner. Run Wharfie as the store's owner.`,
           { cause },
         );
       }
@@ -238,6 +277,35 @@ function createPrivateLockFile(file, dbRoot) {
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
+}
+
+/**
+ * Open the lock file through SQLite without letting the directory's owner
+ * redirect the open: `mode=rw` never creates a file (so a link swapped in
+ * cannot make this process create one elsewhere), and the entry must still be
+ * the same regular file afterwards.
+ * @param {string} file - Lock file path, already checked to be a regular file.
+ * @returns {any} - Open SQLite connection.
+ */
+function openLockConnection(file) {
+  const before = lstatSync(file);
+  const { DatabaseSync } = loadSqlite();
+  const url = pathToFileURL(file);
+  url.searchParams.set('mode', 'rw');
+  const database = new DatabaseSync(url, { timeout: 0 });
+  const after = lstatSync(file);
+  if (
+    !after.isFile() ||
+    after.isSymbolicLink() ||
+    after.ino !== before.ino ||
+    after.dev !== before.dev
+  ) {
+    database.close();
+    throw new LocalStoreLockError(
+      `The local store lock ${file} was replaced while it was being opened. Remove it while no Wharfie process uses this store.`,
+    );
+  }
+  return database;
 }
 
 /**
@@ -280,19 +348,39 @@ function processExists(pid) {
 
 /**
  * Read the record the current exclusive holder wrote. It only words refusals:
- * the lock alone decides who may open the store.
+ * the lock alone decides who may open the store. The file is untrusted: it
+ * is read only if it is a small regular file owned by the store directory's
+ * owner, opened without following a link (or blocking on a FIFO), and only
+ * its validated fields are returned.
  * @param {string} dbRoot - LMDB directory.
  * @returns {LmdbHolderRecord | undefined} - Last exclusive holder, if recorded.
  */
 export function readLmdbHolderRecord(dbRoot) {
+  let descriptor;
   try {
-    const record = JSON.parse(
-      readFileSync(join(dbRoot, LMDB_HOLDER_RECORD_FILE), 'utf8'),
+    const owner = storeOwner(dbRoot);
+    descriptor = openSync(
+      join(dbRoot, LMDB_HOLDER_RECORD_FILE),
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
     );
+    const stats = fstatSync(descriptor);
+    if (
+      !stats.isFile() ||
+      stats.uid !== owner.uid ||
+      stats.size > MAX_HOLDER_RECORD_BYTES
+    ) {
+      return undefined;
+    }
+    const buffer = Buffer.alloc(MAX_HOLDER_RECORD_BYTES);
+    const length = readSync(descriptor, buffer, 0, buffer.length, 0);
+    const record = JSON.parse(buffer.subarray(0, length).toString('utf8'));
     if (
       Number.isSafeInteger(record?.pid) &&
-      Number.isFinite(record?.startedAt) &&
-      typeof record?.command === 'string'
+      record.pid > 0 &&
+      Number.isSafeInteger(record?.startedAt) &&
+      record.startedAt > 0 &&
+      typeof record?.command === 'string' &&
+      RECORDED_COMMAND.test(record.command)
     ) {
       return {
         pid: record.pid,
@@ -301,7 +389,9 @@ export function readLmdbHolderRecord(dbRoot) {
       };
     }
   } catch {
-    // Missing or partial: the refusal says only that the store is held.
+    // Missing, foreign, or malformed: the refusal says less, never more.
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
   return undefined;
 }
@@ -311,7 +401,9 @@ export function readLmdbHolderRecord(dbRoot) {
  * @returns {string} - Operator-facing description of that holder.
  */
 export function describeLmdbHolder(holder) {
-  if (!holder) return 'another Wharfie process';
+  if (!holder) {
+    return 'another process that left no holder record (a process of another user, such as root, leaves none)';
+  }
   const since = new Date(holder.startedAt).toISOString();
   if (!processExists(holder.pid)) {
     return `another Wharfie process (the last recorded holder, pid ${holder.pid} '${holder.command}', has exited)`;
@@ -320,30 +412,60 @@ export function describeLmdbHolder(holder) {
 }
 
 /**
+ * Record this process as the store's exclusive holder, so refusals can name
+ * it. Only the directory's owner writes the record: for any other user the
+ * directory is untrusted, so such a holder writes nothing and removes a
+ * stale record instead (unlink removes the entry and never follows a link),
+ * and its refusals then say the holder left no record. The owner's write
+ * goes through a new, exclusively created file under an unpredictable name,
+ * written through its descriptor and renamed into place.
  * @param {string} dbRoot - LMDB directory.
+ * @param {boolean} ownsStore - Whether this process owns the directory.
  * @returns {void}
  */
-function writeHolderRecord(dbRoot) {
+function writeHolderRecord(dbRoot, ownsStore) {
   const file = join(dbRoot, LMDB_HOLDER_RECORD_FILE);
-  const temporary = `${file}.${process.pid}.tmp`;
+  if (!ownsStore) {
+    try {
+      unlinkSync(file);
+    } catch {
+      // Already absent.
+    }
+    return;
+  }
+  const temporary = join(
+    dbRoot,
+    `.${LMDB_HOLDER_RECORD_FILE}.${randomBytes(12).toString('hex')}.tmp`,
+  );
+  let descriptor;
   try {
-    writeFileSync(
+    descriptor = openSync(
       temporary,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    writeSync(
+      descriptor,
       JSON.stringify({
         pid: process.pid,
         startedAt: Date.now(),
         command: describeCommand(),
       }),
-      { mode: 0o600 },
     );
-    // Keep the record readable by the store's owner, as the lock file is.
-    const owner = statSync(dbRoot);
-    if (process.geteuid?.() !== owner.uid) {
-      chownSync(temporary, owner.uid, owner.gid);
-    }
+    closeSync(descriptor);
+    descriptor = undefined;
     renameSync(temporary, file);
   } catch {
     // Informational only; the lock itself is already held.
+    if (descriptor !== undefined) closeSync(descriptor);
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // Never created, or already renamed.
+    }
   }
 }
 
@@ -374,15 +496,19 @@ function lock(database, exclusive) {
 /**
  * Take a store's holder lock without waiting.
  * @param {string} dbRoot - Canonical LMDB directory; must exist.
- * @param {{exclusive: boolean, readOnly: boolean}} options - Exclusive for a writable environment; whether a missing lock file may be tolerated on a read-only volume.
+ * @param {{exclusive: boolean, readOnly: boolean, effectiveUid?: number}} options - Exclusive for a writable environment; whether a missing lock file may be tolerated on a read-only volume; and, for tests only, the effective uid to act as (default: this process's).
  * @returns {{release: () => void} | undefined} - Held lock, or undefined where no lock applies.
  * @throws {LocalStoreBusyError} - When another process holds a conflicting lock.
  */
 export function tryAcquireLmdbHolderLock(dbRoot, options) {
   if (process.platform === 'win32') return undefined;
   const file = join(dbRoot, LMDB_HOLDER_LOCK_FILE);
+  const effectiveUid = options.effectiveUid ?? process.geteuid?.();
+  /** @type {StoreOwner} */
+  let owner;
   try {
-    createPrivateLockFile(file, dbRoot);
+    owner = storeOwner(dbRoot);
+    createPrivateLockFile(file, owner, effectiveUid);
   } catch (error) {
     // A read-only volume on a read-only filesystem has no writer to protect.
     if (
@@ -396,11 +522,11 @@ export function tryAcquireLmdbHolderLock(dbRoot, options) {
     if (error instanceof LocalStoreLockError) throw error;
     throw lockFailure(file, dbRoot, error);
   }
-  const { DatabaseSync } = loadSqlite();
   let database;
   try {
-    database = new DatabaseSync(file, { timeout: 0 });
+    database = openLockConnection(file);
   } catch (error) {
+    if (error instanceof LocalStoreLockError) throw error;
     throw lockFailure(file, dbRoot, error);
   }
   try {
@@ -411,7 +537,9 @@ export function tryAcquireLmdbHolderLock(dbRoot, options) {
     if (!isBusy(error)) throw lockFailure(file, dbRoot, error);
     throw busyError(dbRoot, options.exclusive);
   }
-  if (options.exclusive) writeHolderRecord(dbRoot);
+  if (options.exclusive) {
+    writeHolderRecord(dbRoot, effectiveUid === owner.uid);
+  }
   let released = false;
   return {
     release: () => {
@@ -433,18 +561,19 @@ function busyError(dbRoot, exclusive) {
   let readersOnly = false;
   if (exclusive) {
     // A shared probe succeeds only if no process holds the lock exclusively.
-    const { DatabaseSync } = loadSqlite();
-    const probe = new DatabaseSync(join(dbRoot, LMDB_HOLDER_LOCK_FILE), {
-      timeout: 0,
-    });
     try {
-      probe.exec('PRAGMA journal_mode=OFF');
-      lock(probe, false);
-      readersOnly = true;
+      const probe = openLockConnection(join(dbRoot, LMDB_HOLDER_LOCK_FILE));
+      try {
+        probe.exec('PRAGMA journal_mode=OFF');
+        lock(probe, false);
+        readersOnly = true;
+      } catch {
+        // Held exclusively.
+      } finally {
+        probe.close();
+      }
     } catch {
-      // Held exclusively.
-    } finally {
-      probe.close();
+      // The lock file changed underneath; say only that the store is held.
     }
   }
   if (readersOnly) {

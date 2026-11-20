@@ -10,6 +10,7 @@ import paths from '../../paths.js';
 import { getLmdbModule } from '../../lmdb-module.js';
 import {
   LocalStoreBusyError,
+  LocalStoreLockError,
   tryAcquireLmdbHolderLock,
 } from '../lmdb-holder-lock.js';
 import {
@@ -44,7 +45,7 @@ const SEP = '\u001f';
  * With `holderLock`, the root also holds the volume's holder lock (see
  * lmdb-holder-lock.js) from before its native open until after its native
  * close: shared when read-only, exclusive when writable.
- * @typedef {{env: any, openedReadOnly: boolean, references: number, closing: boolean, tables: Map<string, any>, lock?: {release: () => void}}} SharedLmdbEnvironment
+ * @typedef {{env: any, openedReadOnly: boolean, references: number, closing: boolean, closeFailed?: boolean, tables: Map<string, any>, lock?: {release: () => void}}} SharedLmdbEnvironment
  */
 
 /** @type {Map<string, SharedLmdbEnvironment>} */
@@ -107,6 +108,13 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly, holderLock) {
     // Both conflicts are inside this process and end when its own read or
     // close finishes, so they are busy, not fatal: a caller that waits for a
     // holder (db.js) waits for these too.
+    if (existing.closeFailed) {
+      // Waiting cannot help: the environment may still be open, and this
+      // process keeps the store's lock for it until it exits.
+      throw new LocalStoreLockError(
+        `An earlier close of the LMDB environment for '${dbRoot}' failed in this process, so it may still be open and this process still holds the store's lock. Restart this process to use the store again.`,
+      );
+    }
     if (existing.closing) {
       throw new LocalStoreBusyError(
         `Cannot open an LMDB facade while the prior environment is closing for '${dbRoot}'. Retry after close completes.`,
@@ -220,8 +228,9 @@ async function releaseSharedLmdbEnvironment(dbRoot, shared) {
   } finally {
     // Only after the native close completed: a holder may open as soon as
     // this releases. If the close failed, the environment may still be open,
-    // so this process keeps the lock, and the entry (marked closing, so
-    // later opens here are refused as busy), until it exits.
+    // so this process keeps the lock, and the entry (marked as a failed
+    // close, so later opens here are refused), until it exits.
+    if (!closed) shared.closeFailed = true;
     if (closed) {
       shared.lock?.release();
       if (sharedLmdbEnvironments.get(dbRoot) === shared) {

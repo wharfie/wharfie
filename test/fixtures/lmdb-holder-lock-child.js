@@ -1,6 +1,7 @@
 // Opens one local control store natively through the product choke point and
 // holds it until told to close, reporting each step on stdout as JSON lines.
-// argv: <storePath> <read|write> <lockWaitMs>. stdin "close\n" closes it.
+// argv: <storePath> <read|write> <lockWaitMs>. stdin "close\n" closes it;
+// "reopen\n" opens the store again in this process and reports the result.
 import { createInterface } from 'node:readline';
 
 import { createControlDBClient } from '../../src/core/lib/config/db.js';
@@ -35,6 +36,25 @@ if (mode === 'write') {
 report({ opened: true, at: Date.now() });
 
 for await (const line of createInterface({ input: process.stdin })) {
+  if (line.trim() === 'reopen') {
+    // Open the same store again in this process (after a failed close).
+    try {
+      const again = await createControlDBClient('lmdb', {
+        path: storePath,
+        readOnly: mode === 'read',
+        lockWaitMs: Number(lockWaitArg),
+      });
+      await again.close();
+      report({ reopened: true });
+    } catch (error) {
+      report({
+        reopenRefused: true,
+        code: /** @type {any} */ (error)?.code,
+        message: /** @type {Error} */ (error)?.message,
+      });
+    }
+    continue;
+  }
   if (line.trim() !== 'close') continue;
   const at = Date.now();
   try {

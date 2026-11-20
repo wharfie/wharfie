@@ -1,7 +1,7 @@
 /* eslint-env jest */
 /* eslint-disable jsdoc/require-jsdoc */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import {
   chmodSync,
@@ -27,6 +27,7 @@ import { createControlDBClient } from '../../src/core/lib/config/db.js';
 import {
   LMDB_HOLDER_LOCK_FILE,
   LMDB_HOLDER_RECORD_FILE,
+  readLmdbHolderRecord,
   tryAcquireLmdbHolderLock,
 } from '../../src/core/lib/db/lmdb-holder-lock.js';
 
@@ -296,6 +297,14 @@ describe('LMDB holder lock across processes', () => {
       refused: true,
       code: 'local-store-busy',
     });
+    // Waiting cannot help this process; it must be restarted.
+    /** @type {any} */ (writer.child.stdin).write('reopen\n');
+    const reopened = await writer.next();
+    expect(reopened).toMatchObject({
+      reopenRefused: true,
+      code: 'local-store-lock',
+    });
+    expect(reopened.message).toMatch(/Restart this process/);
   }, 30_000);
 
   test('releases the lock when the native open fails after taking it', async () => {
@@ -425,4 +434,117 @@ describe('LMDB holder lock across processes', () => {
     },
     30_000,
   );
+
+  test('writes the holder record without following any planted link', async () => {
+    // The store's directory belongs to its owner, who may plant links in it
+    // for a holder of another user (root) to follow. Plant the names the
+    // record write used to use, and the record itself, all pointing at a
+    // file outside the store.
+    const store = await createStore();
+    const dbRoot = join(store, 'lmdb');
+    const victim = join(store, 'victim');
+    writeFileSync(victim, 'untouched', { mode: 0o600 });
+    rmSync(join(dbRoot, LMDB_HOLDER_RECORD_FILE), { force: true });
+    symlinkSync(victim, join(dbRoot, LMDB_HOLDER_RECORD_FILE));
+    const probe = spawnSync(process.execPath, ['-p', 'process.pid']);
+    const nextPid = Number(String(probe.stdout).trim());
+    for (let pid = nextPid; pid < nextPid + 200; pid += 1) {
+      symlinkSync(
+        victim,
+        join(dbRoot, `${LMDB_HOLDER_RECORD_FILE}.${pid}.tmp`),
+      );
+    }
+    const writer = startChild(store, 'write', 1_000);
+    expect(await writer.next()).toMatchObject({ opened: true });
+    expect(readFileSync(victim, 'utf8')).toBe('untouched');
+    // The planted record link was replaced, not written through.
+    const record = lstatSync(join(dbRoot, LMDB_HOLDER_RECORD_FILE));
+    expect(record.isFile()).toBe(true);
+    expect(readLmdbHolderRecord(dbRoot)).toMatchObject({
+      pid: writer.child.pid,
+    });
+    // No temporary file was left behind.
+    expect(
+      readdirSync(dbRoot).filter((name) =>
+        name.startsWith(`.${LMDB_HOLDER_RECORD_FILE}`),
+      ),
+    ).toEqual([]);
+    writer.close();
+    await writer.next();
+  }, 30_000);
+
+  test('a holder of another user writes no record, removes a stale one, and is described truthfully', async () => {
+    const store = await createStore();
+    const dbRoot = join(store, 'lmdb');
+    // A stale record naming a live process that does not hold the store.
+    writeFileSync(
+      join(dbRoot, LMDB_HOLDER_RECORD_FILE),
+      JSON.stringify({ pid: process.pid, startedAt: 1, command: 'stale' }),
+      { mode: 0o600 },
+    );
+    const victim = join(store, 'victim');
+    writeFileSync(victim, 'untouched', { mode: 0o600 });
+    rmSync(join(dbRoot, LMDB_HOLDER_LOCK_FILE));
+    // Act as a different user from the directory's owner (root, in
+    // production), without needing root here.
+    const held = tryAcquireLmdbHolderLock(dbRoot, {
+      exclusive: true,
+      readOnly: false,
+      effectiveUid: (process.geteuid?.() ?? 0) + 1,
+    });
+    try {
+      expect(existsSync(join(dbRoot, LMDB_HOLDER_RECORD_FILE))).toBe(false);
+      expect(
+        readdirSync(dbRoot).filter((name) => name.includes('.tmp')),
+      ).toEqual([]);
+      expect(readFileSync(victim, 'utf8')).toBe('untouched');
+      const reader = startChild(store, 'read', 200);
+      const refused = await reader.next();
+      expect(refused).toMatchObject({
+        refused: true,
+        code: 'local-store-busy',
+      });
+      expect(refused.message).toContain('left no holder record');
+      expect(refused.message).not.toContain(`pid ${process.pid}`);
+    } finally {
+      held?.release();
+    }
+  }, 30_000);
+
+  test('ignores a holder record that is a link, a FIFO, oversized, or malformed', async () => {
+    const store = await createStore();
+    const dbRoot = join(store, 'lmdb');
+    const record = join(dbRoot, LMDB_HOLDER_RECORD_FILE);
+    const valid = JSON.stringify({ pid: 1, startedAt: 1, command: 'node x' });
+    // createStore's writable open recorded itself; start from no record.
+    rmSync(record);
+    expect(readLmdbHolderRecord(dbRoot)).toBeUndefined();
+
+    // A link to another file's contents must not be read through.
+    const elsewhere = join(store, 'elsewhere.json');
+    writeFileSync(elsewhere, valid);
+    symlinkSync(elsewhere, record);
+    expect(readLmdbHolderRecord(dbRoot)).toBeUndefined();
+    rmSync(record);
+
+    // A FIFO must neither block nor be read.
+    expect(spawnSync('mkfifo', [record]).status).toBe(0);
+    expect(readLmdbHolderRecord(dbRoot)).toBeUndefined();
+    rmSync(record);
+
+    writeFileSync(record, `${valid}${' '.repeat(4096)}`);
+    expect(readLmdbHolderRecord(dbRoot)).toBeUndefined();
+    writeFileSync(
+      record,
+      JSON.stringify({ pid: 1, startedAt: 1, command: 'root:x:0:0:/root' }),
+    );
+    expect(readLmdbHolderRecord(dbRoot)).toBeUndefined();
+
+    writeFileSync(record, valid);
+    expect(readLmdbHolderRecord(dbRoot)).toEqual({
+      pid: 1,
+      startedAt: 1,
+      command: 'node x',
+    });
+  }, 30_000);
 });
