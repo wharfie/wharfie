@@ -178,6 +178,55 @@ class OperatorCliTests(unittest.TestCase):
         self.assertIn('file:///dev/stdin', commands[0])
         self.assertEqual(list(self.root.iterdir()), [])
 
+    @unittest.skipUnless(shutil.which('aws'), 'AWS CLI parser is not installed')
+    def test_cli_history_check_matches_what_the_real_cli_records(self):
+        # HOME and the history file are private temporary paths; the endpoint is
+        # loopback-only. The check must refuse whenever the CLI would record.
+        secret = b'test-only-value-that-history-must-not-keep'
+
+        class Endpoint(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                reply = b'{"Version":1,"Tier":"Standard"}'
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/x-amz-json-1.1')
+                self.send_header('Content-Length', str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+
+            def log_message(self, *_arguments):
+                pass
+
+        server = http.server.HTTPServer(('127.0.0.1', 0), Endpoint)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        config_path = Path(os.environ['AWS_CONFIG_FILE'])
+        cases = (
+            ('profile-enabled', '[profile wharfie]\ncli_history = enabled\n', True),
+            ('default-only', '[default]\ncli_history = enabled\n[profile wharfie]\nregion = us-east-2\n', False),
+            ('unset', '[profile wharfie]\nregion = us-east-2\n', False),
+            ('disabled', '[profile wharfie]\ncli_history = disabled\n', False),
+            # Not recorded by this CLI, but anything except unset/disabled refuses.
+            ('unexpected-value', '[profile wharfie]\ncli_history = Enabled\n', True),
+        )
+        for name, text, refused in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory(prefix='wharfie-cli-home-') as home:
+                history = Path(home) / 'history' / 'history.db'
+                config_path.write_text(text)
+                with mock.patch.dict(os.environ, {'HOME': home, 'AWS_CLI_HISTORY_FILE': str(history)}):
+                    self.assertEqual(self.operator.cli_history_possible(), refused)
+                    subprocess.run(['aws', '--profile', 'wharfie', '--region', 'us-east-2', 'ssm', 'put-parameter',
+                                    '--name', '/fixture', '--type', 'SecureString', '--value', 'file:///dev/stdin',
+                                    '--endpoint-url', 'http://127.0.0.1:%d' % server.server_port,
+                                    '--no-sign-request'], input=secret, capture_output=True, timeout=60, check=True,
+                                   env={**os.environ, 'AWS_MAX_ATTEMPTS': '1', 'AWS_EC2_METADATA_DISABLED': 'true',
+                                        'NO_PROXY': '127.0.0.1', 'no_proxy': '127.0.0.1'})
+                recorded = history.exists() and secret in history.read_bytes()
+                if recorded:
+                    self.assertTrue(refused)
+                self.assertEqual(recorded, name == 'profile-enabled')
+
     def test_inactive_start_does_not_reset_unloaded_unit(self):
         self.assert_start('inactive', ['daemon-reload', 'show', 'enable'])
 

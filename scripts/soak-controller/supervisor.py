@@ -32,15 +32,26 @@ REPORT_NAMES = (
     'gate-request.json', 'gate-approved.json',
 )
 SOAK_HOURS = (48, 72)
-# A resumed observation, including the final one and the runner's teardown, may
-# use this budget. Its child limit is also capped at the campaign deadline, so a
-# full soak must end at least this budget plus five minutes of scheduling slack
-# before the deadline, or the final teardown would be terminated.
-RESUME_BUDGET = 1800
-FINAL_OBSERVATION_MARGIN = RESUME_BUDGET + 300
 # Observation exports retried after a failure, and the first backoff in seconds.
+# No retry starts once EXPORT_RETRY_ALLOWANCE has passed since the first attempt.
 EXPORT_ATTEMPTS = 4
 EXPORT_BACKOFF = 15
+EXPORT_RETRY_ALLOWANCE = 600
+# A resumed observation, including the final one and the runner's teardown, may
+# use this budget. Its child limit is also capped at the campaign deadline, so a
+# full soak must end early enough for that budget, five minutes of scheduling
+# slack, and the export retries that precede the final observation, or the
+# final teardown would be terminated.
+RESUME_BUDGET = 1800
+SCHEDULING_SLACK = 300
+FINAL_OBSERVATION_MARGIN = RESUME_BUDGET + SCHEDULING_SLACK + EXPORT_RETRY_ALLOWANCE
+# The supervisor stops this long before the external stop, so settlement fits.
+SUPERVISOR_STOP_RESERVE = 7200
+# Time from `start` until the later full soak has begun: both rehearsals, their
+# gate approvals, and both full builds. It equals the operator's gate-watch
+# window. Measured: 57 min on 2026-11-19, including a 37 min gap partly caused
+# by an operator crash.
+SETUP_BUDGET = 7200
 # Runner phases that finish before `prepare-apply` persists a possible provider
 # mutation (scripts/verify-live-deployment.js). A run that stopped in these
 # phases, then removed its workspace, never created a guest. `preview-next` is
@@ -115,6 +126,20 @@ def soak_hours(config):
     if type(value) is not int or value not in SOAK_HOURS:
         raise RuntimeError('invalid-soak-hours')
     return value
+
+
+def supervisor_deadline(config, started_at):
+    return min(config['stopAt'] - SUPERVISOR_STOP_RESERVE,
+               started_at + (soak_hours(config) + 4) * 3600)
+
+
+def latest_start(config):
+    """Latest supervisor start whose deadline still holds the setup budget, a
+    full soak, and its final observation; the operator refuses later launches.
+    The (soak + 4 h) term of the deadline always holds them (asserted in tests),
+    so only the external stop limits this."""
+    return (config['stopAt'] - SUPERVISOR_STOP_RESERVE - SETUP_BUDGET
+            - soak_hours(config) * 3600 - FINAL_OBSERVATION_MARGIN)
 
 
 def cleanup_verified(run_dir):
@@ -281,8 +306,7 @@ class Campaign:
                           'campaignId': config['campaignId'], 'startedAt': time.time(), 'runs': {}}
             self.save()
         self.soak_hours = soak_hours(config)
-        self.deadline = min(config['stopAt'] - 7200,
-                            self.state['startedAt'] + (self.soak_hours + 4) * 3600)
+        self.deadline = supervisor_deadline(config, self.state['startedAt'])
         self.monotonic_deadline = time.monotonic() + max(0, self.deadline - time.time())
         self.lock = threading.Lock()
         self.event_lock = threading.Lock()
@@ -432,18 +456,22 @@ class Campaign:
     def export_observation(self, label):
         """Export a running soak's evidence; a transient failure is retried.
 
-        Attempts and backoff are bounded (15 + 30 + 60 s) well inside one
-        observation interval. A persistent failure still raises and fails the
-        run: a soak whose evidence cannot be exported is not a pass.
+        Attempts and backoff are bounded (15 + 30 + 60 s), and no retry starts
+        after EXPORT_RETRY_ALLOWANCE, which the final-observation margin
+        reserves. A persistent failure still raises and fails the run: a soak
+        whose evidence cannot be exported is not a pass.
         """
+        started = time.monotonic()
         for attempt in range(EXPORT_ATTEMPTS):
             try:
                 return self.export_run(label)
             except Exception as error:
-                if attempt + 1 == EXPORT_ATTEMPTS or STOP.is_set():
+                backoff = EXPORT_BACKOFF * 2 ** attempt
+                if (attempt + 1 == EXPORT_ATTEMPTS or STOP.is_set()
+                        or time.monotonic() - started + backoff > EXPORT_RETRY_ALLOWANCE):
                     raise
                 self.event(label, 'export-retry', attempt=attempt + 1, failureType=type(error).__name__)
-                if STOP.wait(EXPORT_BACKOFF * 2 ** attempt):
+                if STOP.wait(backoff):
                     raise
 
     def transfer_gate(self, label):

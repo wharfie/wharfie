@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ops
+import supervisor as operator_supervisor  # the module instance ops.py imports
 from test_controller import config, fake_gate
 from test_supervisor import supervisor, MemoryEvidenceClient, TOKEN
 
@@ -35,9 +36,17 @@ class AuthorizeWatchTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.operator = operator(temporary.name)
         self.operator.approve = mock.Mock()
-        sleep = mock.patch.object(ops.time, 'sleep')
-        sleep.start()
-        self.addCleanup(sleep.stop)
+        # A fake monotonic clock bounds every watch loop by its own deadline, so a
+        # regression that never stops fails in milliseconds instead of hanging.
+        self.clock = [1000.0]
+        for name, fake in (('sleep', lambda seconds: self.advance(seconds)),
+                           ('monotonic', lambda: self.clock[0])):
+            patch = mock.patch.object(ops.time, name, side_effect=fake)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def advance(self, seconds):
+        self.clock[0] += seconds
 
     def authorize(self):
         errors = io.StringIO()
@@ -91,6 +100,66 @@ class AuthorizeWatchTests(unittest.TestCase):
         self.operator.remote_json = remote_json
         with self.assertRaisesRegex(RuntimeError, 'campaign-failed-during-setup'):
             self.authorize()
+
+    def test_supervisor_summary_read_failures_count_toward_the_cap(self):
+        def remote_json(suffix, optional=False):
+            if suffix == 'supervisor.json':
+                raise subprocess.TimeoutExpired(['aws'], 120)
+            return None
+        self.operator.remote_json = mock.Mock(side_effect=remote_json)
+        with self.assertRaisesRegex(RuntimeError, 'local-gate-watch-read-failures'):
+            self.authorize()
+        summaries = [call for call in self.operator.remote_json.call_args_list
+                     if call.args[0] == 'supervisor.json']
+        self.assertEqual(len(summaries), ops.MAX_POLL_FAILURES)
+
+    def test_no_successful_cycle_for_the_failure_period_stops_before_the_cycle_cap(self):
+        def slow_failure(suffix, optional=False):
+            self.advance(200)
+            raise ops.AwsError('s3api', 'get-object', 255)
+        self.operator.remote_json = mock.Mock(side_effect=slow_failure)
+        with self.assertRaisesRegex(RuntimeError, 'local-gate-watch-read-failures'):
+            self.authorize()
+        # Two cycles of three 200 s reads pass 900 s; the cycle cap alone needs ten.
+        self.assertEqual(self.operator.remote_json.call_count, 6)
+
+    def test_a_successful_cycle_restarts_the_failure_period(self):
+        # 100 s reads: two failing cycles, one healthy, two failing, then a
+        # healthy cycle that reports the campaign failed. No failing stretch
+        # reaches 900 s, though failing time in total does.
+        schedule = iter([True, True, False, True, True, None])
+        def remote_json(suffix, optional=False):
+            self.advance(100)
+            if suffix != 'supervisor.json':
+                return None
+            failing = next(schedule)
+            if failing is None:
+                return {'status': 'failed'}
+            if failing:
+                raise ops.AwsError('s3api', 'get-object', 255)
+            return None
+        self.operator.remote_json = remote_json
+        with self.assertRaisesRegex(RuntimeError, 'campaign-failed-during-setup'):
+            self.authorize()
+
+    def test_overall_deadline_is_checked_before_each_read(self):
+        def slow_absence(suffix, optional=False):
+            self.advance(4000)
+            return None
+        self.operator.remote_json = mock.Mock(side_effect=slow_absence)
+        with self.assertRaisesRegex(RuntimeError, 'local-gate-watch-deadline'):
+            self.authorize()
+        # The third read would start 8000 s after the 7200 s window opened.
+        self.assertEqual([call.args[0] for call in self.operator.remote_json.call_args_list],
+                         ['gates/rehearsal-aws/request.json', 'gates/soak-aws/request.json'])
+        self.assertEqual(ops.SETUP_BUDGET, 7200)
+
+    def test_approval_aws_error_is_never_retried(self):
+        self.operator.remote_json = mock.Mock(return_value=fake_gate(config()))
+        self.operator.approve.side_effect = ops.AwsError('cloudformation', 'update-stack', 254)
+        with self.assertRaises(ops.AwsError):
+            self.authorize()
+        self.assertEqual(self.operator.approve.call_count, 1)
 
     def test_approval_failures_and_invalid_evidence_are_never_retried(self):
         for error in (AssertionError(), RuntimeError('remote-proof-limit'), ValueError()):
@@ -149,9 +218,15 @@ class OptionalReadRaceTests(unittest.TestCase):
         with self.head(254, b'An error occurred (404) when calling the HeadObject operation: Not Found'):
             self.assertIsNone(self.operator.remote_json('supervisor.json', optional=True))
         for stderr in (b'An error occurred (403) when calling the HeadObject operation: Forbidden',
+                       b'An error occurred (AccessDenied) when calling the HeadObject operation: Access Denied',
                        b'Could not connect to the endpoint URL'):
-            with self.subTest(stderr=stderr), self.head(254, stderr), self.assertRaises(ops.AwsError):
-                self.operator.remote_json('supervisor.json', optional=True)
+            with self.subTest(stderr=stderr), self.head(254, stderr):
+                self.assertIsNone(self.operator.object_state('supervisor.json'))
+                self.gets = 0
+                with self.assertRaises(ops.AwsError):
+                    self.operator.remote_json('supervisor.json', optional=True)
+                # Unknown is neither absence nor presence: no second get.
+                self.assertEqual(self.gets, 1)
         self.gets = 0
         with self.head(0) as head, self.assertRaises(ops.AwsError):
             self.operator.remote_json('supervisor.json')
@@ -165,6 +240,8 @@ class RecoverableAttemptTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.operator = operator(temporary.name)
         (self.operator.root / 'cloudformation.json').write_text('{}')
+        self.operator.bucket_absent = mock.Mock(return_value=True)
+        self.operator.cli_history_possible = mock.Mock(return_value=False)
         self.calls = []
 
     def stack_value(self):
@@ -242,8 +319,18 @@ class RecoverableAttemptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'campaign-not-in-prepared-state'):
             self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
 
+    def test_rerun_refuses_create_when_the_retained_bucket_proves_an_earlier_stack(self):
+        self.operator.ownership['createAttempted'] = True
+        self.operator.bucket_absent.return_value = False
+        with self.assertRaisesRegex(RuntimeError, 'campaign-bucket-exists-without-stack-prepare-new-campaign'):
+            self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
+        self.operator.bucket_absent.assert_called_once()
+        self.assertIsNone(self.operator.ownership['stackId'])
+
     def test_cli_absence_codes_are_parsed_privately(self):
         for stderr, code in (
+            (b'\nAn error occurred (ValidationError) when calling the CreateStack operation: '
+             b'Stack with id wharfie-soak-test-01234567 does not exist\n', None),
             (b'\nAn error occurred (ValidationError) when calling the DescribeStacks operation: '
              b'Stack with id wharfie-soak-test-01234567 does not exist\n', 'StackNotFound'),
             (b'\nAn error occurred (ParameterNotFound) when calling the GetParameter operation: \n',
@@ -257,8 +344,15 @@ class RecoverableAttemptTests(unittest.TestCase):
                     self.operator.aws('cloudformation', 'describe-stacks', {'StackName': 'x'})
                 self.assertEqual(raised.exception.provider_code, code)
 
-    def token(self, put, stored):
+    def token(self, put, stored, key_id=ops.DEFAULT_SSM_KEY):
         def aws(service, action, value=None, **kwargs):
+            if action == 'describe-parameters':
+                self.assertEqual(value['ParameterFilters'], [{'Key': 'Name', 'Option': 'Equals',
+                                                              'Values': [config()['tokenParameter']]}])
+                metadata = {'Name': config()['tokenParameter']}
+                if key_id is not None:
+                    metadata['KeyId'] = key_id
+                return {'Parameters': [metadata]}
             self.calls.append((action, value, kwargs))
             if action == 'put-parameter':
                 return put(value)
@@ -303,6 +397,33 @@ class RecoverableAttemptTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'existing-campaign-token-mismatch'):
                 self.token(lambda _value: self.fail('must not put again'), stored)
             self.assertNotIn('tokenStored', self.operator.ownership)
+
+    def test_unreadable_parameter_is_never_treated_as_absent(self):
+        self.operator.ownership['tokenAttempted'] = True
+        def denied():
+            raise ops.AwsError('ssm', 'get-parameter', 254)
+        with self.assertRaises(ops.AwsError):
+            self.token(lambda _value: self.fail('must not put'), denied)
+        self.assertEqual([action for action, _, _ in self.calls], ['get-parameter'])
+        self.assertNotIn('tokenStored', self.operator.ownership)
+
+    def test_existing_parameter_under_another_kms_key_is_refused(self):
+        for key_id in ('alias/foreign', 'arn:aws:kms:us-east-2:123456789012:key/0000', None):
+            with self.subTest(key_id=key_id):
+                self.operator.ownership = {'tokenAttempted': True}
+                with self.assertRaisesRegex(RuntimeError, 'existing-campaign-token-key-mismatch'):
+                    self.token(lambda _value: self.fail('must not put'), self.parameter(), key_id=key_id)
+                self.assertNotIn('tokenStored', self.operator.ownership)
+
+    def test_token_refuses_before_reading_the_secret_when_cli_history_may_record_it(self):
+        self.operator.cli_history_possible.return_value = True
+        self.operator.aws = mock.Mock(side_effect=AssertionError('no AWS call may carry the secret'))
+        stdin = io.StringIO(TOKEN)
+        with mock.patch.object(ops.sys, 'stdin', stdin), \
+             self.assertRaisesRegex(RuntimeError, 'aws-cli-history-must-be-disabled-for-token'):
+            self.operator.token()
+        self.assertEqual(stdin.tell(), 0)
+        self.operator.aws.assert_not_called()
 
     def test_token_reaches_the_cli_only_through_stdin(self):
         self.token(lambda _value: {}, lambda: (self.parameter() if len(self.calls) > 1 else self.parameter_missing)())
@@ -413,6 +534,64 @@ class SupervisorScheduleTests(unittest.TestCase):
         invoke.assert_not_called()
         self.assertEqual(result['status'], 'failed')
         self.assertEqual(result['failureType'], 'RuntimeError')
+
+    def test_final_margin_reserves_resume_budget_slack_and_export_retries(self):
+        for module in (supervisor, operator_supervisor):
+            with self.subTest(module=module.__name__):
+                backoffs = sum(module.EXPORT_BACKOFF * 2 ** i for i in range(module.EXPORT_ATTEMPTS - 1))
+                self.assertGreaterEqual(module.SCHEDULING_SLACK, 300)
+                self.assertGreaterEqual(module.EXPORT_RETRY_ALLOWANCE, backoffs)
+                self.assertGreaterEqual(module.FINAL_OBSERVATION_MARGIN, module.RESUME_BUDGET + 300
+                                        + module.EXPORT_RETRY_ALLOWANCE)
+                # latest_start relies on the (soak + 4 h) deadline term never binding.
+                self.assertGreaterEqual(4 * 3600, module.SETUP_BUDGET + module.FINAL_OBSERVATION_MARGIN)
+        # The operator enforces the supervisor's own constants, not copies.
+        self.assertIs(ops.SETUP_BUDGET, operator_supervisor.SETUP_BUDGET)
+        self.assertIs(ops.latest_start, operator_supervisor.latest_start)
+
+    def test_latest_start_leaves_the_supervisor_deadline_exactly_enough(self):
+        for hours in (48, 72):
+            with self.subTest(hours=hours):
+                c = {'stopAt': 2000000000, 'soakHours': hours}
+                start = operator_supervisor.latest_start(c)
+                deadline = operator_supervisor.supervisor_deadline(c, start)
+                self.assertEqual(deadline - start, hours * 3600 + operator_supervisor.SETUP_BUDGET
+                                 + operator_supervisor.FINAL_OBSERVATION_MARGIN)
+
+    def test_launch_rule_exact_boundary(self):
+        now = 1900000000.0
+        for offset, launched in ((0, True), (-1, False)):
+            with self.subTest(offset=offset):
+                self.campaign.deadline = now + 72 * 3600 + supervisor.FINAL_OBSERVATION_MARGIN + offset
+                with mock.patch.object(supervisor.time, 'time', return_value=now), \
+                     mock.patch.object(self.campaign, 'invoke', return_value=1) as invoke:
+                    self.campaign.run_one('soak-aws')
+                self.assertEqual(invoke.called, launched)
+
+    def test_export_retry_never_starts_after_its_allowance(self):
+        self.running_soak()
+        clock = [5000.0]
+
+        def slow_failure(_label):
+            clock[0] += supervisor.EXPORT_RETRY_ALLOWANCE - 10
+            raise RuntimeError('slow')
+
+        with mock.patch.object(self.campaign, 'export_run', side_effect=slow_failure) as export, \
+             mock.patch.object(supervisor.time, 'monotonic', side_effect=lambda: clock[0]), \
+             mock.patch.object(supervisor.STOP, 'wait', return_value=False) as wait:
+            with self.assertRaisesRegex(RuntimeError, 'slow'):
+                self.campaign.export_observation('soak-aws')
+        self.assertEqual(export.call_count, 1)
+        wait.assert_not_called()
+
+    def test_stop_requested_before_a_failed_export_is_not_retried(self):
+        supervisor.STOP.set()
+        with mock.patch.object(self.campaign, 'export_run', side_effect=RuntimeError('down')) as export, \
+             mock.patch.object(supervisor.STOP, 'wait', return_value=False) as wait:
+            with self.assertRaisesRegex(RuntimeError, 'down'):
+                self.campaign.export_observation('soak-aws')
+        self.assertEqual(export.call_count, 1)
+        wait.assert_not_called()
 
     def test_stop_during_export_backoff_is_not_retried(self):
         self.running_soak()
