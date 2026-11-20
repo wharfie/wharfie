@@ -7,10 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import v8 from 'node:v8';
 
 import { DB_ADAPTER_NAMES, brandDBClient } from '../lib/db/base.js';
-import {
-  LocalStoreWaitAbortedError,
-  waitForLocalStore,
-} from '../lib/db/lmdb-holder-lock.js';
+import { waitForLocalStore } from '../lib/db/lmdb-holder-lock.js';
 import {
   ensureLocalServiceSocketDirectory,
   getLocalServiceSessionPrincipalId,
@@ -751,10 +748,9 @@ export async function acquireLocalStoreHost(options) {
   }
   const heldWaitMs = options.heldWaitMs ?? LOCAL_STORE_HOST_HELD_WAIT_MS;
   const deadline = Date.now() + heldWaitMs;
+  // The signal ends a wait, not an attempt: a host told to stop before it
+  // started still takes a free store, and drains from there.
   for (;;) {
-    if (options.signal?.aborted) {
-      throw new LocalStoreWaitAbortedError(options.signal.reason);
-    }
     const host = await bindLocalStoreHost(storeRoot);
     let other;
     try {

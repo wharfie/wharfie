@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import paths from '../paths.js';
 import {
   LocalStoreBusyError,
-  LocalStoreWaitAbortedError,
   waitForLocalStore,
 } from '../db/lmdb-holder-lock.js';
 import { assertDomainSeparatedSha256Id } from '../../runtime/content-id.js';
@@ -545,10 +544,8 @@ const LOCAL_STORE_LOCK_RETRY_MS = 25;
  */
 async function openHeldLmdb(createLMDB, options, wait) {
   const deadline = Date.now() + wait.lockWaitMs;
+  // The signal ends a wait, not an attempt (waitForLocalStore).
   for (;;) {
-    if (wait.signal?.aborted) {
-      throw new LocalStoreWaitAbortedError(wait.signal.reason);
-    }
     try {
       return createLMDB({ ...options, holderLock: true });
     } catch (error) {
