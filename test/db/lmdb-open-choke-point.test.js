@@ -94,6 +94,9 @@ describe('LMDB open choke point', () => {
     // a holder.
     expect(countBySourceFile(/\brouteWrites: true\b/g)).toEqual({
       'src/core/runtime/operator/coordinator-authority-command.js': 1,
+      // Service activation, while a resident runs before its stop or after
+      // its successor's start.
+      'src/core/runtime/services/systemd-user-service-manager.js': 1,
     });
   });
 
