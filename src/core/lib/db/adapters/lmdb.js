@@ -8,6 +8,7 @@ import {
 import { join, resolve } from 'node:path';
 import paths from '../../paths.js';
 import { getLmdbModule } from '../../lmdb-module.js';
+import { tryAcquireLmdbHolderLock } from '../lmdb-holder-lock.js';
 import {
   CONDITION_TYPE,
   DB_ADAPTER_NAMES,
@@ -36,7 +37,11 @@ const SEP = '\u001f';
  * A writable facade may host a read-only facade because this adapter enforces
  * read-only mutation guards itself. The inverse is deliberately refused: an
  * existing native read-only environment must never become a writer.
- * @typedef {{env: any, openedReadOnly: boolean, references: number, closing: boolean, tables: Map<string, any>}} SharedLmdbEnvironment
+ *
+ * With `holderLock`, the root also holds the volume's holder lock (see
+ * lmdb-holder-lock.js) from before its native open until after its native
+ * close: shared when read-only, exclusive when writable.
+ * @typedef {{env: any, openedReadOnly: boolean, references: number, closing: boolean, tables: Map<string, any>, lock?: {release: () => void}}} SharedLmdbEnvironment
  */
 
 /** @type {Map<string, SharedLmdbEnvironment>} */
@@ -90,9 +95,10 @@ function createPrivateLmdbFile(file) {
  * LMDB volume.
  * @param {string} dbRoot - Canonical local LMDB directory.
  * @param {boolean} readOnly - Whether this facade must remain read-only.
+ * @param {boolean} holderLock - Whether the root must hold the holder lock.
  * @returns {SharedLmdbEnvironment} - Shared root and named-table registry.
  */
-function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
+function acquireSharedLmdbEnvironment(dbRoot, readOnly, holderLock) {
   const existing = sharedLmdbEnvironments.get(dbRoot);
   if (existing) {
     if (existing.closing) {
@@ -105,6 +111,12 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
         `Cannot open a writable LMDB facade while a read-only environment is live for '${dbRoot}'. Close the read-only facade first.`,
       );
     }
+    if (holderLock && !existing.lock) {
+      existing.lock = tryAcquireLmdbHolderLock(dbRoot, {
+        exclusive: !existing.openedReadOnly,
+        readOnly: existing.openedReadOnly,
+      });
+    }
     existing.references += 1;
     return existing;
   }
@@ -115,7 +127,15 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
   const previousUmask =
     process.platform !== 'win32' ? process.umask(0o077) : null;
   let env;
+  /** @type {{release: () => void} | undefined} */
+  let lock;
   try {
+    if (holderLock) {
+      lock = tryAcquireLmdbHolderLock(dbRoot, {
+        exclusive: !readOnly,
+        readOnly,
+      });
+    }
     if (process.platform !== 'win32') {
       // Read-only observers may recreate a missing native lock file, but must
       // not create a data file or turn an empty directory into a local volume.
@@ -142,15 +162,20 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly) {
       commitDelay: 0,
       // Encoding defaults to msgpack; we store plain JSON-ish objects.
     });
+  } catch (error) {
+    lock?.release();
+    throw error;
   } finally {
     if (previousUmask !== null) process.umask(previousUmask);
   }
+  /** @type {SharedLmdbEnvironment} */
   const shared = {
     env,
     openedReadOnly: readOnly,
     references: 1,
     closing: false,
     tables: new Map(),
+    ...(lock ? { lock } : {}),
   };
   sharedLmdbEnvironments.set(dbRoot, shared);
   return shared;
@@ -181,6 +206,8 @@ async function releaseSharedLmdbEnvironment(dbRoot, shared) {
     shared.tables.clear();
     if (typeof shared.env?.close === 'function') await shared.env.close();
   } finally {
+    // Only after the native close: a holder may open as soon as this releases.
+    shared.lock?.release();
     if (sharedLmdbEnvironments.get(dbRoot) === shared) {
       sharedLmdbEnvironments.delete(dbRoot);
     }
@@ -211,6 +238,7 @@ export function hasOpenLmdbEnvironment(path) {
  * @typedef CreateLMDBDBOptions
  * @property {string} [path] - Path to the database file. Defaults to `./data/database.json`. [db_path]
  * @property {boolean} [readOnly] - Open an existing local volume without creating tables or accepting writes.
+ * @property {boolean} [holderLock] - Hold the volume's holder lock for the native environment's lifetime; throws LocalStoreBusyError instead of opening beside a conflicting holder.
  */
 
 /**
@@ -269,7 +297,11 @@ export default function createLMDB(options = {}) {
     mkdirSync(dbRoot, { recursive: true, mode: 0o700 });
   }
 
-  const shared = acquireSharedLmdbEnvironment(dbRoot, readOnly);
+  const shared = acquireSharedLmdbEnvironment(
+    dbRoot,
+    readOnly,
+    options.holderLock === true,
+  );
   const env = shared.env;
   const tables = shared.tables;
   let closed = false;

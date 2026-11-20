@@ -44,7 +44,8 @@ describe('LMDB open choke point', () => {
       'src/core/lib/config/db.js': 4,
     });
     expect(countBySourceFile(/\bcreateLMDB\(/g)).toEqual({
-      'src/core/lib/config/db.js': 4,
+      // General DB, state DB, and openHeldLmdb (control and app-state).
+      'src/core/lib/config/db.js': 3,
       'src/core/lib/db/adapters/lmdb.js': 1,
     });
   });
@@ -56,8 +57,38 @@ describe('LMDB open choke point', () => {
       source.indexOf('export async function createApplicationStateDBClient('),
     );
     expect(branch).toMatch(
-      /if \(options\.readOnly === true && !hasOpenLmdbEnvironment\(controlPath\)\) \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+const hosted = await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?\}\);\s+if \(hosted\) return hosted;\s+\}\s+return createLMDB\(/,
+      /const routeRead =\s+options\.readOnly === true && !hasOpenLmdbEnvironment\(controlPath\)\s+\? async \(\) => \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+return await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?const hosted = await routeRead\?\.\(\);\s+if \(hosted\) return hosted;\s+return await openHeldLmdb\(/,
     );
+  });
+
+  test('resident stores open natively only under the holder lock', () => {
+    // lmdb-holder-lock.js: shared for a read-only native environment,
+    // exclusive for a writable one, held from before open until after close.
+    const source = readFileSync(join(SRC, 'core/lib/config/db.js'), 'utf8');
+    const section = (/** @type {string} */ from, /** @type {string} */ to) =>
+      source.slice(source.indexOf(from), source.indexOf(to));
+    expect(
+      section(
+        'async function openHeldLmdb(',
+        '/**\n * Create the dedicated durable control-store DB client.',
+      ),
+    ).toMatch(/return createLMDB\(\{ \.\.\.options, holderLock: true \}\);/);
+    for (const branch of [
+      section(
+        'export async function createControlDBClient(',
+        'export async function createApplicationStateDBClient(',
+      ),
+      section(
+        'export async function createApplicationStateDBClient(',
+        'export async function createStateDBClient(',
+      ),
+    ]) {
+      expect(branch).not.toMatch(/\bcreateLMDB\(/);
+      expect(branch).toMatch(/return await openHeldLmdb\(\s+createLMDB,/);
+    }
+    expect(countBySourceFile(/\bholderLock: true\b/g)).toEqual({
+      'src/core/lib/config/db.js': 1,
+    });
   });
 
   test('control-store open sites are the reviewed set', () => {

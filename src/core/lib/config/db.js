@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import paths from '../paths.js';
+import { LocalStoreBusyError } from '../db/lmdb-holder-lock.js';
 import { assertDomainSeparatedSha256Id } from '../../runtime/content-id.js';
 import { assertLogicalId } from '../../runtime/logical-id.js';
 import { getLocalAppStorageLayout } from './local-app-storage-context.js';
@@ -522,10 +524,49 @@ export async function createDBClient(adapterName = resolveDBAdapterName()) {
   return createVanillaDB({ path: process.env.WHARFIE_DB_PATH });
 }
 
+/** How long a native local-store open waits for a conflicting holder. */
+export const LOCAL_STORE_LOCK_WAIT_MS = 10_000;
+const LOCAL_STORE_LOCK_RETRY_MS = 25;
+
+/**
+ * Open a resident-capable LMDB store natively under its holder lock (see
+ * lmdb-holder-lock.js): never beside a process that writes it, and never for
+ * writing beside any other process that has it open. A conflict is retried
+ * until the deadline and then refused, naming the holder. A read-only open
+ * re-checks for a store host on every retry, because a holder that has just
+ * bound its endpoint takes the lock before it serves.
+ * @param {(options: {path: string, readOnly: boolean, holderLock: boolean}) => import('../db/base.js').DBClient} createLMDB - Adapter factory.
+ * @param {{path: string, readOnly: boolean}} options - Store and mode.
+ * @param {{lockWaitMs: number, routeRead?: () => Promise<import('../db/base.js').DBClient | undefined>}} wait - Bound, and how to look for a host again.
+ * @returns {Promise<import('../db/base.js').DBClient>} - Locked native client, or a hosted one.
+ */
+async function openHeldLmdb(createLMDB, options, wait) {
+  const deadline = Date.now() + wait.lockWaitMs;
+  for (;;) {
+    try {
+      return createLMDB({ ...options, holderLock: true });
+    } catch (error) {
+      if (!(error instanceof LocalStoreBusyError)) throw error;
+      if (Date.now() >= deadline) {
+        throw new LocalStoreBusyError(
+          `${error.message} Waited ${wait.lockWaitMs}ms.`,
+          {
+            ...(error.holder === undefined ? {} : { holder: error.holder }),
+            readers: error.readers,
+          },
+        );
+      }
+    }
+    const hosted = await wait.routeRead?.();
+    if (hosted) return hosted;
+    await delay(LOCAL_STORE_LOCK_RETRY_MS);
+  }
+}
+
 /**
  * Create the dedicated durable control-store DB client.
  * @param {DBAdapterName} [adapterName] - Explicit adapter override.
- * @param {{readOnly?: boolean, path?: string, region?: string}} [options] - Access mode and already-resolved routing.
+ * @param {{readOnly?: boolean, path?: string, region?: string, lockWaitMs?: number}} [options] - Access mode, already-resolved routing, and how long a local open waits for a conflicting holder.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function createControlDBClient(
@@ -548,23 +589,31 @@ export async function createControlDBClient(
     // writes can lose the resident's writes (lmdb-js #370). Read through the
     // live host instead; open natively only when no other process hosts it,
     // or when this process already holds the environment.
-    if (options.readOnly === true && !hasOpenLmdbEnvironment(controlPath)) {
-      const { connectLocalStoreHost } =
-        await import('../../runtime/local-store-host.js');
-      const hosted = await connectLocalStoreHost({
-        storePath: controlPath,
-        reopen: async () =>
-          await createControlDBClient(adapterName, {
-            path: controlPath,
-            readOnly: true,
-          }),
-      });
-      if (hosted) return hosted;
-    }
-    return createLMDB({
-      path: controlPath,
-      readOnly: options.readOnly === true,
-    });
+    const routeRead =
+      options.readOnly === true && !hasOpenLmdbEnvironment(controlPath)
+        ? async () => {
+            const { connectLocalStoreHost } =
+              await import('../../runtime/local-store-host.js');
+            return await connectLocalStoreHost({
+              storePath: controlPath,
+              reopen: async () =>
+                await createControlDBClient(adapterName, {
+                  path: controlPath,
+                  readOnly: true,
+                }),
+            });
+          }
+        : undefined;
+    const hosted = await routeRead?.();
+    if (hosted) return hosted;
+    return await openHeldLmdb(
+      createLMDB,
+      { path: controlPath, readOnly: options.readOnly === true },
+      {
+        lockWaitMs: options.lockWaitMs ?? LOCAL_STORE_LOCK_WAIT_MS,
+        ...(routeRead ? { routeRead } : {}),
+      },
+    );
   }
 
   // Explicit vanilla is useful for tests and diagnostics, but is not crash
@@ -633,8 +682,13 @@ export async function createApplicationStateDBClient(
   }
 
   if (normalizedAdapter === 'lmdb') {
+    // The resident writes this store too; it is only ever opened natively.
     const { default: createLMDB } = await import('../db/adapters/lmdb.js');
-    return createLMDB({ path: storePath, readOnly });
+    return await openHeldLmdb(
+      createLMDB,
+      { path: storePath, readOnly },
+      { lockWaitMs: LOCAL_STORE_LOCK_WAIT_MS },
+    );
   }
 
   // Vanilla is an explicit test/diagnostic implementation. A read-only open
