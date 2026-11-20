@@ -42,8 +42,16 @@ export const LOCAL_STORE_HOST_ACCEPT_TIMEOUT_MS = 10_000;
  * example in a debugger or by SIGSTOP) or its event loop is blocked.
  */
 export const LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS = 10_000;
-/** How long one remote read may take before the connection is abandoned. */
+/** How long one remote call may take before the connection is abandoned. */
 export const LOCAL_STORE_HOST_CALL_TIMEOUT_MS = 60_000;
+/**
+ * Total bound on one remote read, across every attempt and reroute after a
+ * lost host. With up to about 20 s to find and greet a host first, a read
+ * from a cold command still ends within about 50 s, inside the 60 s that a
+ * `deployment exec` command gets. The largest response the protocol allows
+ * (256 MiB) is served in about a second.
+ */
+export const LOCAL_STORE_HOST_READ_DEADLINE_MS = 30_000;
 /**
  * How long a resident that is told to wait (the service manager's resident)
  * waits for another process to stop holding its store before it gives up.
@@ -786,7 +794,7 @@ async function listHostEndpoints(storeRoot) {
 }
 
 /**
- * @typedef {{kind: 'absent', refused?: boolean} | {kind: 'unavailable'} | {kind: 'opened', processId: number, socket: import('node:net').Socket, call: (method: string, params: Record<string, any>) => Promise<any>, close: () => void}} HostConnection
+ * @typedef {{kind: 'absent', refused?: boolean} | {kind: 'unavailable'} | {kind: 'opened', processId: number, socket: import('node:net').Socket, call: (method: string, params: Record<string, any>, boundMs?: number) => Promise<any>, close: () => void}} HostConnection
  */
 
 /**
@@ -939,8 +947,12 @@ function connectHost(endpoint, storeRoot, timeouts, writable) {
               kind: 'opened',
               processId: message.processId,
               socket,
-              call: (method, params) =>
+              call: (method, params, boundMs = Infinity) =>
                 new Promise((resolve, reject) => {
+                  const callTimeoutMs = Math.min(
+                    timeouts.callTimeoutMs,
+                    boundMs,
+                  );
                   if (broken) {
                     reject(broken);
                     return;
@@ -950,8 +962,8 @@ function connectHost(endpoint, storeRoot, timeouts, writable) {
                     // Responses are serial, so a connection with a lost
                     // answer cannot be reused.
                     socket.destroy();
-                    fail(timedOut(`a ${method} read`, timeouts.callTimeoutMs));
-                  }, timeouts.callTimeoutMs);
+                    fail(timedOut(`a ${method} call`, callTimeoutMs));
+                  }, callTimeoutMs);
                   pending.set(id, { resolve, reject, timer });
                   socket.write(
                     frame(
@@ -1074,9 +1086,10 @@ const MAX_READ_REROUTES = 3;
  * @param {Extract<HostConnection, {kind: 'opened'}>} connection - Opened remote facade.
  * @param {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} reopen - Re-resolve the store after a lost host.
  * @param {boolean} writable - Whether the host accepted writes on this connection.
+ * @param {number} readDeadlineMs - Total bound on one read, reroutes included.
  * @returns {import('../lib/db/base.js').DBClient} - Remote client.
  */
-function createHostClient(connection, reopen, writable) {
+function createHostClient(connection, reopen, writable, readDeadlineMs) {
   const readOnly = async () => {
     throw new Error('LMDB client is read-only.');
   };
@@ -1089,12 +1102,46 @@ function createHostClient(connection, reopen, writable) {
    */
   const remote = (method) => async (params) => {
     assertJsonReadParams(params);
+    const deadline = Date.now() + readDeadlineMs;
+    const expired = () =>
+      new LocalStoreHostReadError(
+        `A ${method} read of this local store did not complete within ${readDeadlineMs}ms, across every attempt; the process holding it may be restarting repeatedly. Retry.`,
+        { timedOut: true },
+      );
+    /**
+     * @template T
+     * @param {Promise<T>} work - Part of this read.
+     * @returns {Promise<T>} - The same result, or the deadline error.
+     */
+    const withinDeadline = async (work) => {
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let timer;
+      work.catch(() => undefined);
+      try {
+        return await Promise.race([
+          work,
+          new Promise((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(expired()),
+              Math.max(0, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
     for (let attempt = 0; ; attempt += 1) {
       if (closed) throw new Error('LMDB client is closed.');
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw expired();
       try {
-        if (rerouted)
-          return await /** @type {any} */ (rerouted)[method](params);
-        return await connection.call(method, params);
+        if (rerouted) {
+          return await withinDeadline(
+            /** @type {any} */ (rerouted)[method](params),
+          );
+        }
+        return await connection.call(method, params, remaining);
       } catch (error) {
         // Only a lost transport is rerouted. An error the host answered is
         // the read's own result, and a host that stopped answering is still
@@ -1111,7 +1158,14 @@ function createHostClient(connection, reopen, writable) {
         rerouted = undefined;
         if (previous) await previous.close?.().catch(() => undefined);
         else connection.close();
-        rerouted = await reopen();
+        const reopening = reopen();
+        try {
+          rerouted = await withinDeadline(reopening);
+        } catch (reopenError) {
+          // A client that arrives after the deadline must still be closed.
+          reopening.then((late) => late.close?.()).catch(() => undefined);
+          throw reopenError;
+        }
       }
     }
   };
@@ -1173,7 +1227,7 @@ export function isLocalStoreHostClient(db) {
  * process hosts it, which is the only case in which a caller may open the
  * store natively. A host that is starting or stopping is retried; one that
  * never accepts fails closed.
- * @param {{storePath: string, writable?: boolean, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; whether to write through the host; how long to wait for a starting host, for a handshake answer, and for one call; and how to re-resolve the store if its host is lost mid-read.
+ * @param {{storePath: string, writable?: boolean, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, readDeadlineMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; whether to write through the host; how long to wait for a starting host, for a handshake answer, for one call, and for one read across all its attempts; and how to re-resolve the store if its host is lost mid-read.
  * @returns {Promise<import('../lib/db/base.js').DBClient | undefined>} - Remote client or undefined.
  */
 export async function connectLocalStoreHost(options) {
@@ -1202,6 +1256,7 @@ export async function connectLocalStoreHost(options) {
           connection,
           options.reopen,
           options.writable === true,
+          options.readDeadlineMs ?? LOCAL_STORE_HOST_READ_DEADLINE_MS,
         );
       }
       if (connection.kind === 'unavailable') unavailable = true;
@@ -1271,6 +1326,7 @@ export default {
   LOCAL_STORE_HOST_PROTOCOL_ERROR_CODE,
   LOCAL_STORE_HOST_PROTOCOL_VERSION,
   LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
+  LOCAL_STORE_HOST_READ_DEADLINE_MS,
   LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
   LOCAL_STORE_HOST_HELD_WAIT_MS,
   LocalStoreHostReadError,

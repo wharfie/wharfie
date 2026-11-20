@@ -351,6 +351,132 @@ describeOnUnix('local store host', () => {
     await direct.close();
   }, 30_000);
 
+  test('bounds one read across its reroutes by a total deadline', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    // The host goes away mid-session and its replacement never answers, so
+    // without a total bound the read would wait on every attempt in turn.
+    /** @type {any} */
+    const reopen = jest.fn(() => new Promise(() => undefined));
+    const client = await connectLocalStoreHost({
+      storePath,
+      readDeadlineMs: 1_000,
+      reopen,
+    });
+    const read = async () =>
+      await client?.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'item',
+        sortKeyName: 'sk',
+        sortKeyValue: 's-a',
+      });
+    expect(await read()).toMatchObject({ pk: 'item', sk: 's-a' });
+    await host.stop();
+    const started = Date.now();
+    await expect(read()).rejects.toMatchObject({
+      name: 'LocalStoreHostReadError',
+      timedOut: true,
+      message: expect.stringContaining('did not complete within 1000ms'),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(reopen).toHaveBeenCalledTimes(1);
+    await client?.close();
+  }, 15_000);
+
+  test('rejects read parameters that are not plain JSON before sending them', async () => {
+    const storePath = join(createRoot(), 'control');
+    await startHostChild(storePath);
+    const client = await connectLocalStoreHost({ storePath });
+    for (const notJson of [new Date(0), Buffer.from('s-a'), Number.NaN]) {
+      await expect(
+        client?.get({
+          tableName: 'records',
+          keyName: 'pk',
+          keyValue: 'item',
+          sortKeyName: 'sk',
+          sortKeyValue: /** @type {any} */ (notJson),
+        }),
+      ).rejects.toThrow(/is not plain JSON/);
+    }
+    await client?.close();
+  }, 15_000);
+
+  test('reassembles requests that arrive one byte at a time', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    const socket = net.createConnection(host.endpoint);
+    await once(socket, 'connect');
+    /** @param {Record<string, any>} message */
+    const dribble = async (message) => {
+      const body = Buffer.from(JSON.stringify(message));
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.byteLength, 0);
+      for (const byte of Buffer.concat([header, body])) {
+        socket.write(Buffer.from([byte]));
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    };
+    /** @type {Buffer[]} */
+    const received = [];
+    socket.on('data', (chunk) => received.push(chunk));
+    /** @param {number} count */
+    const replies = async (count) => {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const bytes = Buffer.concat(received);
+        /** @type {Record<string, any>[]} */
+        const messages = [];
+        let offset = 0;
+        while (offset + 4 <= bytes.length) {
+          const length = bytes.readUInt32BE(offset);
+          if (offset + 4 + length > bytes.length) break;
+          messages.push(
+            v8.deserialize(bytes.subarray(offset + 4, offset + 4 + length)),
+          );
+          offset += 4 + length;
+        }
+        if (messages.length >= count) return messages;
+        if (Date.now() > deadline || socket.destroyed) {
+          throw new Error(
+            'The host did not answer a request sent byte by byte.',
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+    await dribble({
+      version: 1,
+      kind: 'open',
+      storeRoot: realpathSync(storePath),
+    });
+    expect((await replies(1))[0]).toMatchObject({ kind: 'opened' });
+    await dribble({
+      version: 1,
+      kind: 'call',
+      id: 1,
+      method: 'get',
+      params: {
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'item',
+        sortKeyName: 'sk',
+        sortKeyValue: 's-b',
+      },
+    });
+    expect((await replies(2))[1]).toMatchObject({
+      kind: 'result',
+      id: 1,
+      value: { pk: 'item', sk: 's-b', n: 98 },
+    });
+    socket.destroy();
+    // The host is still alive and serving others.
+    expect(host.child.exitCode).toBeNull();
+    const client = await connectLocalStoreHost({ storePath });
+    expect(isLocalStoreHostClient(client)).toBe(true);
+    await client?.close();
+  }, 30_000);
+
   test('reroutes a read whose host stops mid-operation instead of failing the command', async () => {
     const storePath = join(createRoot(), 'control');
     const first = await startHostChild(storePath);
