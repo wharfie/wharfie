@@ -24,9 +24,13 @@ import {
   resolveResidentCoordinatorAuthorityConfiguration,
 } from '../../lib/config/db.js';
 import { createDynamoDBCoordinatorAuthorityProtocol } from '../../lib/db/tables/dynamodb-coordinator-authority.js';
+import { LocalStoreBusyError } from '../../lib/db/lmdb-holder-lock.js';
 import {
+  LOCAL_STORE_HOST_HELD_WAIT_MS,
+  LocalStoreHeldError,
   acquireLocalStoreHost,
   assertLocalStoreNotHosted,
+  findLocalStoreHost,
 } from '../local-store-host.js';
 import {
   CoordinatorQuiescenceBarrierState,
@@ -356,9 +360,13 @@ function validateResidentReplacementApplicationStateTransport(
  * just before their own close. Any other writable LMDB open refuses while
  * another process hosts the store, rather than opening and closing the store
  * underneath its writer.
+ *
+ * A host refuses with LocalStoreHeldError while another process holds the
+ * store; with `onHostHeld: 'wait'` (the service manager's resident) it waits
+ * a bounded time for that process to release it first.
  * @template T
  * @param {(ledger: ExecutionLedgerStore, context: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string, sessionPath: string, readOnly: boolean, payloadStore: ExecutionPayloadStore}) => Promise<T>} handler - Work to run against the ledger.
- * @param {{readOnly?: boolean, hostReads?: boolean, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
+ * @param {{readOnly?: boolean, hostReads?: boolean, onHostHeld?: 'refuse'|'wait', configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, payloadStore?: ExecutionPayloadStore}} [options] - Store access options and optional exact replicated payload store.
  * @returns {Promise<T>} - Handler result.
  */
 export async function withExecutionLedger(handler, options = {}) {
@@ -371,6 +379,7 @@ export async function withExecutionLedger(handler, options = {}) {
   if (localLmdb && !readOnly && options.hostReads === true) {
     host = await acquireLocalStoreHost({
       storePath: configuration.controlPath,
+      ...(options.onHostHeld === 'wait' ? { onHeld: 'wait' } : {}),
     });
   } else if (localLmdb && !readOnly) {
     await assertLocalStoreNotHosted({ storePath: configuration.controlPath });
@@ -390,6 +399,21 @@ export async function withExecutionLedger(handler, options = {}) {
       ...(configuration.region === undefined
         ? {}
         : { region: configuration.region }),
+      ...(host && options.onHostHeld === 'wait'
+        ? { lockWaitMs: LOCAL_STORE_HOST_HELD_WAIT_MS }
+        : {}),
+    }).catch(async (error) => {
+      // A host loses to an earlier holder at the holder lock when both bound
+      // at once. That is the same refusal as finding it at bind time.
+      if (!host || !(error instanceof LocalStoreBusyError)) throw error;
+      const other = await findLocalStoreHost({
+        storePath: configuration.controlPath,
+      });
+      if (other === undefined) throw error;
+      throw new LocalStoreHeldError(
+        `Local service session is already active for this local control store: ${error.message}`,
+        { cause: error },
+      );
     });
     const candidatePayloadStore =
       options.payloadStore === undefined

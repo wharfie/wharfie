@@ -45,10 +45,10 @@ export const LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS = 10_000;
 /** How long one remote read may take before the connection is abandoned. */
 export const LOCAL_STORE_HOST_CALL_TIMEOUT_MS = 60_000;
 /**
- * Delay between binding a host endpoint and the host's native open. A direct
- * reader that probed just before the bind normally finishes within it.
+ * How long a resident that is told to wait (the service manager's resident)
+ * waits for another process to stop holding its store before it gives up.
  */
-export const LOCAL_STORE_HOST_SETTLE_MS = 100;
+export const LOCAL_STORE_HOST_HELD_WAIT_MS = 30_000;
 
 const STORE_TOKEN_DOMAIN = 'wharfie:local-store-host:v1';
 const STORE_TOKEN_LENGTH = 24;
@@ -56,6 +56,7 @@ const ENDPOINT_PREFIX = 'h-';
 const ENDPOINT_SUFFIX = '.sock';
 const STALE_ENDPOINT_MIN_AGE_MS = 10_000;
 const RETRY_INTERVAL_MS = 25;
+const HELD_RETRY_INTERVAL_MS = 250;
 const FRAME_HEADER_BYTES = 4;
 const READ_METHODS = new Set(['get', 'query', 'queryPage']);
 
@@ -101,6 +102,25 @@ export class LocalStoreHostReadError extends Error {
     this.code = 'local-store-host-read';
     /** Whether a live host stopped answering, rather than going away. */
     this.timedOut = options.timedOut === true;
+    if (options.cause !== undefined) this.cause = options.cause;
+  }
+}
+
+/**
+ * Another live process already holds the store, so this process must not
+ * become its host. Named like LocalServiceSessionActiveError on purpose: a
+ * foreground run treats that as "follow the resident", not as a failure.
+ */
+export class LocalStoreHeldError extends Error {
+  /**
+   * @param {string} message - Safe operator-facing diagnostic.
+   * @param {{processId?: number, cause?: unknown}} [options] - Safe context.
+   */
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'LocalServiceSessionActiveError';
+    this.code = 'local-store-held';
+    if (options.processId !== undefined) this.processId = options.processId;
     if (options.cause !== undefined) this.cause = options.cause;
   }
 }
@@ -551,19 +571,11 @@ async function removeStaleEndpoints(directory, prefix, own) {
 }
 
 /**
- * Become the host of one local LMDB store. Call before the native open of the
- * store; `serve` once it is open; `stopServing` before the host closes its
- * own facade; `release` after that close.
- * @param {{storePath: string}} options - Facade path of the hosted store.
- * @returns {Promise<LocalStoreHost | undefined>} - Host, or undefined where unsupported.
+ * Bind one new host endpoint for a store and register it in this process.
+ * @param {string} storeRoot - Canonical store root.
+ * @returns {Promise<LocalStoreHost>} - Bound, not yet serving, host.
  */
-export async function acquireLocalStoreHost(options) {
-  if (process.platform === 'win32') return undefined;
-  await fsp.mkdir(options.storePath, { recursive: true, mode: 0o700 });
-  const storeRoot = realpathSync(options.storePath);
-  if (hostsInProcess.has(storeRoot)) {
-    throw new Error('This process already hosts the local store.');
-  }
+async function bindLocalStoreHost(storeRoot) {
   const directory = await ensureLocalServiceSocketDirectory();
   const prefix = endpointPrefix(storeRoot);
   const endpoint = join(
@@ -639,8 +651,86 @@ export async function acquireLocalStoreHost(options) {
     },
   });
   hostsInProcess.set(storeRoot, host);
-  await delay(LOCAL_STORE_HOST_SETTLE_MS);
   return host;
+}
+
+/**
+ * Order two endpoints of one store by when they were bound, so that of two
+ * processes that bind at the same moment exactly one backs off.
+ * @param {string} other - Another process's endpoint.
+ * @param {string} own - This process's endpoint.
+ * @returns {Promise<boolean>} - Whether `other` was bound first.
+ */
+async function boundBefore(other, own) {
+  const [otherStats, ownStats] = await Promise.all([
+    fsp.lstat(other).catch(() => undefined),
+    fsp.lstat(own),
+  ]);
+  if (!otherStats) return false;
+  if (otherStats.mtimeMs !== ownStats.mtimeMs) {
+    return otherStats.mtimeMs < ownStats.mtimeMs;
+  }
+  return other < own;
+}
+
+/**
+ * @param {string} endpoint - Another process's host endpoint.
+ * @returns {LocalStoreHeldError} - Refusal naming that process.
+ */
+function heldBy(endpoint) {
+  const match = /-(\d+)-[0-9a-f]+\.sock$/.exec(endpoint);
+  const processId = match ? Number(match[1]) : undefined;
+  return new LocalStoreHeldError(
+    `Local service session is already active for this local control store: another Wharfie process${processId === undefined ? '' : ` (pid ${processId})`} holds it, so this process cannot host it.`,
+    processId === undefined ? {} : { processId },
+  );
+}
+
+/**
+ * Become the host of one local LMDB store. Call before the native open of the
+ * store; `serve` once it is open; `stopServing` before the host closes its
+ * own facade; `release` after that close.
+ *
+ * At most one process holds a store. After binding, a process that finds an
+ * earlier live host backs off: it refuses at once, or with `onHeld: 'wait'`
+ * retries until `heldWaitMs` passes. Binding first means two processes that
+ * start together see each other, and the earlier one proceeds. The native
+ * open that follows takes the store's exclusive holder lock, which is what
+ * finally excludes a second holder and waits out direct openers that were
+ * already inside (lmdb-holder-lock.js).
+ * @param {{storePath: string, onHeld?: 'refuse'|'wait', heldWaitMs?: number}} options - Facade path of the hosted store, and what to do while another process holds it.
+ * @returns {Promise<LocalStoreHost | undefined>} - Host, or undefined where unsupported.
+ */
+export async function acquireLocalStoreHost(options) {
+  if (process.platform === 'win32') return undefined;
+  await fsp.mkdir(options.storePath, { recursive: true, mode: 0o700 });
+  const storeRoot = realpathSync(options.storePath);
+  if (hostsInProcess.has(storeRoot)) {
+    throw new Error('This process already hosts the local store.');
+  }
+  const heldWaitMs = options.heldWaitMs ?? LOCAL_STORE_HOST_HELD_WAIT_MS;
+  const deadline = Date.now() + heldWaitMs;
+  for (;;) {
+    const host = await bindLocalStoreHost(storeRoot);
+    let other;
+    try {
+      other = await findLocalStoreHost({ storePath: storeRoot });
+    } catch (error) {
+      await host.release();
+      throw error;
+    }
+    if (other === undefined || !(await boundBefore(other, host.endpoint))) {
+      return host;
+    }
+    await host.release();
+    const refusal = heldBy(other);
+    if (options.onHeld !== 'wait') throw refusal;
+    if (Date.now() >= deadline) {
+      refusal.message += ` Waited ${heldWaitMs}ms.`;
+      throw refusal;
+    }
+    await delay(HELD_RETRY_INTERVAL_MS);
+  }
 }
 
 /**
@@ -1121,8 +1211,9 @@ export default {
   LOCAL_STORE_HOST_PROTOCOL_VERSION,
   LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
   LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
-  LOCAL_STORE_HOST_SETTLE_MS,
+  LOCAL_STORE_HOST_HELD_WAIT_MS,
   LocalStoreHostReadError,
+  LocalStoreHeldError,
   LocalStoreHostedError,
   acquireLocalStoreHost,
   assertLocalStoreNotHosted,

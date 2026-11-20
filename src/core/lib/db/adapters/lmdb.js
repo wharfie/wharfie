@@ -8,7 +8,10 @@ import {
 import { join, resolve } from 'node:path';
 import paths from '../../paths.js';
 import { getLmdbModule } from '../../lmdb-module.js';
-import { tryAcquireLmdbHolderLock } from '../lmdb-holder-lock.js';
+import {
+  LocalStoreBusyError,
+  tryAcquireLmdbHolderLock,
+} from '../lmdb-holder-lock.js';
 import {
   CONDITION_TYPE,
   DB_ADAPTER_NAMES,
@@ -101,13 +104,16 @@ function createPrivateLmdbFile(file) {
 function acquireSharedLmdbEnvironment(dbRoot, readOnly, holderLock) {
   const existing = sharedLmdbEnvironments.get(dbRoot);
   if (existing) {
+    // Both conflicts are inside this process and end when its own read or
+    // close finishes, so they are busy, not fatal: a caller that waits for a
+    // holder (db.js) waits for these too.
     if (existing.closing) {
-      throw new Error(
+      throw new LocalStoreBusyError(
         `Cannot open an LMDB facade while the prior environment is closing for '${dbRoot}'. Retry after close completes.`,
       );
     }
     if (!readOnly && existing.openedReadOnly) {
-      throw new Error(
+      throw new LocalStoreBusyError(
         `Cannot open a writable LMDB facade while a read-only environment is live for '${dbRoot}'. Close the read-only facade first.`,
       );
     }

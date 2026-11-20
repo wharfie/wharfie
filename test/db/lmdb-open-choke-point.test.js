@@ -121,5 +121,10 @@ describe('LMDB open choke point', () => {
       'src/core/runtime/durable-activity-host.js': 1,
       'src/core/runtime/services/resident-activity-worker.js': 1,
     });
+    // Only the service manager's resident waits for another holder to leave;
+    // every other would-be holder is refused at once.
+    expect(countBySourceFile(/\bonStoreHeld: 'wait'/g)).toEqual({
+      'src/core/runtime/services/ledger-service-command.js': 1,
+    });
   });
 });

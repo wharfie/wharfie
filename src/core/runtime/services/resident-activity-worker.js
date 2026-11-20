@@ -1601,7 +1601,7 @@ export async function runResidentActivityWorker(options) {
  * attempt drain. After the bounded grace period, manual work uses its durable
  * cancellation path while workflow work is physically interrupted and then
  * settles conservatively without inventing cancellation authority.
- * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>}} options - Local resident service request.
+ * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, onStoreHeld?: 'refuse'|'wait'}} options - Local resident service request. While another process holds the store, a resident refuses at once (LocalServiceSessionActiveError), or, when onStoreHeld is 'wait', waits a bounded time first.
  * @returns {Promise<Readonly<{processed: number}>>} - Worker drain summary.
  */
 export async function runLocalResidentActivityService(options) {
@@ -1774,7 +1774,11 @@ export async function runLocalResidentActivityService(options) {
       if (errors.length === 1) throw errors[0];
       return /** @type {Readonly<{processed: number}>} */ (result);
     },
-    { configuration, hostReads: true },
+    {
+      configuration,
+      hostReads: true,
+      ...(options.onStoreHeld === 'wait' ? { onHostHeld: 'wait' } : {}),
+    },
   );
 }
 

@@ -327,4 +327,66 @@ describe('operator reads while a resident hosts its control store', () => {
     },
     120_000,
   );
+
+  testOnUnix(
+    'refuse a second resident before it opens the store, naming the live one',
+    async () => {
+      const fixture = createFixture();
+      const worker = startWorker(fixture);
+      try {
+        await waitFor(
+          async () =>
+            await findLocalStoreHost({ storePath: fixture.controlPath }),
+          'the resident store host',
+          worker,
+        );
+        // Each retry of a foreground run that follows a live resident takes
+        // this path: it must be refused without opening the store.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const second = spawnSync(
+            process.execPath,
+            [
+              '--require',
+              RECORDER,
+              BIN_PATH,
+              'ops',
+              'worker',
+              '--dir',
+              fixture.appDir,
+            ],
+            {
+              cwd: REPO_ROOT,
+              encoding: 'utf8',
+              timeout: WAIT_TIMEOUT_MS,
+              env: {
+                ...fixture.env,
+                WHARFIE_TEST_LMDB_OPEN_LOG: fixture.openLog,
+              },
+            },
+          );
+          // The defect itself: any native open here opened and closed the
+          // live resident's store from another process.
+          expect(controlStoreOpens(fixture)).toEqual([]);
+          expect(second.status).toBe(1);
+          expect(second.stderr).toContain(
+            'Local service session is already active',
+          );
+          expect(second.stderr).toContain(`pid ${worker.child.pid}`);
+        }
+        expect(worker.child.exitCode).toBeNull();
+        worker.child.kill('SIGTERM');
+        expect(await worker.exited).toMatchObject({ code: 0, signal: null });
+      } finally {
+        if (
+          worker.child.exitCode === null &&
+          worker.child.signalCode === null
+        ) {
+          worker.child.kill('SIGKILL');
+        }
+        await worker.exited.catch(() => undefined);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
 });

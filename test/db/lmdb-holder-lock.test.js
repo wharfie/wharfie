@@ -198,4 +198,33 @@ describe('LMDB holder lock across processes', () => {
       ].sort(),
     );
   }, 30_000);
+
+  test('a writable open waits for a read in the same process to finish', async () => {
+    // A foreground wharfie run reads its run's progress while its own worker
+    // opens the store to host it; the read is short and must not fail the
+    // worker.
+    const store = await createStore();
+    const reader = await createControlDBClient('lmdb', {
+      path: store,
+      readOnly: true,
+    });
+    const readClosed = new Promise((resolve) =>
+      setTimeout(async () => {
+        await reader.close();
+        resolve(Date.now());
+      }, 300),
+    );
+    const writer = await createControlDBClient('lmdb', {
+      path: store,
+      lockWaitMs: 5_000,
+    });
+    const openedAt = Date.now();
+    expect(openedAt).toBeGreaterThanOrEqual(await readClosed);
+    await writer.put({
+      tableName: 'records',
+      keyName: 'pk',
+      record: { pk: 'w' },
+    });
+    await writer.close();
+  }, 30_000);
 });
