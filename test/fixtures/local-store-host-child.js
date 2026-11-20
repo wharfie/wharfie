@@ -1,6 +1,7 @@
 // A minimal local store host in its own process: opens one store writable,
 // seeds records, and serves other processes' reads until told to stop.
-// argv: <storePath> <serveDelayMs>. stdin "stop\n" shuts it down in order.
+// argv: <storePath> <serveDelayMs> [bulkRecords]. stdin "stop\n" shuts it
+// down in order. bulkRecords adds a partition of 32 KiB records.
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
@@ -9,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createControlDBClient } from '../../src/core/lib/config/db.js';
 import { acquireLocalStoreHost } from '../../src/core/runtime/local-store-host.js';
 
-const [storePath, serveDelayArg] = process.argv.slice(2);
+const [storePath, serveDelayArg, bulkArg] = process.argv.slice(2);
 const host = await acquireLocalStoreHost({ storePath });
 if (!host) throw new Error('Local store hosting is unsupported here.');
 const db = await createControlDBClient('lmdb', { path: storePath });
@@ -25,6 +26,19 @@ for (const sk of ['s-b', 's-c', 's-d']) {
     keyName: 'pk',
     sortKeyName: 'sk',
     record: { pk: 'item', sk, n: sk.charCodeAt(2) },
+  });
+}
+const filler = 'x'.repeat(32 * 1024);
+for (let index = 0; index < Number(bulkArg || 0); index += 1) {
+  await db.put({
+    tableName: 'records',
+    keyName: 'pk',
+    sortKeyName: 'sk',
+    record: {
+      pk: 'bulk',
+      sk: `event#${String(index).padStart(6, '0')}`,
+      filler,
+    },
   });
 }
 const serve = () =>

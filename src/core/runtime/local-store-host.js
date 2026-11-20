@@ -28,6 +28,8 @@ import {
 
 /** The only supported local store host protocol version. */
 export const LOCAL_STORE_HOST_PROTOCOL_VERSION = 1;
+/** Error code for a client and host that speak different protocols. */
+export const LOCAL_STORE_HOST_PROTOCOL_ERROR_CODE = 'local-store-host-protocol';
 /** Maximum client request frame. Read parameters are small. */
 export const LOCAL_STORE_HOST_MAX_REQUEST_BYTES = 1024 * 1024;
 /** Maximum host response frame; query() can return a whole partition. */
@@ -162,31 +164,43 @@ function frame(body) {
  * @returns {void}
  */
 function readFrames(socket, maxBytes, onFrame, onOversize) {
+  // Collect chunks and concatenate once per complete frame. Concatenating on
+  // every chunk is quadratic and made multi-MiB reads take minutes.
   /** @type {Buffer[]} */
   let chunks = [];
   let buffered = 0;
+  let expected = -1;
   socket.on('data', (chunk) => {
     chunks.push(chunk);
     buffered += chunk.byteLength;
     for (;;) {
-      if (buffered < FRAME_HEADER_BYTES) return;
-      const pending = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks);
-      chunks = [pending];
-      const length = pending.readUInt32BE(0);
-      if (length > maxBytes) {
-        chunks = [];
-        buffered = 0;
-        onOversize(new RangeError(`Frame exceeds the ${maxBytes}-byte limit.`));
-        return;
+      if (expected < 0) {
+        if (buffered < FRAME_HEADER_BYTES) return;
+        if (chunks[0].byteLength < FRAME_HEADER_BYTES) {
+          chunks = [Buffer.concat(chunks, buffered)];
+        }
+        expected = chunks[0].readUInt32BE(0);
+        if (expected > maxBytes) {
+          chunks = [];
+          buffered = 0;
+          expected = -1;
+          onOversize(
+            new RangeError(`Frame exceeds the ${maxBytes}-byte limit.`),
+          );
+          return;
+        }
       }
-      if (buffered < FRAME_HEADER_BYTES + length) return;
-      const body = pending.subarray(
+      if (buffered < FRAME_HEADER_BYTES + expected) return;
+      const all =
+        chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, buffered);
+      const body = all.subarray(
         FRAME_HEADER_BYTES,
-        FRAME_HEADER_BYTES + length,
+        FRAME_HEADER_BYTES + expected,
       );
-      const rest = pending.subarray(FRAME_HEADER_BYTES + length);
+      const rest = all.subarray(FRAME_HEADER_BYTES + expected);
       chunks = rest.byteLength > 0 ? [rest] : [];
       buffered = rest.byteLength;
+      expected = -1;
       onFrame(body);
     }
   });
@@ -302,17 +316,38 @@ function serveConnection(socket, context) {
       socket.destroy();
       return;
     }
+    if (!request || typeof request !== 'object' || Array.isArray(request)) {
+      socket.destroy();
+      return;
+    }
     if (
-      !request ||
-      typeof request !== 'object' ||
-      Array.isArray(request) ||
-      request.version !== LOCAL_STORE_HOST_PROTOCOL_VERSION
+      request.kind === 'open' &&
+      !opening &&
+      (request.version !== LOCAL_STORE_HOST_PROTOCOL_VERSION ||
+        request.storeRoot !== context.storeRoot)
     ) {
+      // Say why at once, so a client from another version (or a hash
+      // collision on the endpoint name) fails specifically, not by timeout.
+      send({
+        kind: 'error',
+        error: {
+          name: 'LocalStoreHostProtocolError',
+          code: LOCAL_STORE_HOST_PROTOCOL_ERROR_CODE,
+          message:
+            request.version !== LOCAL_STORE_HOST_PROTOCOL_VERSION
+              ? `The process serving this local store (pid ${process.pid}) speaks local store host protocol ${LOCAL_STORE_HOST_PROTOCOL_VERSION}, not ${String(request.version)}; use the same Wharfie version for the command and the resident.`
+              : `The process serving this local store (pid ${process.pid}) hosts a different store.`,
+        },
+      });
+      socket.end();
+      return;
+    }
+    if (request.version !== LOCAL_STORE_HOST_PROTOCOL_VERSION) {
       socket.destroy();
       return;
     }
     if (request.kind === 'open') {
-      if (opening || request.storeRoot !== context.storeRoot) {
+      if (opening) {
         socket.destroy();
         return;
       }
@@ -761,6 +796,26 @@ function connectHost(endpoint, storeRoot, timeouts) {
           );
           return;
         }
+        if (message?.version !== LOCAL_STORE_HOST_PROTOCOL_VERSION) {
+          socket.destroy();
+          const error = Object.assign(
+            new Error(
+              `The process serving this local store${describeHostProcess(endpoint)} answered with local store host protocol ${String(message?.version)}, not ${LOCAL_STORE_HOST_PROTOCOL_VERSION}; use the same Wharfie version for the command and the resident.`,
+            ),
+            {
+              name: 'LocalStoreHostProtocolError',
+              code: LOCAL_STORE_HOST_PROTOCOL_ERROR_CODE,
+            },
+          );
+          if (!settled) {
+            settled = true;
+            clearTimeout(handshakeTimer);
+            reject(error);
+          } else {
+            fail(error);
+          }
+          return;
+        }
         if (!settled) {
           settled = true;
           clearTimeout(handshakeTimer);
@@ -800,7 +855,9 @@ function connectHost(endpoint, storeRoot, timeouts) {
                 }),
               close: () => {
                 broken ??= new Error('LMDB client is closed.');
-                socket.end();
+                // destroy, not end: a half-closed socket to a host that has
+                // stopped answering would keep this process from exiting.
+                socket.destroy();
               },
             });
             return;
@@ -842,6 +899,49 @@ function connectHost(endpoint, storeRoot, timeouts) {
   });
 }
 
+/**
+ * Requests travel as JSON. Refuse any value JSON would not carry exactly, so
+ * a read through a host can never differ from the same read in process. An
+ * own property whose value is undefined is dropped, which every facade read
+ * treats the same as absent.
+ * @param {unknown} value - Candidate read parameters.
+ * @param {string} [path] - Location for the diagnostic.
+ * @returns {void}
+ */
+function assertJsonReadParams(value, path = 'params') {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'boolean'
+  ) {
+    return;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => {
+      if (item === undefined) {
+        throw new TypeError(
+          `Local store host read ${path}[${index}] is undefined.`,
+        );
+      }
+      assertJsonReadParams(item, `${path}[${index}]`);
+    });
+    return;
+  }
+  if (typeof value === 'object') {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype === Object.prototype || prototype === null) {
+      for (const [key, item] of Object.entries(value)) {
+        if (item !== undefined) assertJsonReadParams(item, `${path}.${key}`);
+      }
+      return;
+    }
+  }
+  throw new TypeError(
+    `Local store host read ${path} is not plain JSON (${Object.prototype.toString.call(value)}).`,
+  );
+}
+
 /** Transport losses tolerated per read before it fails closed. */
 const MAX_READ_REROUTES = 3;
 
@@ -868,6 +968,7 @@ function createHostClient(connection, reopen) {
    * @returns {(params: any) => Promise<any>} - Remote call.
    */
   const remote = (method) => async (params) => {
+    assertJsonReadParams(params);
     for (let attempt = 0; ; attempt += 1) {
       if (closed) throw new Error('LMDB client is closed.');
       try {
@@ -1016,6 +1117,7 @@ export default {
   LOCAL_STORE_HOST_ACCEPT_TIMEOUT_MS,
   LOCAL_STORE_HOST_MAX_REQUEST_BYTES,
   LOCAL_STORE_HOST_MAX_RESPONSE_BYTES,
+  LOCAL_STORE_HOST_PROTOCOL_ERROR_CODE,
   LOCAL_STORE_HOST_PROTOCOL_VERSION,
   LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
   LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,

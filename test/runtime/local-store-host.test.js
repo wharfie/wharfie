@@ -9,7 +9,9 @@ import {
   rmSync,
   utimesSync,
 } from 'node:fs';
+import { once } from 'node:events';
 import net from 'node:net';
+import v8 from 'node:v8';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -30,9 +32,13 @@ import {
   isLocalStoreHostClient,
 } from '../../src/core/runtime/local-store-host.js';
 import { withExecutionLedger } from '../../src/core/runtime/operator/execution-ledger-store.js';
+import { routeLocalResidentMutation } from '../../src/core/runtime/services/resident-activity-worker.js';
 
 const CHILD = fileURLToPath(
   new URL('../fixtures/local-store-host-child.js', import.meta.url),
+);
+const READER = fileURLToPath(
+  new URL('../fixtures/local-store-host-reader.js', import.meta.url),
 );
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const describeOnUnix = process.platform === 'win32' ? describe.skip : describe;
@@ -49,11 +55,16 @@ function createRoot() {
   return root;
 }
 
-/** @param {string} storePath @param {number} [serveDelayMs] @param {string[]} [nodeArgs] */
-async function startHostChild(storePath, serveDelayMs = 0, nodeArgs = []) {
+/** @param {string} storePath @param {number} [serveDelayMs] @param {string[]} [nodeArgs] @param {number} [bulkRecords] */
+async function startHostChild(
+  storePath,
+  serveDelayMs = 0,
+  nodeArgs = [],
+  bulkRecords = 0,
+) {
   const child = spawn(
     process.execPath,
-    [...nodeArgs, CHILD, storePath, String(serveDelayMs)],
+    [...nodeArgs, CHILD, storePath, String(serveDelayMs), String(bulkRecords)],
     { cwd: REPO_ROOT, stdio: ['pipe', 'pipe', 'pipe'] },
   );
   let stderr = '';
@@ -324,6 +335,172 @@ describeOnUnix('local store host', () => {
     });
     expect(Date.now() - started).toBeLessThan(5_000);
   }, 15_000);
+
+  test('never falls back to a direct writable mutation while another process hosts the store', async () => {
+    const root = createRoot();
+    const controlPath = join(root, 'control');
+    // A live host whose store has no resident owner: as during a resident's
+    // startup before it claims ownership, or a host that never will.
+    await startHostChild(controlPath);
+    const payloadPath = join(root, 'payloads');
+    /** @type {any} */
+    const mutateDirect = jest.fn(async () => ({ applied: true }));
+    const error = await routeLocalResidentMutation({
+      appId: 'hosted-app',
+      requestId: 'wlm_hosted-request',
+      command: 'execution-ledger-submit',
+      request: {},
+      configuration: {
+        adapterName: 'lmdb',
+        controlPath,
+        tableName: 'records',
+        payloadPath,
+        payloadStoreId: resolveExecutionPayloadStoreId(payloadPath),
+        sessionPath: join(root, 'sessions'),
+      },
+      mutateDirect,
+      failureMessage: 'Hosted mutation was not delivered.',
+    }).then(
+      () => undefined,
+      (/** @type {any} */ caught) => caught,
+    );
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.message).toBe('Hosted mutation was not delivered.');
+    expect(error.errors.at(-1)).toBeInstanceOf(LocalStoreHostedError);
+    expect(error.errors.at(-1).message).toMatch(/did not accept the command/);
+    expect(mutateDirect).not.toHaveBeenCalled();
+  }, 40_000);
+
+  /**
+   * @param {string} storePath
+   * @param {'read'|'close'} step
+   */
+  async function readerAgainstFrozenHost(storePath, step) {
+    const host = await startHostChild(storePath);
+    const reader = spawn(process.execPath, [READER, storePath, '500'], {
+      cwd: REPO_ROOT,
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
+    cleanups.push(async () => {
+      if (reader.exitCode === null && reader.signalCode === null) {
+        reader.kill('SIGKILL');
+      }
+    });
+    const lines = createInterface({
+      input: /** @type {import('node:stream').Readable} */ (reader.stdout),
+    })[Symbol.asyncIterator]();
+    const nextLine = async () => String((await lines.next()).value);
+    expect(JSON.parse(await nextLine())).toEqual({ ready: true });
+    process.kill(host.child.pid ?? 0, 'SIGSTOP');
+    cleanups.push(async () => {
+      process.kill(host.child.pid ?? 0, 'SIGCONT');
+    });
+    const started = Date.now();
+    reader.stdin?.write(`${step}\n`);
+    const outcome = step === 'read' ? JSON.parse(await nextLine()) : undefined;
+    const [code, signal] = await once(reader, 'close');
+    return { outcome, code, signal, elapsed: Date.now() - started };
+  }
+
+  test('a reader whose host freezes mid-session times out the read and exits by itself', async () => {
+    const result = await readerAgainstFrozenHost(
+      join(createRoot(), 'control'),
+      'read',
+    );
+    expect(result.outcome).toEqual({
+      read: 'LocalStoreHostReadError',
+      timedOut: true,
+    });
+    expect(result).toMatchObject({ code: 0, signal: null });
+    expect(result.elapsed).toBeLessThan(5_000);
+  }, 20_000);
+
+  test('a reader that closes its client against a frozen host exits by itself', async () => {
+    const result = await readerAgainstFrozenHost(
+      join(createRoot(), 'control'),
+      'close',
+    );
+    expect(result).toMatchObject({ code: 0, signal: null });
+    expect(result.elapsed).toBeLessThan(5_000);
+  }, 20_000);
+
+  test('a protocol mismatch fails at once with a specific error, in both directions', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+
+    // An older or newer client against this host.
+    const socket = net.createConnection(host.endpoint);
+    await once(socket, 'connect');
+    const body = Buffer.from(
+      JSON.stringify({ version: 2, kind: 'open', storeRoot: '/elsewhere' }),
+    );
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(body.byteLength, 0);
+    socket.end(Buffer.concat([header, body]));
+    /** @type {Buffer[]} */
+    const chunks = [];
+    for await (const chunk of socket) chunks.push(chunk);
+    const answer = v8.deserialize(Buffer.concat(chunks).subarray(4));
+    expect(answer).toMatchObject({
+      kind: 'error',
+      error: { code: 'local-store-host-protocol' },
+    });
+    expect(answer.error.message).toMatch(
+      /speaks local store host protocol 1, not 2/,
+    );
+
+    // This client against a host from another version, at the same endpoint.
+    host.child.kill('SIGKILL');
+    await host.exited;
+    rmSync(host.endpoint, { force: true });
+    /** @type {Set<import('node:net').Socket>} */
+    const peers = new Set();
+    const future = net.createServer((peer) => {
+      peers.add(peer);
+      const reply = v8.serialize({ version: 2, kind: 'opened', processId: 1 });
+      const frame = Buffer.alloc(4);
+      frame.writeUInt32BE(reply.byteLength, 0);
+      peer.end(Buffer.concat([frame, reply]));
+    });
+    await new Promise((resolve) =>
+      future.listen(host.endpoint, () => resolve(undefined)),
+    );
+    cleanups.push(async () => {
+      for (const peer of peers) peer.destroy();
+      await new Promise((resolve) => future.close(() => resolve(undefined)));
+    });
+    const started = Date.now();
+    await expect(connectLocalStoreHost({ storePath })).rejects.toMatchObject({
+      code: 'local-store-host-protocol',
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  }, 20_000);
+
+  test('returns a large partition through the host in linear time', async () => {
+    const storePath = join(createRoot(), 'control');
+    // 1,536 records of 32 KiB: a 48 MiB response, like one long run's
+    // partition. Reassembling frames by concatenating on every chunk took
+    // tens of seconds at this size.
+    await startHostChild(storePath, 0, [], 1536);
+    const client = await connectLocalStoreHost({ storePath });
+    const started = Date.now();
+    const items = await client?.query({
+      tableName: 'records',
+      consistentRead: true,
+      keyConditions: [
+        {
+          keyType: 'PRIMARY',
+          conditionType: 'EQUALS',
+          propertyName: 'pk',
+          propertyValue: 'bulk',
+        },
+      ],
+    });
+    const elapsed = Date.now() - started;
+    await client?.close();
+    expect(items).toHaveLength(1536);
+    expect(elapsed).toBeLessThan(10_000);
+  }, 60_000);
 
   test('times out the handshake with a host that has stopped answering', async () => {
     const storePath = join(createRoot(), 'control');
