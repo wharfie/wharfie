@@ -532,12 +532,12 @@ const LOCAL_STORE_LOCK_RETRY_MS = 25;
  * Open a resident-capable LMDB store natively under its holder lock (see
  * lmdb-holder-lock.js): never beside a process that writes it, and never for
  * writing beside any other process that has it open. A conflict is retried
- * until the deadline and then refused, naming the holder. A read-only open
- * re-checks for a store host on every retry, because a holder that has just
- * bound its endpoint takes the lock before it serves.
+ * until the deadline and then refused, naming the holder. An open that may
+ * route through a store host re-checks for one on every retry, because a
+ * holder that has just bound its endpoint takes the lock before it serves.
  * @param {(options: {path: string, readOnly: boolean, holderLock: boolean}) => import('../db/base.js').DBClient} createLMDB - Adapter factory.
  * @param {{path: string, readOnly: boolean}} options - Store and mode.
- * @param {{lockWaitMs: number, routeRead?: () => Promise<import('../db/base.js').DBClient | undefined>}} wait - Bound, and how to look for a host again.
+ * @param {{lockWaitMs: number, route?: () => Promise<import('../db/base.js').DBClient | undefined>}} wait - Bound, and how to look for a host again.
  * @returns {Promise<import('../db/base.js').DBClient>} - Locked native client, or a hosted one.
  */
 async function openHeldLmdb(createLMDB, options, wait) {
@@ -557,7 +557,7 @@ async function openHeldLmdb(createLMDB, options, wait) {
         );
       }
     }
-    const hosted = await wait.routeRead?.();
+    const hosted = await wait.route?.();
     if (hosted) return hosted;
     await delay(LOCAL_STORE_LOCK_RETRY_MS);
   }
@@ -566,7 +566,7 @@ async function openHeldLmdb(createLMDB, options, wait) {
 /**
  * Create the dedicated durable control-store DB client.
  * @param {DBAdapterName} [adapterName] - Explicit adapter override.
- * @param {{readOnly?: boolean, path?: string, region?: string, lockWaitMs?: number}} [options] - Access mode, already-resolved routing, and how long a local open waits for a conflicting holder.
+ * @param {{readOnly?: boolean, routeWrites?: boolean, path?: string, region?: string, lockWaitMs?: number}} [options] - Access mode, already-resolved routing, and how long a local open waits for a conflicting holder. `routeWrites` lets a writable client write through the store's live host instead of refusing beside it; only commands that must change a held store use it.
  * @returns {Promise<import('../db/base.js').DBClient>} - Result.
  */
 export async function createControlDBClient(
@@ -589,29 +589,35 @@ export async function createControlDBClient(
     // writes can lose the resident's writes (lmdb-js #370). Read through the
     // live host instead; open natively only when no other process hosts it,
     // or when this process already holds the environment.
-    const routeRead =
-      options.readOnly === true && !hasOpenLmdbEnvironment(controlPath)
+    const readOnly = options.readOnly === true;
+    const route =
+      (readOnly || options.routeWrites === true) &&
+      !hasOpenLmdbEnvironment(controlPath)
         ? async () => {
             const { connectLocalStoreHost } =
               await import('../../runtime/local-store-host.js');
             return await connectLocalStoreHost({
               storePath: controlPath,
-              reopen: async () =>
-                await createControlDBClient(adapterName, {
-                  path: controlPath,
-                  readOnly: true,
-                }),
+              ...(readOnly
+                ? {
+                    reopen: async () =>
+                      await createControlDBClient(adapterName, {
+                        path: controlPath,
+                        readOnly: true,
+                      }),
+                  }
+                : { writable: true }),
             });
           }
         : undefined;
-    const hosted = await routeRead?.();
+    const hosted = await route?.();
     if (hosted) return hosted;
     return await openHeldLmdb(
       createLMDB,
-      { path: controlPath, readOnly: options.readOnly === true },
+      { path: controlPath, readOnly },
       {
         lockWaitMs: options.lockWaitMs ?? LOCAL_STORE_LOCK_WAIT_MS,
-        ...(routeRead ? { routeRead } : {}),
+        ...(route ? { route } : {}),
       },
     );
   }

@@ -355,6 +355,11 @@ async function withCoordinatorAuthorityStore(handler, options = {}) {
     db = await createControlDBClient(configuration.adapterName, {
       path: configuration.controlPath,
       readOnly,
+      // A takeover may fence a coordinator that is still running (the
+      // operator confirmed it), and an exact replay must still answer while
+      // a newer resident holds the store. Either way its conditional writes
+      // run inside the process that holds the store, never in a second open.
+      ...(readOnly ? {} : { routeWrites: true }),
       ...(configuration.region === undefined
         ? {}
         : { region: configuration.region }),

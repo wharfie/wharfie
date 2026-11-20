@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   utimesSync,
@@ -265,6 +266,89 @@ describeOnUnix('local store host', () => {
       }),
     ).toEqual({ pk: 'item', sk: 's-b', n: 98 });
     await client?.close();
+  }, 30_000);
+
+  test('writes through the host only on a connection that asked for writes', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    const record = { pk: 'written', sk: 'through-host', n: 7 };
+
+    const reader = await connectLocalStoreHost({ storePath });
+    await expect(
+      reader?.put({
+        tableName: 'records',
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record,
+      }),
+    ).rejects.toThrow('LMDB client is read-only.');
+    await reader?.close();
+
+    // The server enforces it too: a read-only connection that sends a write
+    // is dropped rather than served.
+    const socket = net.createConnection(host.endpoint);
+    /** @param {Record<string, any>} message */
+    const send = (message) => {
+      const body = Buffer.from(JSON.stringify(message));
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.byteLength, 0);
+      socket.write(Buffer.concat([header, body]));
+    };
+    send({ version: 1, kind: 'open', storeRoot: realpathSync(storePath) });
+    await once(socket, 'data');
+    send({
+      version: 1,
+      kind: 'call',
+      id: 1,
+      method: 'put',
+      params: {
+        tableName: 'records',
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record,
+      },
+    });
+    await Promise.race([
+      once(socket, 'close'),
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error('The host served a write on a read-only connection.'),
+            ),
+          5_000,
+        ).unref(),
+      ),
+    ]);
+    socket.destroy();
+
+    const writer = await connectLocalStoreHost({ storePath, writable: true });
+    expect(isLocalStoreHostClient(writer)).toBe(true);
+    await writer?.put({
+      tableName: 'records',
+      keyName: 'pk',
+      sortKeyName: 'sk',
+      record,
+    });
+    await writer?.close();
+    await host.stop();
+
+    // The host wrote it into its own environment, which is now closed.
+    const direct = await createControlDBClient('lmdb', {
+      path: storePath,
+      readOnly: true,
+    });
+    expect(isLocalStoreHostClient(direct)).toBe(false);
+    expect(
+      await direct.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'written',
+        sortKeyName: 'sk',
+        sortKeyValue: 'through-host',
+      }),
+    ).toEqual(record);
+    await direct.close();
   }, 30_000);
 
   test('reroutes a read whose host stops mid-operation instead of failing the command', async () => {

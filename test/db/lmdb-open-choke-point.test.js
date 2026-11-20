@@ -57,7 +57,7 @@ describe('LMDB open choke point', () => {
       source.indexOf('export async function createApplicationStateDBClient('),
     );
     expect(branch).toMatch(
-      /const routeRead =\s+options\.readOnly === true && !hasOpenLmdbEnvironment\(controlPath\)\s+\? async \(\) => \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+return await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?const hosted = await routeRead\?\.\(\);\s+if \(hosted\) return hosted;\s+return await openHeldLmdb\(/,
+      /const route =\s+\(readOnly \|\| options\.routeWrites === true\) &&\s+!hasOpenLmdbEnvironment\(controlPath\)\s+\? async \(\) => \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+return await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?const hosted = await route\?\.\(\);\s+if \(hosted\) return hosted;\s+return await openHeldLmdb\(/,
     );
   });
 
@@ -89,6 +89,12 @@ describe('LMDB open choke point', () => {
     expect(countBySourceFile(/\bholderLock: true\b/g)).toEqual({
       'src/core/lib/config/db.js': 1,
     });
+    // Writing through another process's host is for commands that must change
+    // a store while it is held; everything else that writes is refused beside
+    // a holder.
+    expect(countBySourceFile(/\brouteWrites: true\b/g)).toEqual({
+      'src/core/runtime/operator/coordinator-authority-command.js': 1,
+    });
   });
 
   test('control-store open sites are the reviewed set', () => {
@@ -96,9 +102,11 @@ describe('LMDB open choke point', () => {
     // - execution-ledger-store withExecutionLedger: read-only opens route
     //   through the host; writable opens refuse while another process hosts,
     //   unless the caller hosts itself (hostReads).
-    // - execution-ledger-store host facade: in the hosting process only.
+    // - execution-ledger-store host facades (read-only and writable): in the
+    //   hosting process only, sharing its environment.
     // - coordinator-authority-command: inspect routes through the host; the
-    //   explicit replacement fence opens writable (reviewed residual risk).
+    //   takeover writes through a live holder (routeWrites), and opens
+    //   natively only under the exclusive holder lock when none is live.
     // - systemd-user-service-manager: activation snapshot and purge scan are
     //   read-only and route; withLockedActivation holds a writable env across
     //   the resident's stop and start (reviewed residual risk).
@@ -111,7 +119,7 @@ describe('LMDB open choke point', () => {
       // The definition, plus the reroute after a lost host (read-only).
       'src/core/lib/config/db.js': 2,
       'src/core/runtime/operator/coordinator-authority-command.js': 1,
-      'src/core/runtime/operator/execution-ledger-store.js': 2,
+      'src/core/runtime/operator/execution-ledger-store.js': 3,
       'src/core/runtime/services/systemd-user-service-manager.js': 4,
     });
   });

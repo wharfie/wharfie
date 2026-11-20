@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test } from '@jest/globals';
 
 import { createControlDBClient } from '../../src/core/lib/config/db.js';
+import { createCoordinatorAuthority } from '../../src/core/lib/db/tables/coordinator-authority.js';
+import { takeoverCoordinatorAuthority } from '../../src/core/runtime/operator/coordinator-authority-command.js';
 
 // At most one process holds a local store's LMDB environment. Every other
 // process reads through it, or is refused before any native open. These
@@ -25,6 +27,9 @@ const DIRECT_CHILD = fileURLToPath(
 );
 const RECORDER = fileURLToPath(
   new URL('../fixtures/lmdb-open-recorder.cjs', import.meta.url),
+);
+const COORDINATOR_CHILD = fileURLToPath(
+  new URL('../fixtures/coordinator-takeover-child.js', import.meta.url),
 );
 const MESSAGE_TIMEOUT_MS = 20_000;
 const describeOnUnix = process.platform === 'win32' ? describe.skip : describe;
@@ -226,5 +231,61 @@ describeOnUnix('one holder per local store', () => {
     expect(ready.openedAt).toBeGreaterThanOrEqual(closed.after);
     host.send('stop');
     await host.next();
+  }, 60_000);
+
+  test('a coordinator takeover while the store is held writes through the holder, and replays the same receipt', async () => {
+    const root = createRoot();
+    const tableName = 'execution-ledger';
+    const seed = await createControlDBClient('lmdb', { path: root.storePath });
+    const predecessor = await createCoordinatorAuthority({
+      db: seed,
+      tableName,
+    }).acquire({
+      appId: 'held-app',
+      coordinatorId: 'predecessor',
+      requestId: 'predecessor-acquire',
+    });
+    await seed.close();
+    expect(predecessor.authority.status).toBe('ACTIVE');
+
+    const holder = startHost(root);
+    expect(await holder.next()).toMatchObject({ ready: true });
+    const operator = start(
+      COORDINATOR_CHILD,
+      [root.storePath, tableName, 'held-app'],
+      root.openLog,
+    );
+    const outcome = await operator.next();
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.inspection.observedAuthority).toEqual(predecessor.authority);
+    expect(outcome.applied).toMatchObject({
+      applied: true,
+      takeoverAuthority: { coordinatorId: 'successor', epoch: 2 },
+      resultAuthority: { status: 'RELEASED' },
+    });
+    expect(outcome.replayed).toEqual({ ...outcome.applied, applied: false });
+    // The takeover changed the held store without opening it.
+    expect(nativeOpensBy(root, operator.child.pid)).toEqual([]);
+    expect(holder.child.exitCode).toBeNull();
+
+    holder.send('stop');
+    expect(await holder.next()).toMatchObject({ stopped: true });
+    // With nobody holding the store, the same replay opens it directly.
+    const replayed = await takeoverCoordinatorAuthority({
+      appId: 'held-app',
+      coordinatorId: 'successor',
+      requestId: 'successor-takeover',
+      inspection: outcome.inspection,
+      confirmAuthorityReplacement: true,
+      configuration: {
+        adapterName: 'lmdb',
+        controlPath: root.storePath,
+        tableName,
+        payloadPath: join(root.storePath, '..', 'payloads'),
+        payloadStoreId: 'held-app-payloads',
+        sessionPath: join(root.storePath, '..', 'sessions'),
+      },
+    });
+    expect(replayed).toEqual(outcome.replayed);
   }, 60_000);
 });

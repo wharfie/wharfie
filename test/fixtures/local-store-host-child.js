@@ -69,9 +69,10 @@ for (let index = 0; index < Number(bulkArg || 0); index += 1) {
   });
 }
 const serve = () =>
-  host.serve(
+  host?.serve(
     async () =>
       await createControlDBClient('lmdb', { path: storePath, readOnly: true }),
+    async () => await createControlDBClient('lmdb', { path: storePath }),
   );
 const serveDelayMs = Number(serveDelayArg || 0);
 if (serveDelayMs > 0) setTimeout(serve, serveDelayMs);

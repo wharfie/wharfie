@@ -443,11 +443,19 @@ export async function withExecutionLedger(handler, options = {}) {
       candidatePayloadStore
     );
     if (host) {
+      // Writable connections exist for the commands that must change this
+      // store while this process holds it (service activation, coordinator
+      // takeover): each of their writes runs here instead of in a second
+      // native open (see createControlDBClient routeWrites).
       host.serve(
         async () =>
           await createControlDBClient('lmdb', {
             path: configuration.controlPath,
             readOnly: true,
+          }),
+        async () =>
+          await createControlDBClient('lmdb', {
+            path: configuration.controlPath,
           }),
       );
     }

@@ -59,6 +59,13 @@ const RETRY_INTERVAL_MS = 25;
 const HELD_RETRY_INTERVAL_MS = 250;
 const FRAME_HEADER_BYTES = 4;
 const READ_METHODS = new Set(['get', 'query', 'queryPage']);
+const WRITE_METHODS = new Set([
+  'put',
+  'update',
+  'remove',
+  'batchWrite',
+  'transactionWrite',
+]);
 
 /** @type {Map<string, LocalStoreHost>} */
 const hostsInProcess = new Map();
@@ -66,7 +73,7 @@ const hostsInProcess = new Map();
 const hostClients = new WeakSet();
 
 /**
- * @typedef {{storeRoot: string, endpoint: string, serve: (openFacade: () => Promise<import('../lib/db/base.js').DBClient>) => void, stopServing: () => Promise<void>, release: () => Promise<void>}} LocalStoreHost
+ * @typedef {{storeRoot: string, endpoint: string, serve: (openFacade: () => Promise<import('../lib/db/base.js').DBClient>, openWritableFacade?: () => Promise<import('../lib/db/base.js').DBClient>) => void, stopServing: () => Promise<void>, release: () => Promise<void>}} LocalStoreHost
  */
 
 /**
@@ -269,14 +276,18 @@ function rebuildError(described) {
 }
 
 /**
- * Serve one client connection: one read-only facade, serial calls.
+ * Serve one client connection: one facade, serial calls. A connection that
+ * asks for a writable facade in its open handshake may also write; each write
+ * is one atomic DB call on the host's own environment, exactly the call the
+ * client would otherwise make after opening the store itself.
  * @param {import('node:net').Socket} socket - Accepted connection.
- * @param {{storeRoot: string, isServing: () => boolean, openFacade: () => (() => Promise<import('../lib/db/base.js').DBClient>) | undefined, track: (opening: Promise<import('../lib/db/base.js').DBClient>) => () => void}} context - Host state.
+ * @param {{storeRoot: string, isServing: () => boolean, openFacade: () => (() => Promise<import('../lib/db/base.js').DBClient>) | undefined, openWritableFacade: () => (() => Promise<import('../lib/db/base.js').DBClient>) | undefined, track: (opening: Promise<import('../lib/db/base.js').DBClient>) => () => void}} context - Host state.
  * @returns {void}
  */
 function serveConnection(socket, context) {
   /** @type {import('../lib/db/base.js').DBClient | undefined} */
   let facade;
+  let writable = false;
   /** @type {(() => void) | undefined} */
   let untrack;
   let queue = Promise.resolve();
@@ -371,12 +382,16 @@ function serveConnection(socket, context) {
         socket.destroy();
         return;
       }
-      const openFacade = context.openFacade();
+      const openFacade =
+        request.writable === true
+          ? context.openWritableFacade()
+          : context.openFacade();
       if (!context.isServing() || !openFacade) {
         send({ kind: 'unavailable' });
         socket.end();
         return;
       }
+      writable = request.writable === true;
       opening = openFacade();
       untrack = context.track(opening);
       try {
@@ -395,7 +410,10 @@ function serveConnection(socket, context) {
       request.kind !== 'call' ||
       !facade ||
       !Number.isSafeInteger(request.id) ||
-      !READ_METHODS.has(request.method) ||
+      !(
+        READ_METHODS.has(request.method) ||
+        (writable && WRITE_METHODS.has(request.method))
+      ) ||
       !request.params ||
       typeof request.params !== 'object' ||
       Array.isArray(request.params)
@@ -403,7 +421,7 @@ function serveConnection(socket, context) {
       socket.destroy();
       return;
     }
-    const method = /** @type {'get'|'query'|'queryPage'} */ (request.method);
+    const method = /** @type {string} */ (request.method);
     try {
       const value = await /** @type {any} */ (facade)[method](request.params);
       send({ kind: 'result', id: request.id, value });
@@ -585,6 +603,8 @@ async function bindLocalStoreHost(storeRoot) {
 
   /** @type {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} */
   let openFacade;
+  /** @type {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} */
+  let openWritableFacade;
   let serving = false;
   /** @type {Set<import('node:net').Socket>} */
   const sockets = new Set();
@@ -597,6 +617,7 @@ async function bindLocalStoreHost(storeRoot) {
       storeRoot,
       isServing: () => serving,
       openFacade: () => openFacade,
+      openWritableFacade: () => openWritableFacade,
       track: (opening) => {
         facades.add(opening);
         return () => facades.delete(opening);
@@ -619,16 +640,18 @@ async function bindLocalStoreHost(storeRoot) {
   const host = Object.freeze({
     storeRoot,
     endpoint,
-    serve: (open) => {
+    serve: (open, openWritable) => {
       if (stopPromise)
         throw new Error('A stopped local store host cannot serve.');
       openFacade = open;
+      openWritableFacade = openWritable;
       serving = true;
     },
     stopServing: () => {
       stopPromise ??= (async () => {
         serving = false;
         openFacade = undefined;
+        openWritableFacade = undefined;
         for (const socket of sockets) socket.destroy();
         const open = [...facades];
         facades.clear();
@@ -783,9 +806,10 @@ function describeHostProcess(endpoint) {
  * @param {string} endpoint - Host endpoint.
  * @param {string} storeRoot - Canonical store root.
  * @param {{responseTimeoutMs: number, callTimeoutMs: number}} timeouts - Bounds.
+ * @param {boolean} writable - Whether to ask for a writable facade.
  * @returns {Promise<HostConnection>} - Connection outcome.
  */
-function connectHost(endpoint, storeRoot, timeouts) {
+function connectHost(endpoint, storeRoot, timeouts, writable) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint);
     let connected = false;
@@ -847,6 +871,7 @@ function connectHost(endpoint, storeRoot, timeouts) {
               version: LOCAL_STORE_HOST_PROTOCOL_VERSION,
               kind: 'open',
               storeRoot,
+              ...(writable ? { writable: true } : {}),
             }),
             'utf8',
           ),
@@ -996,9 +1021,10 @@ function connectHost(endpoint, storeRoot, timeouts) {
  * treats the same as absent.
  * @param {unknown} value - Candidate read parameters.
  * @param {string} [path] - Location for the diagnostic.
+ * @param {'read'|'write'} [what] - Kind of request, for the diagnostic.
  * @returns {void}
  */
-function assertJsonReadParams(value, path = 'params') {
+function assertJsonReadParams(value, path = 'params', what = 'read') {
   if (
     value === null ||
     typeof value === 'string' ||
@@ -1011,10 +1037,10 @@ function assertJsonReadParams(value, path = 'params') {
     value.forEach((item, index) => {
       if (item === undefined) {
         throw new TypeError(
-          `Local store host read ${path}[${index}] is undefined.`,
+          `Local store host ${what} ${path}[${index}] is undefined.`,
         );
       }
-      assertJsonReadParams(item, `${path}[${index}]`);
+      assertJsonReadParams(item, `${path}[${index}]`, what);
     });
     return;
   }
@@ -1022,13 +1048,15 @@ function assertJsonReadParams(value, path = 'params') {
     const prototype = Object.getPrototypeOf(value);
     if (prototype === Object.prototype || prototype === null) {
       for (const [key, item] of Object.entries(value)) {
-        if (item !== undefined) assertJsonReadParams(item, `${path}.${key}`);
+        if (item !== undefined) {
+          assertJsonReadParams(item, `${path}.${key}`, what);
+        }
       }
       return;
     }
   }
   throw new TypeError(
-    `Local store host read ${path} is not plain JSON (${Object.prototype.toString.call(value)}).`,
+    `Local store host ${what} ${path} is not plain JSON (${Object.prototype.toString.call(value)}).`,
   );
 }
 
@@ -1036,7 +1064,8 @@ function assertJsonReadParams(value, path = 'params') {
 const MAX_READ_REROUTES = 3;
 
 /**
- * Wrap one remote facade as a read-only LMDB DB client. If the host goes away
+ * Wrap one remote facade as an LMDB DB client: read-only, or, for a writable
+ * connection, also writing through the host. If the host goes away
  * mid-operation (it stops, or crashes and restarts), the failed read is
  * re-resolved through `reopen`: that waits for a stopping host to unbind,
  * routes to a host that serves, and opens natively only when no host is left.
@@ -1044,9 +1073,10 @@ const MAX_READ_REROUTES = 3;
  * per-read consistency as a direct open.
  * @param {Extract<HostConnection, {kind: 'opened'}>} connection - Opened remote facade.
  * @param {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} reopen - Re-resolve the store after a lost host.
- * @returns {import('../lib/db/base.js').DBClient} - Remote read-only client.
+ * @param {boolean} writable - Whether the host accepted writes on this connection.
+ * @returns {import('../lib/db/base.js').DBClient} - Remote client.
  */
-function createHostClient(connection, reopen) {
+function createHostClient(connection, reopen, writable) {
   const readOnly = async () => {
     throw new Error('LMDB client is read-only.');
   };
@@ -1085,16 +1115,37 @@ function createHostClient(connection, reopen) {
       }
     }
   };
+  /**
+   * A write is never rerouted or retried: once its request is sent, a lost
+   * connection leaves the outcome unknown, exactly as a crash after a direct
+   * write would. Callers that write through a host are retry-safe already.
+   * @param {'put'|'update'|'remove'|'batchWrite'|'transactionWrite'} method - Write method.
+   * @returns {(params: any) => Promise<any>} - Remote call.
+   */
+  const remoteWrite = (method) => async (params) => {
+    if (!writable) return await readOnly();
+    assertJsonReadParams(params, 'params', 'write');
+    if (closed) throw new Error('LMDB client is closed.');
+    try {
+      return await connection.call(method, params);
+    } catch (error) {
+      if (!(error instanceof LocalStoreHostReadError)) throw error;
+      throw new LocalStoreHostReadError(
+        `${error.message} The ${method} was sent to the process holding this local store (pid ${connection.processId}); it may or may not have been applied.`,
+        { cause: error, timedOut: error.timedOut },
+      );
+    }
+  };
   const client = brandDBClient(
     {
       query: remote('query'),
       queryPage: remote('queryPage'),
-      batchWrite: readOnly,
-      transactionWrite: readOnly,
-      update: readOnly,
-      put: readOnly,
+      batchWrite: remoteWrite('batchWrite'),
+      transactionWrite: remoteWrite('transactionWrite'),
+      update: remoteWrite('update'),
+      put: remoteWrite('put'),
       get: remote('get'),
-      remove: readOnly,
+      remove: remoteWrite('remove'),
       close: async () => {
         if (closed) return;
         closed = true;
@@ -1117,11 +1168,12 @@ export function isLocalStoreHostClient(db) {
 }
 
 /**
- * Connect a read-only client to another live host of a store. Returns
- * undefined when no other process hosts it, which is the only case in which a
- * caller may open the store natively. A host that is starting or stopping is
- * retried; one that never accepts fails closed.
- * @param {{storePath: string, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; how long to wait for a starting host, for a handshake answer, and for one read; and how to re-resolve the store if its host is lost mid-operation.
+ * Connect a client to another live host of a store: read-only, or with
+ * `writable` also writing through the host. Returns undefined when no other
+ * process hosts it, which is the only case in which a caller may open the
+ * store natively. A host that is starting or stopping is retried; one that
+ * never accepts fails closed.
+ * @param {{storePath: string, writable?: boolean, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; whether to write through the host; how long to wait for a starting host, for a handshake answer, and for one call; and how to re-resolve the store if its host is lost mid-read.
  * @returns {Promise<import('../lib/db/base.js').DBClient | undefined>} - Remote client or undefined.
  */
 export async function connectLocalStoreHost(options) {
@@ -1134,14 +1186,23 @@ export async function connectLocalStoreHost(options) {
     const endpoints = await listHostEndpoints(storeRoot);
     let unavailable = false;
     for (const endpoint of endpoints) {
-      const connection = await connectHost(endpoint, storeRoot, {
-        responseTimeoutMs:
-          options.responseTimeoutMs ?? LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
-        callTimeoutMs:
-          options.callTimeoutMs ?? LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
-      });
+      const connection = await connectHost(
+        endpoint,
+        storeRoot,
+        {
+          responseTimeoutMs:
+            options.responseTimeoutMs ?? LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
+          callTimeoutMs:
+            options.callTimeoutMs ?? LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
+        },
+        options.writable === true,
+      );
       if (connection.kind === 'opened') {
-        return createHostClient(connection, options.reopen);
+        return createHostClient(
+          connection,
+          options.reopen,
+          options.writable === true,
+        );
       }
       if (connection.kind === 'unavailable') unavailable = true;
       if (
