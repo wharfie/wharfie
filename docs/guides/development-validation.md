@@ -101,14 +101,30 @@ affected when one process opens and closes a store while others write to it:
 [lmdb-js #370](https://github.com/kriszyp/lmdb-js/issues/370), which is still
 open, reports lost writes, `MDB_PROBLEM` errors, and SIGSEGV on Linux x64.
 
-Wharfie therefore does not open a running resident's control store from
-another process. The resident (and a foreground `ops run`) binds a local store
-host socket before it opens the store. Read-only control-store opens from
-operator commands go through that host while it is live, and other writable
-opens refuse. Test and verifier observers that poll a store while another
-process writes it must do the same: read through the product path, or hold one
-long-lived read-only environment, never open and close per poll.
-`test/db/lmdb-open-choke-point.test.js` fails when a new open site appears.
+Wharfie therefore keeps every resident store (the control store and the
+application-state store) open in at most one process at a time:
+
+- A process opens a store natively only while it holds that store's holder
+  lock: `lmdb/wharfie-holder.lock`, a SQLite file lock beside `lock.mdb` that
+  the kernel releases when the process exits. A read-only open holds it
+  shared, a writable open holds it exclusively, from before the open until
+  after the close.
+- A long-lived writer (the resident, `ops worker`, a foreground `wharfie run`
+  or `activity run`) binds a store host socket, then takes the lock, then
+  opens. Another would-be holder is refused before it opens anything, except
+  the service manager's resident, which waits up to 30 s.
+- While a holder runs, operator reads go through its host, and the commands
+  that must change a held store (service activation, coordinator takeover)
+  write through it. Other writable opens are refused.
+- A conflicting open waits up to 10 s, then fails with `LocalStoreBusyError`,
+  which names the holder from `lmdb/wharfie-holder.json`.
+
+Test and verifier code follows the same rule: read through the product path,
+take the holder lock when opening an installed store directly, and read
+without it only beside a process the test holds stopped. A test that keeps a
+read-only environment open now blocks a resident from starting.
+`test/db/lmdb-open-choke-point.test.js` fails when a new open site appears in
+`src/` or `scripts/`.
 
 ## Disposable Linux service proof
 

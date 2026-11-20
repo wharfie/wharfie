@@ -166,6 +166,14 @@ The reserved operator namespace carries the durable form without `--dir` or
 user manager, the persistent path is shorter and does not require keeping that
 command's terminal open.
 
+One process holds an application's local store at a time. A second
+`wharfie worker` beside a running one exits at once and names the pid that
+holds the store, and `wharfie run` follows the running resident instead.
+Stop a foreground worker or `activity run` before installing or updating the
+service. While one runs, the service's resident cannot start: it waits up to
+30 seconds, then exits and names the process that holds the store in its
+journal (`journalctl --user -u <unit>`).
+
 ## Promote the packaged application to a Linux service
 
 Call the first packaged revision `<steady-file-a>`. Verify its ordinary CLI,
