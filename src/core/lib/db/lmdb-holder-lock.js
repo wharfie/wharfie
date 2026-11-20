@@ -1,10 +1,14 @@
 import {
+  chownSync,
   closeSync,
   constants as fsConstants,
+  fchownSync,
   lstatSync,
   openSync,
   readFileSync,
   renameSync,
+  statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -46,6 +50,24 @@ export class LocalStoreBusyError extends Error {
     this.code = 'local-store-busy';
     if (options.holder !== undefined) this.holder = options.holder;
     this.readers = options.readers === true;
+  }
+}
+
+/**
+ * The store's holder lock could not be taken for a reason other than another
+ * holder: a lock file this user cannot open, a filesystem without POSIX
+ * locks, or a Node without its built-in SQLite. Opens fail closed.
+ */
+export class LocalStoreLockError extends Error {
+  /**
+   * @param {string} message - Safe operator-facing diagnostic.
+   * @param {{cause?: unknown}} [options] - Underlying error.
+   */
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'LocalStoreLockError';
+    this.code = 'local-store-lock';
+    if (options.cause !== undefined) this.cause = options.cause;
   }
 }
 
@@ -120,6 +142,12 @@ function loadSqlite() {
   } finally {
     process.emitWarning = emitWarning;
   }
+  if (!sqlite?.DatabaseSync) {
+    sqlite = undefined;
+    throw new LocalStoreLockError(
+      "Wharfie needs Node's built-in SQLite module (node:sqlite) to lock its local stores, and this Node process does not provide it. It was probably started with --no-experimental-sqlite (check NODE_OPTIONS) or built without SQLite; remove that option or use an official Node 24 build. No store was opened.",
+    );
+  }
   return sqlite;
 }
 
@@ -153,10 +181,24 @@ function isBusy(error) {
 
 /**
  * Create the lock file privately, refusing a symbolic link.
+ *
+ * A new file is given to the owner of the LMDB directory, which is the
+ * store's owner. That keeps a root (sudo) open of a user's store from leaving
+ * behind a root-owned lock file the user can no longer open, and matches the
+ * store's own files: data.mdb and lock.mdb already exist when anyone but the
+ * owner opens the store, so such an open never changes who owns them. A user
+ * who cannot hand the file over is refused instead.
+ *
+ * This must never open and close an existing lock file: POSIX drops every
+ * fcntl lock a process holds on a file when that process closes any
+ * descriptor of it, so doing that in a holder would silently release the
+ * holder's lock. O_EXCL fails with EEXIST without opening a descriptor, and
+ * the existing file is then only lstat'ed.
  * @param {string} file - Lock file path.
+ * @param {string} dbRoot - LMDB directory.
  * @returns {void}
  */
-function createPrivateLockFile(file) {
+function createPrivateLockFile(file, dbRoot) {
   let descriptor;
   try {
     descriptor = openSync(
@@ -172,13 +214,55 @@ function createPrivateLockFile(file) {
       throw error;
     const stats = lstatSync(file);
     if (!stats.isFile() || stats.isSymbolicLink()) {
-      throw new Error(
-        'The LMDB holder lock must be a non-symbolic-link regular file.',
+      throw new LocalStoreLockError(
+        `The local store lock ${file} must be a regular file, not a symbolic link or anything else. Remove it while no Wharfie process uses this store.`,
       );
+    }
+    return;
+  }
+  try {
+    const owner = statSync(dbRoot);
+    if (process.geteuid?.() !== owner.uid) {
+      try {
+        fchownSync(descriptor, owner.uid, owner.gid);
+      } catch (cause) {
+        closeSync(descriptor);
+        descriptor = undefined;
+        unlinkSync(file);
+        throw new LocalStoreLockError(
+          `This local store belongs to uid ${owner.uid}, and this process runs as uid ${process.geteuid?.()}; it cannot create the store's lock file ${file} for that owner. Run Wharfie as the store's owner.`,
+          { cause },
+        );
+      }
     }
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
+}
+
+/**
+ * Explain a lock failure that is not another holder, with what an operator
+ * can check and do.
+ * @param {string} file - Lock file path.
+ * @param {string} dbRoot - LMDB directory.
+ * @param {unknown} cause - SQLite or filesystem error.
+ * @returns {LocalStoreLockError} - Fail-closed error.
+ */
+function lockFailure(file, dbRoot, cause) {
+  const describe = (/** @type {string} */ path) => {
+    try {
+      const stats = lstatSync(path);
+      return `uid ${stats.uid}, mode ${(stats.mode & 0o777).toString(8).padStart(4, '0')}`;
+    } catch (error) {
+      return /** @type {NodeJS.ErrnoException} */ (error).code || 'unreadable';
+    }
+  };
+  const detail =
+    cause instanceof Error ? cause.message : String(cause ?? 'unknown error');
+  return new LocalStoreLockError(
+    `Could not lock this local store through ${file} (${describe(file)}; the store directory is ${describe(dbRoot)}; this process runs as uid ${process.geteuid?.()}): ${detail}. The lock file must be a regular file owned by the store's owner and writable by it, on a filesystem with POSIX (fcntl) locks. Fix its owner (chown) or remove it while no Wharfie process uses this store, and run Wharfie as the store's owner. No store was opened.`,
+    { cause },
+  );
 }
 
 /**
@@ -252,6 +336,11 @@ function writeHolderRecord(dbRoot) {
       }),
       { mode: 0o600 },
     );
+    // Keep the record readable by the store's owner, as the lock file is.
+    const owner = statSync(dbRoot);
+    if (process.geteuid?.() !== owner.uid) {
+      chownSync(temporary, owner.uid, owner.gid);
+    }
     renameSync(temporary, file);
   } catch {
     // Informational only; the lock itself is already held.
@@ -293,7 +382,7 @@ export function tryAcquireLmdbHolderLock(dbRoot, options) {
   if (process.platform === 'win32') return undefined;
   const file = join(dbRoot, LMDB_HOLDER_LOCK_FILE);
   try {
-    createPrivateLockFile(file);
+    createPrivateLockFile(file, dbRoot);
   } catch (error) {
     // A read-only volume on a read-only filesystem has no writer to protect.
     if (
@@ -304,16 +393,22 @@ export function tryAcquireLmdbHolderLock(dbRoot, options) {
     ) {
       return undefined;
     }
-    throw error;
+    if (error instanceof LocalStoreLockError) throw error;
+    throw lockFailure(file, dbRoot, error);
   }
   const { DatabaseSync } = loadSqlite();
-  const database = new DatabaseSync(file, { timeout: 0 });
+  let database;
+  try {
+    database = new DatabaseSync(file, { timeout: 0 });
+  } catch (error) {
+    throw lockFailure(file, dbRoot, error);
+  }
   try {
     database.exec('PRAGMA journal_mode=OFF');
     lock(database, options.exclusive);
   } catch (error) {
     database.close();
-    if (!isBusy(error)) throw error;
+    if (!isBusy(error)) throw lockFailure(file, dbRoot, error);
     throw busyError(dbRoot, options.exclusive);
   }
   if (options.exclusive) writeHolderRecord(dbRoot);
@@ -353,8 +448,9 @@ function busyError(dbRoot, exclusive) {
     }
   }
   if (readersOnly) {
+    // Readers leave no record; the operating system can still name them.
     return new LocalStoreBusyError(
-      'Other Wharfie commands are reading this local store directly; it cannot be opened for writing until they finish.',
+      `Other processes are reading this local store directly (no Wharfie process serves it), so it cannot be opened for writing until they finish. To see which processes they are, run: lsof ${join(dbRoot, LMDB_HOLDER_LOCK_FILE)}`,
       { readers: true },
     );
   }
@@ -369,6 +465,7 @@ export default {
   LMDB_HOLDER_LOCK_FILE,
   LMDB_HOLDER_RECORD_FILE,
   LocalStoreBusyError,
+  LocalStoreLockError,
   LocalStoreWaitAbortedError,
   waitForLocalStore,
   describeLmdbHolder,

@@ -101,6 +101,19 @@ describe('LMDB open choke point', () => {
     });
   });
 
+  test('only the lock module touches the holder lock file', () => {
+    // POSIX drops every fcntl lock a process holds on a file when that
+    // process closes any descriptor of it. Reading, copying or opening the
+    // lock file anywhere else in a holder would silently release its lock.
+    const pattern = /wharfie-holder\.lock|\bLMDB_HOLDER_LOCK_FILE\b/g;
+    expect({
+      ...countBySourceFile(pattern),
+      ...countBySourceFile(pattern, SCRIPTS),
+    }).toEqual({
+      'src/core/lib/db/lmdb-holder-lock.js': expect.any(Number),
+    });
+  });
+
   test('control-store open sites are the reviewed set', () => {
     // Each site, and whether a resident can be writing at the time:
     // - execution-ledger-store withExecutionLedger: read-only opens route

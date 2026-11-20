@@ -37,7 +37,16 @@ report({ opened: true, at: Date.now() });
 for await (const line of createInterface({ input: process.stdin })) {
   if (line.trim() !== 'close') continue;
   const at = Date.now();
-  await db.close();
+  try {
+    await db.close();
+  } catch (error) {
+    // Stay alive, still holding whatever the failed close left held.
+    report({
+      closeFailed: true,
+      message: /** @type {Error} */ (error)?.message,
+    });
+    continue;
+  }
   report({ closed: true, at, after: Date.now() });
   break;
 }

@@ -201,21 +201,32 @@ async function releaseSharedLmdbEnvironment(dbRoot, shared) {
     throw new Error(`LMDB environment reference underflow for '${dbRoot}'.`);
   }
   shared.closing = true;
+  let closed = false;
   try {
-    // If anything in the future uses async writes, make sure they're fully
-    // committed/flushed before named tables or their root are closed.
-    if (shared.env?.committed) await shared.env.committed;
-    if (shared.env?.flushed) await shared.env.flushed;
-    for (const table of shared.tables.values()) {
-      if (table && typeof table.close === 'function') await table.close();
+    try {
+      // If anything in the future uses async writes, make sure they're fully
+      // committed/flushed before named tables or their root are closed.
+      if (shared.env?.committed) await shared.env.committed;
+      if (shared.env?.flushed) await shared.env.flushed;
+      for (const table of shared.tables.values()) {
+        if (table && typeof table.close === 'function') await table.close();
+      }
+      shared.tables.clear();
+    } finally {
+      // The root close runs even if a flush or table close failed.
+      if (typeof shared.env?.close === 'function') await shared.env.close();
+      closed = true;
     }
-    shared.tables.clear();
-    if (typeof shared.env?.close === 'function') await shared.env.close();
   } finally {
-    // Only after the native close: a holder may open as soon as this releases.
-    shared.lock?.release();
-    if (sharedLmdbEnvironments.get(dbRoot) === shared) {
-      sharedLmdbEnvironments.delete(dbRoot);
+    // Only after the native close completed: a holder may open as soon as
+    // this releases. If the close failed, the environment may still be open,
+    // so this process keeps the lock, and the entry (marked closing, so
+    // later opens here are refused as busy), until it exits.
+    if (closed) {
+      shared.lock?.release();
+      if (sharedLmdbEnvironments.get(dbRoot) === shared) {
+        sharedLmdbEnvironments.delete(dbRoot);
+      }
     }
   }
 }
