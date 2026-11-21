@@ -2,11 +2,16 @@
 /* eslint-disable jsdoc/require-jsdoc */
 
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { promises as fsp } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 import createVanillaDB from '../../../src/core/lib/db/adapters/vanilla.js';
+import { hasOpenLmdbEnvironment } from '../../../src/core/lib/db/adapters/lmdb.js';
 import { createControlDBClient } from '../../../src/core/lib/config/db.js';
 import {
   createLedgerServiceId,
@@ -954,6 +959,110 @@ describe('systemd user service manager', () => {
         },
       });
     },
+  );
+
+  (process.platform === 'win32' ? it.skip : it)(
+    'never holds the control store across a resident stop or start, and writes through a live resident',
+    async () => {
+      // Each systemctl start runs a real process that holds the control store
+      // for its life, as the resident does; stop ends it. A store that the
+      // activation still held at start would leave that process waiting for
+      // the holder lock.
+      const harness = await createHarness({ useProductionControlDB: true });
+      const holderScript = fileURLToPath(
+        new URL('../../fixtures/local-store-host-child.js', import.meta.url),
+      );
+      const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+      /** @type {{child: import('node:child_process').ChildProcess, next: () => Promise<Record<string, any>>, exited: Promise<unknown>} | undefined} */
+      let holder;
+      /** @type {Array<{operation: string, activationHeldStore: boolean, holder?: Record<string, any>}>} */
+      const transitions = [];
+      const startHolder = async () => {
+        const child = spawn(
+          process.execPath,
+          [holderScript, harness.layout.controlPath, '0'],
+          { cwd: repoRoot, stdio: ['pipe', 'pipe', 'inherit'] },
+        );
+        const exited = once(child, 'exit');
+        const lines = createInterface({
+          input: /** @type {import('node:stream').Readable} */ (child.stdout),
+        })[Symbol.asyncIterator]();
+        const next = async () => {
+          const line = await lines.next();
+          if (line.done) throw new Error('The holder exited without output.');
+          return JSON.parse(line.value);
+        };
+        holder = { child, next, exited };
+        return await next();
+      };
+      const stopHolder = async () => {
+        const current = holder;
+        holder = undefined;
+        if (!current) return;
+        current.child.stdin?.end('stop\n');
+        // Bounded: a holder that does not stop is killed, never awaited.
+        const killer = setTimeout(() => current.child.kill('SIGKILL'), 10_000);
+        try {
+          await current.exited;
+        } finally {
+          clearTimeout(killer);
+        }
+      };
+      const base = /** @type {any} */ (harness.execute).getMockImplementation();
+      harness.execute.mockImplementation(
+        async (/** @type {string} */ command, /** @type {string[]} */ args) => {
+          const operation = command === 'systemctl' ? args[1] : undefined;
+          if (operation === 'start' || operation === 'stop') {
+            const activationHeldStore = hasOpenLmdbEnvironment(
+              harness.layout.controlPath,
+            );
+            if (operation === 'stop') await stopHolder();
+            const started =
+              operation === 'start' && !holder
+                ? await startHolder()
+                : undefined;
+            transitions.push({
+              operation,
+              activationHeldStore,
+              ...(started ? { holder: started } : {}),
+            });
+          }
+          return await base(command, args);
+        },
+      );
+      try {
+        await harness.operator.converge();
+        await fsp.writeFile(harness.artifactPath, 'packaged-artifact-v2');
+        const target = await inspectArtifactBytes(harness.artifactPath);
+        await expect(harness.operator.converge()).resolves.toMatchObject({
+          action: 'converge',
+          requestStatus: 'fulfilled',
+          outcome: 'target-active',
+          activeArtifactId: target.artifactId,
+        });
+        // The update's final transition was written while the new holder
+        // ran, so it went through that holder; it is durable in its store.
+        await expect(readActivationRecord(harness)).resolves.toMatchObject({
+          phase: 'ACTIVE',
+          selected: { artifactId: target.artifactId },
+        });
+        expect(transitions.map((transition) => transition.operation)).toEqual([
+          'start',
+          'stop',
+          'start',
+        ]);
+        for (const transition of transitions) {
+          expect(transition.activationHeldStore).toBe(false);
+          if (transition.operation === 'start') {
+            expect(transition.holder).toMatchObject({ ready: true });
+          }
+        }
+        expect(hasOpenLmdbEnvironment(harness.layout.controlPath)).toBe(false);
+      } finally {
+        await stopHolder();
+      }
+    },
+    60_000,
   );
 
   it('converges an already healthy exact target without changing its activation generation', async () => {

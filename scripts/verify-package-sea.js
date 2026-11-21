@@ -33,9 +33,10 @@ import {
 import { createPackageSeaScheduleRestartProof } from './package-sea-schedule-restart-proof.js';
 import { createPackageSeaCoordinatorHandoff } from './package-sea-coordinator-handoff.js';
 import { createPackageSeaApplicationStateReadinessProof } from './application-state-readiness-proof.js';
+import { openInstalledStore as openInstalledStoreUnderLock } from './installed-store-open.js';
 import {
   attachSeaInspector,
-  hasSeaProcessPausedByInspector,
+  isSeaProcessPausedByInspector,
   spawnInspectorPausedProcess,
 } from './sea-inspector.js';
 import {
@@ -840,7 +841,73 @@ const observerControlReads = {
   hosted: 0,
   directWithoutHost: 0,
   directWhilePaused: 0,
+  // Application-state reads beside a live, unpaused holder. That store has
+  // no read host, so these still open it under its writer (lmdb-js #370).
+  applicationStateBesideHolder: 0,
+  // The same reads by code path; see assertApplicationStateResidual.
+  applicationStateBesideHolderByPath: {
+    readyProof: 0,
+    fixture: 0,
+  },
 };
+
+/**
+ * Ceilings for the declared residual: reads of the application-state store
+ * beside a live holder, by the code path that makes them. The verifier's
+ * scenarios are fixed, so these counts are fixed per platform:
+ * - readyProof: one per READY observation of a live resident (every
+ *   resident boot that reaches READY, plus the explicit post-recovery
+ *   checks); Linux adds the schedule-restart proof's boots;
+ * - fixture: crash-matrix and recovery readbacks of receipts and
+ *   destinations taken while a SEA process still holds the store.
+ * A larger count means a new read beside a writer, which must be reviewed,
+ * not absorbed. Remove the residual by hosting the application-state store
+ * (follow-up to PR #182); then these ceilings become zero.
+ */
+const APPLICATION_STATE_RESIDUAL_CEILING = Object.freeze({
+  // macOS: 11 READY observations (measured on 73505cf1 and after); Linux adds
+  // the schedule-restart proof's two resident boots.
+  readyProof: process.platform === 'linux' ? 13 : 11,
+  // One application-state readback by the crash-matrix fixture while a
+  // live, unpaused SEA process holds that store (measured on both platforms).
+  fixture: 1,
+});
+
+/** @returns {void} - Fails the verification when the residual grows. */
+function assertApplicationStateResidual() {
+  const { applicationStateBesideHolderByPath: byPath } = observerControlReads;
+  for (const path of /** @type {const} */ (['readyProof', 'fixture'])) {
+    assert.ok(
+      byPath[path] <= APPLICATION_STATE_RESIDUAL_CEILING[path],
+      `Application-state reads beside a live holder from ${path} grew to ${byPath[path]} (ceiling ${APPLICATION_STATE_RESIDUAL_CEILING[path]}; all paths: ${JSON.stringify(byPath)}). Route the new read, or review and raise the ceiling with its reason.`,
+    );
+  }
+}
+
+/**
+ * Open an installed store under its holder lock (installed-store-open.js),
+ * with this verifier's paused processes and read counter.
+ * @param {{default: (options: Record<string, any>) => Record<string, any>}} adapterModule - Installed LMDB adapter.
+ * @param {string} storePath - Store path.
+ * @param {boolean} readOnly - Access mode.
+ * @param {{unhostedStore?: boolean}} [options] - The store has no read host.
+ * @returns {Promise<Record<string, any>>} - Open DB client.
+ */
+async function openInstalledStore(
+  adapterModule,
+  storePath,
+  readOnly,
+  options = {},
+) {
+  return await openInstalledStoreUnderLock(adapterModule, storePath, readOnly, {
+    isPausedHere: isSeaProcessPausedByInspector,
+    ...(options.unhostedStore === true ? { unhostedStore: true } : {}),
+    onUnhostedRead: () => {
+      observerControlReads.applicationStateBesideHolder += 1;
+      observerControlReads.applicationStateBesideHolderByPath.fixture += 1;
+    },
+  });
+}
 
 /**
  * Read the installed package's control store the way an operator command
@@ -849,10 +916,11 @@ const observerControlReads = {
  * directly only when no process holds it. A host that does not answer fails
  * the read; it is never bypassed.
  *
- * The one exception is a process this verifier itself holds at a debugger
+ * The one exception is a host this verifier itself holds at a debugger
  * breakpoint. It cannot answer, so routing to it would deadlock the
  * verifier against its own pause, and it cannot write while stopped, so a
- * direct read cannot race its writes.
+ * direct read cannot race its writes. Only that store is read directly;
+ * a store hosted by another, running process still goes through its host.
  * @param {string} installedPackageRoot - Installed tarball root.
  * @param {string} controlPath - Control store path.
  * @returns {Promise<(read: (db: Record<string, any>) => Promise<any>) => Promise<any>>} - Control reader.
@@ -870,8 +938,13 @@ async function createInstalledControlReader(installedPackageRoot, controlPath) {
     ),
   );
   return async (read) => {
-    const pausedHere = hasSeaProcessPausedByInspector();
-    const hosted = pausedHere
+    const endpoint = await hostModule.findLocalStoreHost({
+      storePath: controlPath,
+    });
+    const hostPid = Number(/-(\d+)-[0-9a-f]+\.sock$/.exec(endpoint ?? '')?.[1]);
+    const hostPausedHere =
+      Number.isSafeInteger(hostPid) && isSeaProcessPausedByInspector(hostPid);
+    const hosted = hostPausedHere
       ? undefined
       : await hostModule.connectLocalStoreHost({ storePath: controlPath });
     if (hosted) {
@@ -883,10 +956,10 @@ async function createInstalledControlReader(installedPackageRoot, controlPath) {
         await hosted.close();
       }
     }
-    const direct = adapterModule.default({ path: controlPath, readOnly: true });
+    const direct = await openInstalledStore(adapterModule, controlPath, true);
     try {
       const value = await read(direct);
-      if (pausedHere) observerControlReads.directWhilePaused += 1;
+      if (hostPausedHere) observerControlReads.directWhilePaused += 1;
       else observerControlReads.directWithoutHost += 1;
       return value;
     } finally {
@@ -935,8 +1008,17 @@ async function createInstalledLedgerLifecycleObserver(options) {
   const serviceId = lifecycleModule.createLedgerServiceId({
     appId: options.appId,
   });
-  const readinessProof =
-    await createPackageSeaApplicationStateReadinessProof(options);
+  const readinessProof = await createPackageSeaApplicationStateReadinessProof(
+    options,
+    {
+      // The application-state store has no read host; this proof reads it
+      // beside the live READY resident.
+      onUnhostedRead: () => {
+        observerControlReads.applicationStateBesideHolder += 1;
+        observerControlReads.applicationStateBesideHolderByPath.readyProof += 1;
+      },
+    },
+  );
   return {
     serviceId,
     assertReady: readinessProof.assertReady,
@@ -1064,7 +1146,7 @@ async function createInstalledScheduleControlObserver(options) {
  * operator fixtures. The moved SEA still performs every operation under test;
  * this host helper only prepares independently verifiable durable state.
  * @param {{installedPackageRoot: string, controlPath: string, tableName: string, payloadPath: string, applicationStatePath: string, revisionId: string}} options - Installed-package fixture inputs.
- * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string, observedAt?: number) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string, expectedStoreId: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
+ * @returns {Promise<{payloadStoreId: string, createDestinationEffectId: (appId: string, runId: string, effectId: string) => string, createRunId: (appId: string, idempotencyKey: string) => string, createWorkflowRunId: (appId: string, idempotencyKey: string) => string, createCompletedWorkflowEvidence: (runId: string, result: unknown) => Promise<Record<string, any>>, listReadyWork: (appId: string, revisionId: string, observedAt?: number) => Promise<Record<string, any>[]>, createClaimedRun: (appId: string, idempotencyKey: string) => Promise<string>, createApplicationStateRecoveryBatchRun: (appId: string, idempotencyKey: string, effectSpecs: {effectId: string, state: 'PENDING'|'STARTED_RECEIPT'|'STARTED_ABSENT'|'TERMINAL'}[], fixtureOptions?: {actor?: {kind: string, id: string}}) => Promise<{runId: string, attemptId: string, storeId: string, payloadStoreId: string, effects: {effectId: string, initialStatus: string, destinationEffectId: string, requestKey: string, receiptPresent: boolean, recoveryAction?: string, recoveredStatus?: string}[], secrets: string[]}>, materializeApplicationStateReceipt: (appId: string, runId: string, effectId: string) => Promise<Readonly<Record<string, any>>>, readApplicationStateDestination: (appId: string, destinationEffectId: string, logicalKey: string) => Promise<{receipt: Record<string, any> | null, resolution: Record<string, any> | null, business: Record<string, any> | null}>, readApplicationStateReceipt: (appId: string, destinationEffectId: string) => Promise<Record<string, any> | null>, readApplicationStateReceipts: (appId: string, destinationEffectIds: string[]) => Promise<Map<string, Record<string, any> | null>>, writeApplicationStateExternalValue: (appId: string, logicalKey: string, value: Record<string, any>, suffix: string, expectedStoreId: string) => Promise<{destinationEffectId: string, value: Record<string, any>, outcome: Record<string, any>}>, readExecutionPayload: (reference: Record<string, any>) => Promise<any>, readManagedEffectDelivery: (runId: string, effectId: string) => Promise<Record<string, any> | null>, readRawLedgerRunRows: (runId: string) => Promise<Record<string, any>[]>, listRunDirectory: (appId: string) => Promise<Record<string, any>[]>, readCoordinatorAuthority: (appId: string) => Promise<Record<string, any> | null>, readSuccessorIdentity: (appId: string, successorId: string) => Promise<Record<string, any> | null>, readRun: (runId: string) => Promise<Record<string, any> | null>, createManagedEffectSuccessorAuthorization: (options: Record<string, any>) => Record<string, any>, encodeCanonicalJsonPayload: (value: unknown) => Buffer, createExecutionPayloadReference: (options: {bytes: Buffer, payloadSchema: string, storeId: string}) => Record<string, any>, ApplicationStateAdapterDescriptor: Record<string, any>, ApplicationStateReconciliationVerifierDescriptor: Record<string, any>, AttemptStatus: Record<string, string>, EffectStatus: Record<string, string>, InvocationStatus: Record<string, string>, RunStatus: Record<string, string>}>} - Exact-run fixture API.
  */
 async function createInstalledExecutionLedgerFixture(options) {
   const installedModule = async (/** @type {string} */ relativePath) =>
@@ -1120,11 +1202,86 @@ async function createInstalledExecutionLedgerFixture(options) {
       storeId: payloadStoreId,
     });
 
+  // Fixture reads go where an operator's would: through the live host of
+  // the control store, or directly under the holder lock when nobody holds
+  // it (createInstalledControlReader). Fixture writes do what service
+  // activation does: through a live holder's writable host connection, or
+  // directly under the exclusive holder lock when nobody holds the store.
+  // Either way the verifier never opens and closes the store under a writer.
+  const withControl = await createInstalledControlReader(
+    options.installedPackageRoot,
+    options.controlPath,
+  );
+  const hostModule = await installedModule(
+    'src/core/runtime/local-store-host.js',
+  );
+  /** @returns {Record<string, any>} - Write client, resolved on first use. */
+  const openRoutedWriter = () => {
+    /** @type {Promise<Record<string, any>> | undefined} */
+    let current;
+    const resolveCurrent = () =>
+      (current ??= (async () =>
+        (await hostModule.connectLocalStoreHost({
+          storePath: options.controlPath,
+          writable: true,
+        })) ??
+        (await openInstalledStore(
+          adapterModule,
+          options.controlPath,
+          false,
+        )))());
+    /**
+     * @param {string} method - DB method.
+     * @returns {(params: any) => Promise<any>} - Call on the resolved client.
+     */
+    const call = (method) => async (params) =>
+      await (await resolveCurrent())[method](params);
+    return dbBaseModule.brandDBClient(
+      {
+        get: call('get'),
+        query: call('query'),
+        queryPage: call('queryPage'),
+        put: call('put'),
+        update: call('update'),
+        remove: call('remove'),
+        batchWrite: call('batchWrite'),
+        transactionWrite: call('transactionWrite'),
+        close: async () => {
+          const pending = current;
+          current = undefined;
+          if (pending) await (await pending).close?.();
+        },
+      },
+      dbBaseModule.DB_ADAPTER_NAMES.LMDB,
+    );
+  };
+  /**
+   * @param {string} method - Read method.
+   * @returns {(params: any) => Promise<any>} - One routed read.
+   */
+  const routedRead = (method) => async (params) =>
+    await withControl(async (db) => await db[method](params));
+  /** @returns {Promise<never>} - Always refuses. */
+  const readOnlyRefusal = async () => {
+    throw new Error('LMDB client is read-only.');
+  };
   const openLedger = (/** @type {boolean} */ readOnly) => {
-    const db = adapterModule.default({
-      path: options.controlPath,
-      readOnly,
-    });
+    const db = readOnly
+      ? dbBaseModule.brandDBClient(
+          {
+            get: routedRead('get'),
+            query: routedRead('query'),
+            queryPage: routedRead('queryPage'),
+            put: readOnlyRefusal,
+            update: readOnlyRefusal,
+            remove: readOnlyRefusal,
+            batchWrite: readOnlyRefusal,
+            transactionWrite: readOnlyRefusal,
+            close: async () => undefined,
+          },
+          dbBaseModule.DB_ADAPTER_NAMES.LMDB,
+        )
+      : openRoutedWriter();
     return {
       db,
       ledger: ledgerModule.createExecutionLedger({
@@ -1201,9 +1358,12 @@ async function createInstalledExecutionLedgerFixture(options) {
     /** @type {string} */ appId,
     /** @type {string[]} */ destinationEffectIds,
   ) => {
-    const applicationDb = await dbConfigModule.createApplicationStateDBClient(
-      'lmdb',
-      { path: options.applicationStatePath, readOnly: true },
+    // Read beside a crash-matrix process this verifier may hold paused.
+    const applicationDb = await openInstalledStore(
+      adapterModule,
+      options.applicationStatePath,
+      true,
+      { unhostedStore: true },
     );
     try {
       const catalog =
@@ -1336,6 +1496,35 @@ async function createInstalledExecutionLedgerFixture(options) {
         cursor = page.nextCursor;
       } while (cursor !== undefined);
       return items;
+    } finally {
+      await db.close();
+    }
+  };
+  const [coordinatorAuthorityModule, coordinatorCommandModule] =
+    await Promise.all([
+      installedModule('src/core/lib/db/tables/coordinator-authority.js'),
+      installedModule(
+        'src/core/runtime/operator/coordinator-authority-command.js',
+      ),
+    ]);
+  /**
+   * The coordinator authority exactly as `wharfie coordinator inspect`
+   * reports it. A public command cannot read a store that a paused direct
+   * writer holds (it waits, then refuses, naming that process), so the
+   * verifier reads it itself while it holds such a process paused.
+   * @param {string} appId - Exact fixture application.
+   * @returns {Promise<Record<string, any> | null>} - Observed authority.
+   */
+  const readCoordinatorAuthority = async (appId) => {
+    const { db } = openLedger(true);
+    try {
+      const snapshot = await coordinatorAuthorityModule
+        .createCoordinatorAuthority({ db, tableName: options.tableName })
+        .get({ appId });
+      return coordinatorCommandModule.createCoordinatorAuthorityInspectionDocument(
+        appId,
+        snapshot,
+      ).observedAuthority;
     } finally {
       await db.close();
     }
@@ -1785,9 +1974,12 @@ async function createInstalledExecutionLedgerFixture(options) {
       destinationEffectId,
       logicalKey,
     ) => {
-      const applicationDb = await dbConfigModule.createApplicationStateDBClient(
-        'lmdb',
-        { path: options.applicationStatePath, readOnly: true },
+      // Read beside a crash-matrix process this verifier may hold paused.
+      const applicationDb = await openInstalledStore(
+        adapterModule,
+        options.applicationStatePath,
+        true,
+        { unhostedStore: true },
       );
       try {
         const catalog =
@@ -1834,6 +2026,7 @@ async function createInstalledExecutionLedgerFixture(options) {
     },
     readRawLedgerRunRows,
     listRunDirectory,
+    readCoordinatorAuthority,
     readSuccessorIdentity,
     readRun: async (runId) => {
       const { db, ledger } = openLedger(true);
@@ -6760,13 +6953,11 @@ async function verifyRelocatedSeaManagedEffectSuccessorCrashMatrix(options) {
         assert.ok(ownershipAtBoundary, `${scenario.label} has no owner`);
         assert.equal(ownershipAtBoundary.appId, options.appId);
         assert.equal(ownershipAtBoundary.ownerKind, 'manual');
-        const coordinatorAtBoundary = seaCoordinatorHandoff.inspect({
-          artifactPath: options.artifactPath,
-          appId: options.appId,
-          cwd: caseRoot,
-          env: environment,
-          label: `${scenario.label} paused coordinator`,
-        }).observedAuthority;
+        // The paused retry holds the store, so the public inspect runs only
+        // after its SIGKILL (afterSigkill, below) and must match this read.
+        const coordinatorAtBoundary = await fixture.readCoordinatorAuthority(
+          options.appId,
+        );
         assert.equal(coordinatorAtBoundary?.status, 'ACTIVE');
         assert.equal(
           coordinatorAtBoundary.coordinatorId,
@@ -11940,6 +12131,7 @@ export default defineApp({
   process.stdout.write(
     `Observer control-store reads: ${JSON.stringify(observerControlReads)}\n`,
   );
+  assertApplicationStateResidual();
   process.stdout.write(
     `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, explicit public coordinator takeover-and-release with exact receipt replay before every confirmed killed-owner restart and unchanged RELEASED authority across owner-free response-loss crashes, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH${scheduleProof ? `, and due schedule ${scheduleProof.expected.occurrenceId} with one physical dispatch across real SIGKILL/replacement and an unchanged post-restart poll` : ', with the due-schedule/restart proof correctly gated to Linux'} (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
   );

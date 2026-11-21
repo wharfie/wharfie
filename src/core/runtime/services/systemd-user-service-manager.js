@@ -7,6 +7,10 @@ import { performance } from 'node:perf_hooks';
 
 import { getLocalAppStorageLayout } from '../../lib/config/local-app-storage-context.js';
 import { createControlDBClient } from '../../lib/config/db.js';
+import {
+  brandDBClient,
+  readDBClientAdapterIdentity,
+} from '../../lib/db/base.js';
 import { createExecutionLedger } from '../../lib/db/tables/execution-ledger.js';
 import {
   LedgerServiceLifecycleStatus,
@@ -4125,6 +4129,87 @@ export function createSystemdUserServiceOperator(options = {}) {
   }
 
   /**
+   * Control-store access for one activation, which stops one resident and
+   * starts another while it runs. At most one process may hold the store's
+   * LMDB environment (lmdb-holder-lock.js), and a resident holds it for its
+   * whole life, so the activation must never keep its own environment open
+   * across a resident's stop or start. Each call goes through the store as
+   * it is held at that moment:
+   *
+   * - while a resident runs (before its stop, after its successor starts),
+   *   through that resident's store host, writes included (routeWrites);
+   * - while none runs (between stop and start), natively, under the
+   *   exclusive holder lock.
+   *
+   * `suspend` drops the current access; the driver calls it before every
+   * systemctl stop or start, and the next call resolves the store again.
+   * @param {{layout: Readonly<Record<string, string>>}} context - App context.
+   * @returns {Promise<{db: import('../../lib/db/base.js').DBClient, suspend: () => Promise<void>}>} - Activation DB and its suspend point.
+   */
+  async function openActivationControlAccess(context) {
+    const open = async () =>
+      await createControlDB('lmdb', {
+        path: context.layout.controlPath,
+        routeWrites: true,
+      });
+    const first = await open();
+    /** @type {Promise<import('../../lib/db/base.js').DBClient> | undefined} */
+    let current = Promise.resolve(first);
+    const resolveCurrent = () => {
+      current ??= open().catch((error) => {
+        current = undefined;
+        throw error;
+      });
+      return current;
+    };
+    const suspend = async () => {
+      const previous = current;
+      current = undefined;
+      if (previous) await (await previous).close?.();
+    };
+    /**
+     * @param {'get'|'query'|'queryPage'|'put'|'update'|'remove'|'batchWrite'|'transactionWrite'} method - DB method.
+     * @returns {(params: any) => Promise<any>} - Call on the current access.
+     */
+    const call = (method) => async (params) => {
+      const pending = resolveCurrent();
+      try {
+        return await /** @type {any} */ (await pending)[method](params);
+      } catch (error) {
+        // A lost connection to a resident's host stays lost; the next call
+        // resolves the store again instead of reusing it.
+        if (
+          /** @type {{code?: unknown}} */ (error)?.code ===
+            'local-store-host-read' &&
+          current === pending
+        ) {
+          current = undefined;
+          await (await pending).close?.().catch(() => undefined);
+        }
+        throw error;
+      }
+    };
+    const db = brandDBClient(
+      {
+        get: call('get'),
+        query: call('query'),
+        queryPage: call('queryPage'),
+        put: call('put'),
+        update: call('update'),
+        remove: call('remove'),
+        batchWrite: call('batchWrite'),
+        transactionWrite: call('transactionWrite'),
+        close: suspend,
+      },
+      readDBClientAdapterIdentity(first),
+    );
+    return {
+      db,
+      suspend,
+    };
+  }
+
+  /**
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, filesystemUid: number}} context - App context.
    * @returns {Promise<Readonly<Record<string, any>> | null>} Activation snapshot.
    */
@@ -4555,9 +4640,10 @@ export function createSystemdUserServiceOperator(options = {}) {
    * @param {{pair: import('../../resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair, layout: Readonly<Record<string, string>>, uid: number, filesystemUid: number}} context - App context.
    * @param {import('../../lib/db/base.js').DBClient} db - Open fixed control DB.
    * @param {ReturnType<typeof createLocalApplicationActivation>} activation - Activation store.
+   * @param {() => Promise<void>} suspendControl - Drop this activation's store access before a resident stops or starts.
    * @returns {Readonly<Record<string, Function>>} - Physical driver methods.
    */
-  function createActivationDriver(context, db, activation) {
+  function createActivationDriver(context, db, activation, suspendControl) {
     const appId = context.pair.runtime.appId;
     const tableName = context.layout.executionLedgerTable;
 
@@ -4674,6 +4760,8 @@ export function createSystemdUserServiceOperator(options = {}) {
         const failed =
           systemd.activeState === 'failed' || systemd.result === 'failed';
         if (systemd.activeState !== 'inactive') {
+          // The stopping resident would cut a connection through its host.
+          await suspendControl();
           await systemctl(['stop', context.layout.unitName]);
           await waitForSystemdInactive(
             { layout: context.layout },
@@ -4774,6 +4862,9 @@ export function createSystemdUserServiceOperator(options = {}) {
           integrity: verified.integrity,
         });
         if (before.health === 'healthy') return { status: 'healthy' };
+        // The resident takes the store exclusively as it starts; this
+        // activation's later calls go through it.
+        await suspendControl();
         try {
           await systemctl(['start', context.layout.unitName]);
         } catch (error) {
@@ -4903,9 +4994,7 @@ export function createSystemdUserServiceOperator(options = {}) {
           context.filesystemUid,
         );
       }
-      const db = await createControlDB('lmdb', {
-        path: context.layout.controlPath,
-      });
+      const { db, suspend } = await openActivationControlAccess(context);
       return await withOpenControlDB(db, async () => {
         const activation = createActivationStore({
           db,
@@ -4925,7 +5014,7 @@ export function createSystemdUserServiceOperator(options = {}) {
           ],
           now,
         });
-        const driver = createActivationDriver(context, db, activation);
+        const driver = createActivationDriver(context, db, activation, suspend);
         const coordinator = createActivationCoordinator({
           activation,
           ledger,

@@ -683,6 +683,19 @@ describe('real SIGKILL application-state readiness handoff', () => {
           createCoordinatorAuthorityToken(reported.coordinatorAuthority),
         );
         expectHistoryUnchanged(paused, retained);
+        const oldScope = sessionScope(fixture, reported.ownership.sessionId);
+        expect(existsSync(getLocalServiceSessionEndpoint(oldScope))).toBe(true);
+        expect(
+          existsSync(getLocalServiceSessionOwnerCommandEndpoint(oldScope)),
+        ).toBe(false);
+        expect(predecessor.child.kill('SIGKILL')).toBe(true);
+        const killed = await waitForExit(predecessor);
+        expect(killed).toEqual({ code: null, signal: 'SIGKILL' });
+        expect(predecessor.stdout).toBe('');
+        expect(predecessor.stderr).toBe('');
+        // The application-state store has no read host, and the paused
+        // predecessor held it exclusively; read it only once that process is
+        // gone, so this test never opens it beside a holder.
         const pausedDestination = await readDestination(
           fixture,
           effect.destinationEffectId,
@@ -700,23 +713,10 @@ describe('real SIGKILL application-state readiness handoff', () => {
                   ),
                 }),
         });
-        const oldScope = sessionScope(fixture, reported.ownership.sessionId);
-        expect(existsSync(getLocalServiceSessionEndpoint(oldScope))).toBe(true);
-        expect(
-          existsSync(getLocalServiceSessionOwnerCommandEndpoint(oldScope)),
-        ).toBe(false);
-        expect(predecessor.child.kill('SIGKILL')).toBe(true);
-        const killed = await waitForExit(predecessor);
-        expect(killed).toEqual({ code: null, signal: 'SIGKILL' });
-        expect(predecessor.stdout).toBe('');
-        expect(predecessor.stderr).toBe('');
         await expect(probeLocalServiceSession(oldScope)).resolves.toMatchObject(
           { status: 'absent' },
         );
         await expect(readControl(fixture)).resolves.toEqual(paused);
-        await expect(
-          readDestination(fixture, effect.destinationEffectId),
-        ).resolves.toEqual(pausedDestination);
 
         // A dead process and an absent listener do not implicitly release its
         // durable ACTIVE token. Try the real ordinary restart before recovery.
@@ -793,6 +793,21 @@ describe('real SIGKILL application-state readiness handoff', () => {
             ownerKind: 'resident',
           });
           expectHistoryUnchanged(ready, retained);
+          const scope = sessionScope(fixture, lifecycle.sessionId);
+          expect(existsSync(getLocalServiceSessionEndpoint(scope))).toBe(true);
+          expect(
+            existsSync(getLocalServiceSessionOwnerCommandEndpoint(scope)),
+          ).toBe(true);
+
+          expect(resident.child.kill('SIGTERM')).toBe(true);
+          expect(await waitForExit(resident)).toEqual({
+            code: 0,
+            signal: null,
+          });
+          expect(resident.messages).toEqual([
+            { kind: 'stopped', result: { processed: 0 } },
+          ]);
+          // The resident held the application-state store; it has stopped.
           const destination = await readDestination(
             fixture,
             effect.destinationEffectId,
@@ -808,20 +823,7 @@ describe('real SIGKILL application-state readiness handoff', () => {
           expect(destination.barrier?.record_digest).toBe(
             ready.readiness.destination_authority_digest,
           );
-          const scope = sessionScope(fixture, lifecycle.sessionId);
-          expect(existsSync(getLocalServiceSessionEndpoint(scope))).toBe(true);
-          expect(
-            existsSync(getLocalServiceSessionOwnerCommandEndpoint(scope)),
-          ).toBe(true);
 
-          expect(resident.child.kill('SIGTERM')).toBe(true);
-          expect(await waitForExit(resident)).toEqual({
-            code: 0,
-            signal: null,
-          });
-          expect(resident.messages).toEqual([
-            { kind: 'stopped', result: { processed: 0 } },
-          ]);
           expect(resident.stdout).toBe('');
           expect(resident.stderr).toBe('');
           const stopped = await readControl(fixture);

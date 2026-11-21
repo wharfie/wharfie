@@ -5,6 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   utimesSync,
@@ -265,6 +266,303 @@ describeOnUnix('local store host', () => {
       }),
     ).toEqual({ pk: 'item', sk: 's-b', n: 98 });
     await client?.close();
+  }, 30_000);
+
+  test('writes through the host only on a connection that asked for writes', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    const record = { pk: 'written', sk: 'through-host', n: 7 };
+
+    const reader = await connectLocalStoreHost({ storePath });
+    await expect(
+      reader?.put({
+        tableName: 'records',
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record,
+      }),
+    ).rejects.toThrow('LMDB client is read-only.');
+    await reader?.close();
+
+    // The server enforces it too: a read-only connection that sends a write
+    // is dropped rather than served.
+    const socket = net.createConnection(host.endpoint);
+    /** @param {Record<string, any>} message */
+    const send = (message) => {
+      const body = Buffer.from(JSON.stringify(message));
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.byteLength, 0);
+      socket.write(Buffer.concat([header, body]));
+    };
+    send({ version: 1, kind: 'open', storeRoot: realpathSync(storePath) });
+    await once(socket, 'data');
+    send({
+      version: 1,
+      kind: 'call',
+      id: 1,
+      method: 'put',
+      params: {
+        tableName: 'records',
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record,
+      },
+    });
+    await Promise.race([
+      once(socket, 'close'),
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error('The host served a write on a read-only connection.'),
+            ),
+          5_000,
+        ).unref(),
+      ),
+    ]);
+    socket.destroy();
+
+    const writer = await connectLocalStoreHost({ storePath, writable: true });
+    expect(isLocalStoreHostClient(writer)).toBe(true);
+    await writer?.put({
+      tableName: 'records',
+      keyName: 'pk',
+      sortKeyName: 'sk',
+      record,
+    });
+    await writer?.close();
+    await host.stop();
+
+    // The host wrote it into its own environment, which is now closed.
+    const direct = await createControlDBClient('lmdb', {
+      path: storePath,
+      readOnly: true,
+    });
+    expect(isLocalStoreHostClient(direct)).toBe(false);
+    expect(
+      await direct.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'written',
+        sortKeyName: 'sk',
+        sortKeyValue: 'through-host',
+      }),
+    ).toEqual(record);
+    await direct.close();
+  }, 30_000);
+
+  test('bounds one read across its reroutes by a total deadline', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    // The host goes away mid-session and its replacement never answers, so
+    // without a total bound the read would wait on every attempt in turn.
+    /** @type {any} */
+    const reopen = jest.fn(() => new Promise(() => undefined));
+    const client = await connectLocalStoreHost({
+      storePath,
+      readDeadlineMs: 1_000,
+      reopen,
+    });
+    const read = async () =>
+      await client?.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'item',
+        sortKeyName: 'sk',
+        sortKeyValue: 's-a',
+      });
+    expect(await read()).toMatchObject({ pk: 'item', sk: 's-a' });
+    await host.stop();
+    const started = Date.now();
+    await expect(read()).rejects.toMatchObject({
+      name: 'LocalStoreHostReadError',
+      timedOut: true,
+      message: expect.stringContaining('did not complete within 1000ms'),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(reopen).toHaveBeenCalledTimes(1);
+    await client?.close();
+  }, 15_000);
+
+  test('rejects read parameters that are not plain JSON before sending them', async () => {
+    const storePath = join(createRoot(), 'control');
+    await startHostChild(storePath);
+    const client = await connectLocalStoreHost({ storePath });
+    for (const notJson of [new Date(0), Buffer.from('s-a'), Number.NaN]) {
+      await expect(
+        client?.get({
+          tableName: 'records',
+          keyName: 'pk',
+          keyValue: 'item',
+          sortKeyName: 'sk',
+          sortKeyValue: /** @type {any} */ (notJson),
+        }),
+      ).rejects.toThrow(/is not plain JSON/);
+    }
+    await client?.close();
+  }, 15_000);
+
+  test('reassembles requests that arrive one byte at a time', async () => {
+    const storePath = join(createRoot(), 'control');
+    const host = await startHostChild(storePath);
+    const socket = net.createConnection(host.endpoint);
+    await once(socket, 'connect');
+    /** @param {Record<string, any>} message */
+    const dribble = async (message) => {
+      const body = Buffer.from(JSON.stringify(message));
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(body.byteLength, 0);
+      for (const byte of Buffer.concat([header, body])) {
+        socket.write(Buffer.from([byte]));
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    };
+    /** @type {Buffer[]} */
+    const received = [];
+    socket.on('data', (chunk) => received.push(chunk));
+    /** @param {number} count */
+    const replies = async (count) => {
+      const deadline = Date.now() + 5_000;
+      for (;;) {
+        const bytes = Buffer.concat(received);
+        /** @type {Record<string, any>[]} */
+        const messages = [];
+        let offset = 0;
+        while (offset + 4 <= bytes.length) {
+          const length = bytes.readUInt32BE(offset);
+          if (offset + 4 + length > bytes.length) break;
+          messages.push(
+            v8.deserialize(bytes.subarray(offset + 4, offset + 4 + length)),
+          );
+          offset += 4 + length;
+        }
+        if (messages.length >= count) return messages;
+        if (Date.now() > deadline || socket.destroyed) {
+          throw new Error(
+            'The host did not answer a request sent byte by byte.',
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    };
+    await dribble({
+      version: 1,
+      kind: 'open',
+      storeRoot: realpathSync(storePath),
+    });
+    expect((await replies(1))[0]).toMatchObject({ kind: 'opened' });
+    await dribble({
+      version: 1,
+      kind: 'call',
+      id: 1,
+      method: 'get',
+      params: {
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'item',
+        sortKeyName: 'sk',
+        sortKeyValue: 's-b',
+      },
+    });
+    expect((await replies(2))[1]).toMatchObject({
+      kind: 'result',
+      id: 1,
+      value: { pk: 'item', sk: 's-b', n: 98 },
+    });
+    socket.destroy();
+    // The host is still alive and serving others.
+    expect(host.child.exitCode).toBeNull();
+    const client = await connectLocalStoreHost({ storePath });
+    expect(isLocalStoreHostClient(client)).toBe(true);
+    await client?.close();
+  }, 30_000);
+
+  test('refuses to write through a host from before writable connections, without sending the write', async () => {
+    const storePath = join(createRoot(), 'control');
+    const real = await startHostChild(storePath);
+    const endpoint = real.endpoint;
+    await real.stop();
+    // A #181-era host: it ignores `writable` and opens a read-only facade.
+    /** @type {Record<string, any>[]} */
+    const received = [];
+    /** @type {Set<import('node:net').Socket>} */
+    const accepted = new Set();
+    const legacy = net.createServer((socket) => {
+      accepted.add(socket);
+      let buffered = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        buffered = Buffer.concat([buffered, chunk]);
+        while (buffered.length >= 4) {
+          const length = buffered.readUInt32BE(0);
+          if (buffered.length < 4 + length) return;
+          const request = JSON.parse(
+            buffered.subarray(4, 4 + length).toString('utf8'),
+          );
+          buffered = buffered.subarray(4 + length);
+          received.push(request);
+          if (request.kind === 'open') {
+            const body = v8.serialize({
+              version: 1,
+              kind: 'opened',
+              processId: 4242,
+            });
+            const header = Buffer.alloc(4);
+            header.writeUInt32BE(body.byteLength, 0);
+            socket.write(Buffer.concat([header, body]));
+          } else {
+            socket.destroy();
+          }
+        }
+      });
+    });
+    await new Promise((resolve) =>
+      legacy.listen(endpoint, () => resolve(undefined)),
+    );
+    cleanups.push(async () => {
+      for (const socket of accepted) socket.destroy();
+      await new Promise((resolve) => legacy.close(() => resolve(undefined)));
+    });
+    await expect(
+      connectLocalStoreHost({ storePath, writable: true }),
+    ).rejects.toMatchObject({
+      name: 'LocalStoreHostedError',
+      message: expect.stringContaining(
+        'older Wharfie that does not accept writes',
+      ),
+    });
+    expect(received.map((request) => request.kind)).toEqual(['open']);
+    expect(received[0].writable).toBe(true);
+  }, 30_000);
+
+  test('refuses a write over the request limit as not applied, and keeps the connection', async () => {
+    const storePath = join(createRoot(), 'control');
+    await startHostChild(storePath);
+    const writer = await connectLocalStoreHost({ storePath, writable: true });
+    await expect(
+      writer?.put({
+        tableName: 'records',
+        keyName: 'pk',
+        sortKeyName: 'sk',
+        record: { pk: 'big', sk: 'one', blob: 'x'.repeat(2 * 1024 * 1024) },
+      }),
+    ).rejects.toThrow(/was not sent and nothing was applied/);
+    // Nothing went over the connection, so it is still usable.
+    await writer?.put({
+      tableName: 'records',
+      keyName: 'pk',
+      sortKeyName: 'sk',
+      record: { pk: 'small', sk: 'one' },
+    });
+    expect(
+      await writer?.get({
+        tableName: 'records',
+        keyName: 'pk',
+        keyValue: 'big',
+        sortKeyName: 'sk',
+        sortKeyValue: 'one',
+      }),
+    ).toBeUndefined();
+    await writer?.close();
   }, 30_000);
 
   test('reroutes a read whose host stops mid-operation instead of failing the command', async () => {

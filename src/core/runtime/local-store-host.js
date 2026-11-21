@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import v8 from 'node:v8';
 
 import { DB_ADAPTER_NAMES, brandDBClient } from '../lib/db/base.js';
+import { waitForLocalStore } from '../lib/db/lmdb-holder-lock.js';
 import {
   ensureLocalServiceSocketDirectory,
   getLocalServiceSessionPrincipalId,
@@ -42,13 +43,21 @@ export const LOCAL_STORE_HOST_ACCEPT_TIMEOUT_MS = 10_000;
  * example in a debugger or by SIGSTOP) or its event loop is blocked.
  */
 export const LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS = 10_000;
-/** How long one remote read may take before the connection is abandoned. */
+/** How long one remote call may take before the connection is abandoned. */
 export const LOCAL_STORE_HOST_CALL_TIMEOUT_MS = 60_000;
 /**
- * Delay between binding a host endpoint and the host's native open. A direct
- * reader that probed just before the bind normally finishes within it.
+ * Total bound on one remote read, across every attempt and reroute after a
+ * lost host. With up to about 20 s to find and greet a host first, a read
+ * from a cold command still ends within about 50 s, inside the 60 s that a
+ * `deployment exec` command gets. The largest response the protocol allows
+ * (256 MiB) is served in about a second.
  */
-export const LOCAL_STORE_HOST_SETTLE_MS = 100;
+export const LOCAL_STORE_HOST_READ_DEADLINE_MS = 30_000;
+/**
+ * How long a resident that is told to wait (the service manager's resident)
+ * waits for another process to stop holding its store before it gives up.
+ */
+export const LOCAL_STORE_HOST_HELD_WAIT_MS = 30_000;
 
 const STORE_TOKEN_DOMAIN = 'wharfie:local-store-host:v1';
 const STORE_TOKEN_LENGTH = 24;
@@ -56,8 +65,16 @@ const ENDPOINT_PREFIX = 'h-';
 const ENDPOINT_SUFFIX = '.sock';
 const STALE_ENDPOINT_MIN_AGE_MS = 10_000;
 const RETRY_INTERVAL_MS = 25;
+const HELD_RETRY_INTERVAL_MS = 250;
 const FRAME_HEADER_BYTES = 4;
 const READ_METHODS = new Set(['get', 'query', 'queryPage']);
+const WRITE_METHODS = new Set([
+  'put',
+  'update',
+  'remove',
+  'batchWrite',
+  'transactionWrite',
+]);
 
 /** @type {Map<string, LocalStoreHost>} */
 const hostsInProcess = new Map();
@@ -65,7 +82,7 @@ const hostsInProcess = new Map();
 const hostClients = new WeakSet();
 
 /**
- * @typedef {{storeRoot: string, endpoint: string, serve: (openFacade: () => Promise<import('../lib/db/base.js').DBClient>) => void, stopServing: () => Promise<void>, release: () => Promise<void>}} LocalStoreHost
+ * @typedef {{storeRoot: string, endpoint: string, serve: (openFacade: () => Promise<import('../lib/db/base.js').DBClient>, openWritableFacade?: () => Promise<import('../lib/db/base.js').DBClient>) => void, stopServing: () => Promise<void>, release: () => Promise<void>}} LocalStoreHost
  */
 
 /**
@@ -101,6 +118,25 @@ export class LocalStoreHostReadError extends Error {
     this.code = 'local-store-host-read';
     /** Whether a live host stopped answering, rather than going away. */
     this.timedOut = options.timedOut === true;
+    if (options.cause !== undefined) this.cause = options.cause;
+  }
+}
+
+/**
+ * Another live process already holds the store, so this process must not
+ * become its host. Named like LocalServiceSessionActiveError on purpose: a
+ * foreground run treats that as "follow the resident", not as a failure.
+ */
+export class LocalStoreHeldError extends Error {
+  /**
+   * @param {string} message - Safe operator-facing diagnostic.
+   * @param {{processId?: number, cause?: unknown}} [options] - Safe context.
+   */
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'LocalServiceSessionActiveError';
+    this.code = 'local-store-held';
+    if (options.processId !== undefined) this.processId = options.processId;
     if (options.cause !== undefined) this.cause = options.cause;
   }
 }
@@ -249,14 +285,18 @@ function rebuildError(described) {
 }
 
 /**
- * Serve one client connection: one read-only facade, serial calls.
+ * Serve one client connection: one facade, serial calls. A connection that
+ * asks for a writable facade in its open handshake may also write; each write
+ * is one atomic DB call on the host's own environment, exactly the call the
+ * client would otherwise make after opening the store itself.
  * @param {import('node:net').Socket} socket - Accepted connection.
- * @param {{storeRoot: string, isServing: () => boolean, openFacade: () => (() => Promise<import('../lib/db/base.js').DBClient>) | undefined, track: (opening: Promise<import('../lib/db/base.js').DBClient>) => () => void}} context - Host state.
+ * @param {{storeRoot: string, isServing: () => boolean, openFacade: () => (() => Promise<import('../lib/db/base.js').DBClient>) | undefined, openWritableFacade: () => (() => Promise<import('../lib/db/base.js').DBClient>) | undefined, track: (opening: Promise<import('../lib/db/base.js').DBClient>) => () => void}} context - Host state.
  * @returns {void}
  */
 function serveConnection(socket, context) {
   /** @type {import('../lib/db/base.js').DBClient | undefined} */
   let facade;
+  let writable = false;
   /** @type {(() => void) | undefined} */
   let untrack;
   let queue = Promise.resolve();
@@ -351,12 +391,16 @@ function serveConnection(socket, context) {
         socket.destroy();
         return;
       }
-      const openFacade = context.openFacade();
+      const openFacade =
+        request.writable === true
+          ? context.openWritableFacade()
+          : context.openFacade();
       if (!context.isServing() || !openFacade) {
         send({ kind: 'unavailable' });
         socket.end();
         return;
       }
+      writable = request.writable === true;
       opening = openFacade();
       untrack = context.track(opening);
       try {
@@ -368,14 +412,23 @@ function serveConnection(socket, context) {
         socket.end();
         return;
       }
-      send({ kind: 'opened', processId: process.pid });
+      // Say so when writes are accepted: a host from before writable
+      // connections ignores the request and opens a read-only facade.
+      send({
+        kind: 'opened',
+        processId: process.pid,
+        ...(writable ? { writable: true } : {}),
+      });
       return;
     }
     if (
       request.kind !== 'call' ||
       !facade ||
       !Number.isSafeInteger(request.id) ||
-      !READ_METHODS.has(request.method) ||
+      !(
+        READ_METHODS.has(request.method) ||
+        (writable && WRITE_METHODS.has(request.method))
+      ) ||
       !request.params ||
       typeof request.params !== 'object' ||
       Array.isArray(request.params)
@@ -383,7 +436,7 @@ function serveConnection(socket, context) {
       socket.destroy();
       return;
     }
-    const method = /** @type {'get'|'query'|'queryPage'} */ (request.method);
+    const method = /** @type {string} */ (request.method);
     try {
       const value = await /** @type {any} */ (facade)[method](request.params);
       send({ kind: 'result', id: request.id, value });
@@ -551,19 +604,11 @@ async function removeStaleEndpoints(directory, prefix, own) {
 }
 
 /**
- * Become the host of one local LMDB store. Call before the native open of the
- * store; `serve` once it is open; `stopServing` before the host closes its
- * own facade; `release` after that close.
- * @param {{storePath: string}} options - Facade path of the hosted store.
- * @returns {Promise<LocalStoreHost | undefined>} - Host, or undefined where unsupported.
+ * Bind one new host endpoint for a store and register it in this process.
+ * @param {string} storeRoot - Canonical store root.
+ * @returns {Promise<LocalStoreHost>} - Bound, not yet serving, host.
  */
-export async function acquireLocalStoreHost(options) {
-  if (process.platform === 'win32') return undefined;
-  await fsp.mkdir(options.storePath, { recursive: true, mode: 0o700 });
-  const storeRoot = realpathSync(options.storePath);
-  if (hostsInProcess.has(storeRoot)) {
-    throw new Error('This process already hosts the local store.');
-  }
+async function bindLocalStoreHost(storeRoot) {
   const directory = await ensureLocalServiceSocketDirectory();
   const prefix = endpointPrefix(storeRoot);
   const endpoint = join(
@@ -573,6 +618,8 @@ export async function acquireLocalStoreHost(options) {
 
   /** @type {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} */
   let openFacade;
+  /** @type {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} */
+  let openWritableFacade;
   let serving = false;
   /** @type {Set<import('node:net').Socket>} */
   const sockets = new Set();
@@ -585,6 +632,7 @@ export async function acquireLocalStoreHost(options) {
       storeRoot,
       isServing: () => serving,
       openFacade: () => openFacade,
+      openWritableFacade: () => openWritableFacade,
       track: (opening) => {
         facades.add(opening);
         return () => facades.delete(opening);
@@ -607,16 +655,18 @@ export async function acquireLocalStoreHost(options) {
   const host = Object.freeze({
     storeRoot,
     endpoint,
-    serve: (open) => {
+    serve: (open, openWritable) => {
       if (stopPromise)
         throw new Error('A stopped local store host cannot serve.');
       openFacade = open;
+      openWritableFacade = openWritable;
       serving = true;
     },
     stopServing: () => {
       stopPromise ??= (async () => {
         serving = false;
         openFacade = undefined;
+        openWritableFacade = undefined;
         for (const socket of sockets) socket.destroy();
         const open = [...facades];
         facades.clear();
@@ -639,8 +689,92 @@ export async function acquireLocalStoreHost(options) {
     },
   });
   hostsInProcess.set(storeRoot, host);
-  await delay(LOCAL_STORE_HOST_SETTLE_MS);
   return host;
+}
+
+/**
+ * Order two endpoints of one store by when they were bound, so that of two
+ * processes that bind at the same moment exactly one backs off.
+ * @param {string} other - Another process's endpoint.
+ * @param {string} own - This process's endpoint.
+ * @returns {Promise<boolean>} - Whether `other` was bound first.
+ */
+async function boundBefore(other, own) {
+  const [otherStats, ownStats] = await Promise.all([
+    fsp.lstat(other).catch(() => undefined),
+    fsp.lstat(own),
+  ]);
+  if (!otherStats) return false;
+  if (otherStats.mtimeMs !== ownStats.mtimeMs) {
+    return otherStats.mtimeMs < ownStats.mtimeMs;
+  }
+  return other < own;
+}
+
+/**
+ * @param {string} endpoint - Another process's host endpoint.
+ * @returns {LocalStoreHeldError} - Refusal naming that process.
+ */
+function heldBy(endpoint) {
+  const match = /-(\d+)-[0-9a-f]+\.sock$/.exec(endpoint);
+  const processId = match ? Number(match[1]) : undefined;
+  return new LocalStoreHeldError(
+    `Local service session is already active for this local control store: another Wharfie process${processId === undefined ? '' : ` (pid ${processId})`} holds it, so this process cannot host it.`,
+    processId === undefined ? {} : { processId },
+  );
+}
+
+/**
+ * Become the host of one local LMDB store. Call before the native open of the
+ * store; `serve` once it is open; `stopServing` before the host closes its
+ * own facade; `release` after that close.
+ *
+ * At most one process holds a store. After binding, a process that finds an
+ * earlier live host backs off: it refuses at once, or with `onHeld: 'wait'`
+ * retries until `heldWaitMs` passes. Binding first means two processes that
+ * start together see each other, and the earlier one proceeds. The native
+ * open that follows takes the store's exclusive holder lock, which is what
+ * finally excludes a second holder and waits out direct openers that were
+ * already inside (lmdb-holder-lock.js).
+ * @param {{storePath: string, onHeld?: 'refuse'|'wait', heldWaitMs?: number, signal?: AbortSignal}} options - Facade path of the hosted store, what to do while another process holds it, and a signal that ends the wait (LocalStoreWaitAbortedError).
+ * @returns {Promise<LocalStoreHost | undefined>} - Host, or undefined where unsupported.
+ */
+export async function acquireLocalStoreHost(options) {
+  if (process.platform === 'win32') return undefined;
+  await fsp.mkdir(options.storePath, { recursive: true, mode: 0o700 });
+  const storeRoot = realpathSync(options.storePath);
+  if (hostsInProcess.has(storeRoot)) {
+    throw new Error('This process already hosts the local store.');
+  }
+  const heldWaitMs = options.heldWaitMs ?? LOCAL_STORE_HOST_HELD_WAIT_MS;
+  const deadline = Date.now() + heldWaitMs;
+  // The signal ends a wait, not an attempt: a host told to stop before it
+  // started still takes a free store, and drains from there.
+  for (;;) {
+    const host = await bindLocalStoreHost(storeRoot);
+    let other;
+    try {
+      other = await findLocalStoreHost({ storePath: storeRoot });
+    } catch (error) {
+      await host.release();
+      throw error;
+    }
+    if (other === undefined || !(await boundBefore(other, host.endpoint))) {
+      return host;
+    }
+    await host.release();
+    const refusal = heldBy(other);
+    if (options.onHeld !== 'wait') throw refusal;
+    if (Date.now() >= deadline) {
+      refusal.message += ` Waited ${heldWaitMs}ms.`;
+      throw refusal;
+    }
+    await waitForLocalStore(
+      HELD_RETRY_INTERVAL_MS,
+      options.signal,
+      refusal.message,
+    );
+  }
 }
 
 /**
@@ -673,7 +807,7 @@ async function listHostEndpoints(storeRoot) {
 }
 
 /**
- * @typedef {{kind: 'absent', refused?: boolean} | {kind: 'unavailable'} | {kind: 'opened', processId: number, socket: import('node:net').Socket, call: (method: string, params: Record<string, any>) => Promise<any>, close: () => void}} HostConnection
+ * @typedef {{kind: 'absent', refused?: boolean} | {kind: 'unavailable'} | {kind: 'opened', processId: number, socket: import('node:net').Socket, call: (method: string, params: Record<string, any>, boundMs?: number) => Promise<any>, close: () => void}} HostConnection
  */
 
 /**
@@ -693,9 +827,10 @@ function describeHostProcess(endpoint) {
  * @param {string} endpoint - Host endpoint.
  * @param {string} storeRoot - Canonical store root.
  * @param {{responseTimeoutMs: number, callTimeoutMs: number}} timeouts - Bounds.
+ * @param {boolean} writable - Whether to ask for a writable facade.
  * @returns {Promise<HostConnection>} - Connection outcome.
  */
-function connectHost(endpoint, storeRoot, timeouts) {
+function connectHost(endpoint, storeRoot, timeouts, writable) {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint);
     let connected = false;
@@ -757,6 +892,7 @@ function connectHost(endpoint, storeRoot, timeouts) {
               version: LOCAL_STORE_HOST_PROTOCOL_VERSION,
               kind: 'open',
               storeRoot,
+              ...(writable ? { writable: true } : {}),
             }),
             'utf8',
           ),
@@ -819,39 +955,60 @@ function connectHost(endpoint, storeRoot, timeouts) {
         if (!settled) {
           settled = true;
           clearTimeout(handshakeTimer);
+          if (message?.kind === 'opened' && writable && !message.writable) {
+            socket.destroy();
+            reject(
+              new LocalStoreHostedError(
+                `The process holding this local store (pid ${message.processId}) is an older Wharfie that does not accept writes from other processes, so this change was not made. Stop that process, or update it and retry.`,
+                { processId: message.processId },
+              ),
+            );
+            return;
+          }
           if (message?.kind === 'opened') {
             resolve({
               kind: 'opened',
               processId: message.processId,
               socket,
-              call: (method, params) =>
+              call: (method, params, boundMs = Infinity) =>
                 new Promise((resolve, reject) => {
+                  const callTimeoutMs = Math.min(
+                    timeouts.callTimeoutMs,
+                    boundMs,
+                  );
                   if (broken) {
                     reject(broken);
                     return;
                   }
                   const id = nextId++;
+                  const body = Buffer.from(
+                    JSON.stringify({
+                      version: LOCAL_STORE_HOST_PROTOCOL_VERSION,
+                      kind: 'call',
+                      id,
+                      method,
+                      params,
+                    }),
+                    'utf8',
+                  );
+                  // The host drops a larger request; refuse it here, where it
+                  // is certain that nothing was sent or applied.
+                  if (body.byteLength > LOCAL_STORE_HOST_MAX_REQUEST_BYTES) {
+                    reject(
+                      new RangeError(
+                        `This ${method} request is ${body.byteLength} bytes, over the ${LOCAL_STORE_HOST_MAX_REQUEST_BYTES}-byte limit of the process holding this local store, so it was not sent and nothing was applied.`,
+                      ),
+                    );
+                    return;
+                  }
                   const timer = setTimeout(() => {
                     // Responses are serial, so a connection with a lost
                     // answer cannot be reused.
                     socket.destroy();
-                    fail(timedOut(`a ${method} read`, timeouts.callTimeoutMs));
-                  }, timeouts.callTimeoutMs);
+                    fail(timedOut(`a ${method} call`, callTimeoutMs));
+                  }, callTimeoutMs);
                   pending.set(id, { resolve, reject, timer });
-                  socket.write(
-                    frame(
-                      Buffer.from(
-                        JSON.stringify({
-                          version: LOCAL_STORE_HOST_PROTOCOL_VERSION,
-                          kind: 'call',
-                          id,
-                          method,
-                          params,
-                        }),
-                        'utf8',
-                      ),
-                    ),
-                  );
+                  socket.write(frame(body));
                 }),
               close: () => {
                 broken ??= new Error('LMDB client is closed.');
@@ -906,9 +1063,10 @@ function connectHost(endpoint, storeRoot, timeouts) {
  * treats the same as absent.
  * @param {unknown} value - Candidate read parameters.
  * @param {string} [path] - Location for the diagnostic.
+ * @param {'read'|'write'} [what] - Kind of request, for the diagnostic.
  * @returns {void}
  */
-function assertJsonReadParams(value, path = 'params') {
+function assertJsonReadParams(value, path = 'params', what = 'read') {
   if (
     value === null ||
     typeof value === 'string' ||
@@ -921,10 +1079,10 @@ function assertJsonReadParams(value, path = 'params') {
     value.forEach((item, index) => {
       if (item === undefined) {
         throw new TypeError(
-          `Local store host read ${path}[${index}] is undefined.`,
+          `Local store host ${what} ${path}[${index}] is undefined.`,
         );
       }
-      assertJsonReadParams(item, `${path}[${index}]`);
+      assertJsonReadParams(item, `${path}[${index}]`, what);
     });
     return;
   }
@@ -932,13 +1090,15 @@ function assertJsonReadParams(value, path = 'params') {
     const prototype = Object.getPrototypeOf(value);
     if (prototype === Object.prototype || prototype === null) {
       for (const [key, item] of Object.entries(value)) {
-        if (item !== undefined) assertJsonReadParams(item, `${path}.${key}`);
+        if (item !== undefined) {
+          assertJsonReadParams(item, `${path}.${key}`, what);
+        }
       }
       return;
     }
   }
   throw new TypeError(
-    `Local store host read ${path} is not plain JSON (${Object.prototype.toString.call(value)}).`,
+    `Local store host ${what} ${path} is not plain JSON (${Object.prototype.toString.call(value)}).`,
   );
 }
 
@@ -946,7 +1106,8 @@ function assertJsonReadParams(value, path = 'params') {
 const MAX_READ_REROUTES = 3;
 
 /**
- * Wrap one remote facade as a read-only LMDB DB client. If the host goes away
+ * Wrap one remote facade as an LMDB DB client: read-only, or, for a writable
+ * connection, also writing through the host. If the host goes away
  * mid-operation (it stops, or crashes and restarts), the failed read is
  * re-resolved through `reopen`: that waits for a stopping host to unbind,
  * routes to a host that serves, and opens natively only when no host is left.
@@ -954,9 +1115,11 @@ const MAX_READ_REROUTES = 3;
  * per-read consistency as a direct open.
  * @param {Extract<HostConnection, {kind: 'opened'}>} connection - Opened remote facade.
  * @param {(() => Promise<import('../lib/db/base.js').DBClient>) | undefined} reopen - Re-resolve the store after a lost host.
- * @returns {import('../lib/db/base.js').DBClient} - Remote read-only client.
+ * @param {boolean} writable - Whether the host accepted writes on this connection.
+ * @param {number} readDeadlineMs - Total bound on one read, reroutes included.
+ * @returns {import('../lib/db/base.js').DBClient} - Remote client.
  */
-function createHostClient(connection, reopen) {
+function createHostClient(connection, reopen, writable, readDeadlineMs) {
   const readOnly = async () => {
     throw new Error('LMDB client is read-only.');
   };
@@ -969,12 +1132,46 @@ function createHostClient(connection, reopen) {
    */
   const remote = (method) => async (params) => {
     assertJsonReadParams(params);
+    const deadline = Date.now() + readDeadlineMs;
+    const expired = () =>
+      new LocalStoreHostReadError(
+        `A ${method} read of this local store did not complete within ${readDeadlineMs}ms, across every attempt; the process holding it may be restarting repeatedly. Retry.`,
+        { timedOut: true },
+      );
+    /**
+     * @template T
+     * @param {Promise<T>} work - Part of this read.
+     * @returns {Promise<T>} - The same result, or the deadline error.
+     */
+    const withinDeadline = async (work) => {
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let timer;
+      work.catch(() => undefined);
+      try {
+        return await Promise.race([
+          work,
+          new Promise((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(expired()),
+              Math.max(0, deadline - Date.now()),
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
     for (let attempt = 0; ; attempt += 1) {
       if (closed) throw new Error('LMDB client is closed.');
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw expired();
       try {
-        if (rerouted)
-          return await /** @type {any} */ (rerouted)[method](params);
-        return await connection.call(method, params);
+        if (rerouted) {
+          return await withinDeadline(
+            /** @type {any} */ (rerouted)[method](params),
+          );
+        }
+        return await connection.call(method, params, remaining);
       } catch (error) {
         // Only a lost transport is rerouted. An error the host answered is
         // the read's own result, and a host that stopped answering is still
@@ -991,20 +1188,48 @@ function createHostClient(connection, reopen) {
         rerouted = undefined;
         if (previous) await previous.close?.().catch(() => undefined);
         else connection.close();
-        rerouted = await reopen();
+        const reopening = reopen();
+        try {
+          rerouted = await withinDeadline(reopening);
+        } catch (reopenError) {
+          // A client that arrives after the deadline must still be closed.
+          reopening.then((late) => late.close?.()).catch(() => undefined);
+          throw reopenError;
+        }
       }
+    }
+  };
+  /**
+   * A write is never rerouted or retried: once its request is sent, a lost
+   * connection leaves the outcome unknown, exactly as a crash after a direct
+   * write would. Callers that write through a host are retry-safe already.
+   * @param {'put'|'update'|'remove'|'batchWrite'|'transactionWrite'} method - Write method.
+   * @returns {(params: any) => Promise<any>} - Remote call.
+   */
+  const remoteWrite = (method) => async (params) => {
+    if (!writable) return await readOnly();
+    assertJsonReadParams(params, 'params', 'write');
+    if (closed) throw new Error('LMDB client is closed.');
+    try {
+      return await connection.call(method, params);
+    } catch (error) {
+      if (!(error instanceof LocalStoreHostReadError)) throw error;
+      throw new LocalStoreHostReadError(
+        `${error.message} The ${method} was sent to the process holding this local store (pid ${connection.processId}); it may or may not have been applied.`,
+        { cause: error, timedOut: error.timedOut },
+      );
     }
   };
   const client = brandDBClient(
     {
       query: remote('query'),
       queryPage: remote('queryPage'),
-      batchWrite: readOnly,
-      transactionWrite: readOnly,
-      update: readOnly,
-      put: readOnly,
+      batchWrite: remoteWrite('batchWrite'),
+      transactionWrite: remoteWrite('transactionWrite'),
+      update: remoteWrite('update'),
+      put: remoteWrite('put'),
       get: remote('get'),
-      remove: readOnly,
+      remove: remoteWrite('remove'),
       close: async () => {
         if (closed) return;
         closed = true;
@@ -1027,11 +1252,12 @@ export function isLocalStoreHostClient(db) {
 }
 
 /**
- * Connect a read-only client to another live host of a store. Returns
- * undefined when no other process hosts it, which is the only case in which a
- * caller may open the store natively. A host that is starting or stopping is
- * retried; one that never accepts fails closed.
- * @param {{storePath: string, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; how long to wait for a starting host, for a handshake answer, and for one read; and how to re-resolve the store if its host is lost mid-operation.
+ * Connect a client to another live host of a store: read-only, or with
+ * `writable` also writing through the host. Returns undefined when no other
+ * process hosts it, which is the only case in which a caller may open the
+ * store natively. A host that is starting or stopping is retried; one that
+ * never accepts fails closed.
+ * @param {{storePath: string, writable?: boolean, timeoutMs?: number, responseTimeoutMs?: number, callTimeoutMs?: number, readDeadlineMs?: number, reopen?: () => Promise<import('../lib/db/base.js').DBClient>}} options - Facade path of the store; whether to write through the host; how long to wait for a starting host, for a handshake answer, for one call, and for one read across all its attempts; and how to re-resolve the store if its host is lost mid-read.
  * @returns {Promise<import('../lib/db/base.js').DBClient | undefined>} - Remote client or undefined.
  */
 export async function connectLocalStoreHost(options) {
@@ -1044,14 +1270,24 @@ export async function connectLocalStoreHost(options) {
     const endpoints = await listHostEndpoints(storeRoot);
     let unavailable = false;
     for (const endpoint of endpoints) {
-      const connection = await connectHost(endpoint, storeRoot, {
-        responseTimeoutMs:
-          options.responseTimeoutMs ?? LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
-        callTimeoutMs:
-          options.callTimeoutMs ?? LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
-      });
+      const connection = await connectHost(
+        endpoint,
+        storeRoot,
+        {
+          responseTimeoutMs:
+            options.responseTimeoutMs ?? LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
+          callTimeoutMs:
+            options.callTimeoutMs ?? LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
+        },
+        options.writable === true,
+      );
       if (connection.kind === 'opened') {
-        return createHostClient(connection, options.reopen);
+        return createHostClient(
+          connection,
+          options.reopen,
+          options.writable === true,
+          options.readDeadlineMs ?? LOCAL_STORE_HOST_READ_DEADLINE_MS,
+        );
       }
       if (connection.kind === 'unavailable') unavailable = true;
       if (
@@ -1120,9 +1356,11 @@ export default {
   LOCAL_STORE_HOST_PROTOCOL_ERROR_CODE,
   LOCAL_STORE_HOST_PROTOCOL_VERSION,
   LOCAL_STORE_HOST_CALL_TIMEOUT_MS,
+  LOCAL_STORE_HOST_READ_DEADLINE_MS,
   LOCAL_STORE_HOST_RESPONSE_TIMEOUT_MS,
-  LOCAL_STORE_HOST_SETTLE_MS,
+  LOCAL_STORE_HOST_HELD_WAIT_MS,
   LocalStoreHostReadError,
+  LocalStoreHeldError,
   LocalStoreHostedError,
   acquireLocalStoreHost,
   assertLocalStoreNotHosted,

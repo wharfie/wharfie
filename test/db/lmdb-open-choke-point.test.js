@@ -15,6 +15,7 @@ import { describe, expect, test } from '@jest/globals';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SRC = join(REPO_ROOT, 'src');
+const SCRIPTS = join(REPO_ROOT, 'scripts');
 
 /** @param {string} directory @returns {string[]} */
 function sourceFiles(directory) {
@@ -25,11 +26,11 @@ function sourceFiles(directory) {
   });
 }
 
-/** @param {RegExp} pattern @returns {Record<string, number>} */
-function countBySourceFile(pattern) {
+/** @param {RegExp} pattern @param {string} [root] @returns {Record<string, number>} */
+function countBySourceFile(pattern, root = SRC) {
   /** @type {Record<string, number>} */
   const counts = {};
-  for (const file of sourceFiles(SRC)) {
+  for (const file of sourceFiles(root)) {
     const matches = readFileSync(file, 'utf8').match(pattern);
     if (matches) counts[relative(REPO_ROOT, file)] = matches.length;
   }
@@ -44,7 +45,8 @@ describe('LMDB open choke point', () => {
       'src/core/lib/config/db.js': 4,
     });
     expect(countBySourceFile(/\bcreateLMDB\(/g)).toEqual({
-      'src/core/lib/config/db.js': 4,
+      // General DB, state DB, and openHeldLmdb (control and app-state).
+      'src/core/lib/config/db.js': 3,
       'src/core/lib/db/adapters/lmdb.js': 1,
     });
   });
@@ -56,8 +58,73 @@ describe('LMDB open choke point', () => {
       source.indexOf('export async function createApplicationStateDBClient('),
     );
     expect(branch).toMatch(
-      /if \(options\.readOnly === true && !hasOpenLmdbEnvironment\(controlPath\)\) \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+const hosted = await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?\}\);\s+if \(hosted\) return hosted;\s+\}\s+return createLMDB\(/,
+      /const route =\s+\(readOnly \|\| options\.routeWrites === true\) &&\s+!hasOpenLmdbEnvironment\(controlPath\)\s+\? async \(\) => \{\s+const \{ connectLocalStoreHost \} =\s+await import\('\.\.\/\.\.\/runtime\/local-store-host\.js'\);\s+return await connectLocalStoreHost\(\{\s+storePath: controlPath,[\s\S]*?const hosted = await route\?\.\(\);\s+if \(hosted\) return hosted;\s+return await openHeldLmdb\(/,
     );
+  });
+
+  test('resident stores open natively only under the holder lock', () => {
+    // lmdb-holder-lock.js: shared for a read-only native environment,
+    // exclusive for a writable one, held from before open until after close.
+    const source = readFileSync(join(SRC, 'core/lib/config/db.js'), 'utf8');
+    const section = (/** @type {string} */ from, /** @type {string} */ to) =>
+      source.slice(source.indexOf(from), source.indexOf(to));
+    expect(
+      section(
+        'async function openHeldLmdb(',
+        '/**\n * Create the dedicated durable control-store DB client.',
+      ),
+    ).toMatch(/return createLMDB\(\{ \.\.\.options, holderLock: true \}\);/);
+    for (const branch of [
+      section(
+        'export async function createControlDBClient(',
+        'export async function createApplicationStateDBClient(',
+      ),
+      section(
+        'export async function createApplicationStateDBClient(',
+        'export async function createStateDBClient(',
+      ),
+    ]) {
+      expect(branch).not.toMatch(/\bcreateLMDB\(/);
+      expect(branch).toMatch(/return await openHeldLmdb\(\s+createLMDB,/);
+    }
+    expect(countBySourceFile(/\bholderLock: true\b/g)).toEqual({
+      'src/core/lib/config/db.js': 1,
+    });
+    // Writing through another process's host is for commands that must change
+    // a store while it is held; everything else that writes is refused beside
+    // a holder.
+    expect(countBySourceFile(/\brouteWrites: true\b/g)).toEqual({
+      'src/core/runtime/operator/coordinator-authority-command.js': 1,
+      // Service activation, while a resident runs before its stop or after
+      // its successor's start.
+      'src/core/runtime/services/systemd-user-service-manager.js': 1,
+    });
+  });
+
+  test('the lock module never changes the owner of anything', () => {
+    // A store is opened only by its owner (lmdb-holder-lock.js refuses any
+    // other user before touching the directory), so nothing there needs an
+    // ownership change, and none may come back.
+    const source = readFileSync(
+      join(SRC, 'core/lib/db/lmdb-holder-lock.js'),
+      'utf8',
+    );
+    // Calls only: the operator advice may still say "chown".
+    expect(source.match(/\b[fl]?chown(?:Sync)?\s*\(/g)).toBeNull();
+    expect(source).not.toMatch(/\bfchownSync\b|\blchownSync\b|\bchownSync\b/);
+  });
+
+  test('only the lock module touches the holder lock file', () => {
+    // POSIX drops every fcntl lock a process holds on a file when that
+    // process closes any descriptor of it. Reading, copying or opening the
+    // lock file anywhere else in a holder would silently release its lock.
+    const pattern = /wharfie-holder\.lock|\bLMDB_HOLDER_LOCK_FILE\b/g;
+    expect({
+      ...countBySourceFile(pattern),
+      ...countBySourceFile(pattern, SCRIPTS),
+    }).toEqual({
+      'src/core/lib/db/lmdb-holder-lock.js': expect.any(Number),
+    });
   });
 
   test('control-store open sites are the reviewed set', () => {
@@ -65,12 +132,16 @@ describe('LMDB open choke point', () => {
     // - execution-ledger-store withExecutionLedger: read-only opens route
     //   through the host; writable opens refuse while another process hosts,
     //   unless the caller hosts itself (hostReads).
-    // - execution-ledger-store host facade: in the hosting process only.
+    // - execution-ledger-store host facades (read-only and writable): in the
+    //   hosting process only, sharing its environment.
     // - coordinator-authority-command: inspect routes through the host; the
-    //   explicit replacement fence opens writable (reviewed residual risk).
+    //   takeover writes through a live holder (routeWrites), and opens
+    //   natively only under the exclusive holder lock when none is live.
     // - systemd-user-service-manager: activation snapshot and purge scan are
-    //   read-only and route; withLockedActivation holds a writable env across
-    //   the resident's stop and start (reviewed residual risk).
+    //   read-only and route; withLockedActivation resolves the store per call
+    //   (through a live resident, writes included, or natively under the
+    //   exclusive lock between stop and start) and drops it before every
+    //   systemctl stop and start.
     // - systemd-user-service-manager readRuntimeState: read-only, routes.
     expect(
       countBySourceFile(
@@ -80,7 +151,7 @@ describe('LMDB open choke point', () => {
       // The definition, plus the reroute after a lost host (read-only).
       'src/core/lib/config/db.js': 2,
       'src/core/runtime/operator/coordinator-authority-command.js': 1,
-      'src/core/runtime/operator/execution-ledger-store.js': 2,
+      'src/core/runtime/operator/execution-ledger-store.js': 3,
       'src/core/runtime/services/systemd-user-service-manager.js': 4,
     });
   });
@@ -90,5 +161,75 @@ describe('LMDB open choke point', () => {
       'src/core/runtime/durable-activity-host.js': 1,
       'src/core/runtime/services/resident-activity-worker.js': 1,
     });
+    // Only the service manager's resident waits for another holder to leave;
+    // every other would-be holder is refused at once.
+    expect(countBySourceFile(/\bonStoreHeld: 'wait'/g)).toEqual({
+      'src/core/runtime/services/ledger-service-command.js': 1,
+    });
+  });
+
+  test('verifier scripts open installed stores only at the reviewed sites', () => {
+    // Scripts load the installed package's LMDB adapter directly, outside
+    // db.js, so each site is reviewed against the one-holder rule here.
+    expect(
+      countBySourceFile(/adapters\/lmdb\.js'|'adapters', 'lmdb\.js'/g, SCRIPTS),
+    ).toEqual({
+      'scripts/application-state-readiness-proof.js': 1,
+      'scripts/verify-package-sea.js': 2,
+      'scripts/verify-systemd-user-service-linux.js': 1,
+    });
+    // Every `.default(` call in scripts/, whatever the binding is called: a
+    // direct open through an installed adapter is such a call, so a new one
+    // anywhere changes these counts and must be reviewed here.
+    expect(countBySourceFile(/\.default\(/g, SCRIPTS)).toEqual({
+      // Live READY proof: the control store is read through its host
+      // (createControlDBClient); the application-state store has no read
+      // host, so it is opened here beside the live resident, reported
+      // through onUnhostedRead and counted. Remove it by hosting that store.
+      'scripts/application-state-readiness-proof.js': 1,
+      // The package verifier's only native opens: under the holder lock;
+      // without it only beside the holder this verifier holds paused (that
+      // holder, not any paused process), or for the application-state store
+      // beside a live holder (counted and printed).
+      'scripts/installed-store-open.js': 3,
+      // Linux systemd verifier: the same READY proof for a running service;
+      // its control store is read through the host, its application-state
+      // store here.
+      'scripts/verify-systemd-user-service-linux.js': 1,
+    });
+    expect(countBySourceFile(/\bholderLock: true\b/g, SCRIPTS)).toEqual({
+      'scripts/installed-store-open.js': 1,
+    });
+    // The call count above sees `x.default(`. A file that loads the adapter
+    // must not take its default under another name either, by destructuring
+    // or indexing, which would make a direct open invisible to that count.
+    for (const file of [
+      'application-state-readiness-proof.js',
+      'installed-store-open.js',
+      'verify-package-sea.js',
+      'verify-systemd-user-service-linux.js',
+    ]) {
+      const source = readFileSync(join(SCRIPTS, file), 'utf8');
+      expect({
+        file,
+        renamed: source.match(
+          /\{\s*default\s*:\s*[A-Za-z_$]|\[\s*['"]default['"]\s*\]/g,
+        ),
+      }).toEqual({ file, renamed: null });
+    }
+    const readinessProof = readFileSync(
+      join(SCRIPTS, 'application-state-readiness-proof.js'),
+      'utf8',
+    );
+    expect(readinessProof).toMatch(
+      /if \(input\.path === scope\.controlPath\) \{\s+return await dbConfig\.createControlDBClient\('lmdb', \{/,
+    );
+    // The generated test app's own LMDB data, not a Wharfie store.
+    expect(
+      countBySourceFile(
+        /from 'lmdb'|require\('lmdb'\)|import\('lmdb'\)/g,
+        SCRIPTS,
+      ),
+    ).toEqual({ 'scripts/verify-package-sea.js': 1 });
   });
 });

@@ -105,6 +105,9 @@ export async function runLedgerServiceRuntime(options = {}) {
             },
             artifactId: artifact.artifactId,
             signal: residentAbort.signal,
+            // The service manager restarts this process, so it waits out a
+            // foreground run or a stopping predecessor instead of failing.
+            onStoreHeld: 'wait',
           }),
         };
       } catch (error) {

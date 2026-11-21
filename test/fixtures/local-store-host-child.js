@@ -1,7 +1,9 @@
 // A minimal local store host in its own process: opens one store writable,
 // seeds records, and serves other processes' reads until told to stop.
-// argv: <storePath> <serveDelayMs> [bulkRecords]. stdin "stop\n" shuts it
-// down in order. bulkRecords adds a partition of 32 KiB records.
+// argv: <storePath> <serveDelayMs> [bulkRecords] [onHeld] [heldWaitMs].
+// stdin "stop\n" shuts it down in order. bulkRecords adds a partition of
+// 32 KiB records. If another process holds the store, the child reports
+// {refused} and exits 3 instead of hosting it.
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
@@ -10,10 +12,35 @@ import { fileURLToPath } from 'node:url';
 import { createControlDBClient } from '../../src/core/lib/config/db.js';
 import { acquireLocalStoreHost } from '../../src/core/runtime/local-store-host.js';
 
-const [storePath, serveDelayArg, bulkArg] = process.argv.slice(2);
-const host = await acquireLocalStoreHost({ storePath });
-if (!host) throw new Error('Local store hosting is unsupported here.');
-const db = await createControlDBClient('lmdb', { path: storePath });
+const [storePath, serveDelayArg, bulkArg, onHeldArg, heldWaitArg] =
+  process.argv.slice(2);
+/** @type {import('../../src/core/runtime/local-store-host.js').LocalStoreHost | undefined} */
+let host;
+/** @type {import('../../src/core/lib/db/base.js').DBClient} */
+let db;
+try {
+  host = await acquireLocalStoreHost({
+    storePath,
+    ...(onHeldArg === 'wait' ? { onHeld: 'wait' } : {}),
+    ...(heldWaitArg ? { heldWaitMs: Number(heldWaitArg) } : {}),
+  });
+  if (!host) throw new Error('Local store hosting is unsupported here.');
+  db = await createControlDBClient('lmdb', { path: storePath });
+} catch (error) {
+  await host?.release();
+  process.stdout.write(
+    `${JSON.stringify({
+      refused: true,
+      pid: process.pid,
+      at: Date.now(),
+      name: /** @type {Error} */ (error)?.name,
+      code: /** @type {any} */ (error)?.code,
+      message: /** @type {Error} */ (error)?.message,
+    })}\n`,
+  );
+  process.exit(3);
+}
+const openedAt = Date.now();
 await db.put({
   tableName: 'records',
   keyName: 'pk',
@@ -42,15 +69,16 @@ for (let index = 0; index < Number(bulkArg || 0); index += 1) {
   });
 }
 const serve = () =>
-  host.serve(
+  host?.serve(
     async () =>
       await createControlDBClient('lmdb', { path: storePath, readOnly: true }),
+    async () => await createControlDBClient('lmdb', { path: storePath }),
   );
 const serveDelayMs = Number(serveDelayArg || 0);
 if (serveDelayMs > 0) setTimeout(serve, serveDelayMs);
 else serve();
 process.stdout.write(
-  `${JSON.stringify({ ready: true, endpoint: host.endpoint, pid: process.pid })}\n`,
+  `${JSON.stringify({ ready: true, endpoint: host.endpoint, pid: process.pid, openedAt })}\n`,
 );
 
 for await (const line of createInterface({ input: process.stdin })) {
