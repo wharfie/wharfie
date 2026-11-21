@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import {
   chmodSync,
   chownSync,
+  renameSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -103,6 +104,23 @@ function startChild(storePath, mode, lockWaitMs, options = {}) {
     },
     close: () => /** @type {any} */ (child.stdin).write('close\n'),
   };
+}
+
+/** @param {string} directory Every entry's identity, owner, mode, size and mtime. */
+function snapshotDirectory(directory) {
+  return readdirSync(directory)
+    .sort()
+    .map((name) => {
+      const stats = lstatSync(join(directory, name));
+      return {
+        name,
+        ino: stats.ino,
+        uid: stats.uid,
+        mode: stats.mode,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+      };
+    });
 }
 
 describe('LMDB holder lock across processes', () => {
@@ -400,10 +418,10 @@ describe('LMDB holder lock across processes', () => {
   }, 30_000);
 
   (process.geteuid?.() === 0 ? test : test.skip)(
-    "a root open leaves the lock file to the store's owner",
+    "root is refused on a user's store and changes nothing in it",
     async () => {
-      // Run as root (the Linux container run): a user's store, first opened
-      // read-only by root after an upgrade, must stay usable by that user.
+      // Run as root (the Linux container run): a user's store must not be
+      // opened, created in, or changed by root at all.
       const owner = { uid: 1000, gid: 1000 };
       // Not Jest's private temporary directory: the owner must reach it.
       const root = mkdtempSync('/tmp/wharfie-holder-lock-owner-');
@@ -414,18 +432,19 @@ describe('LMDB holder lock across processes', () => {
       expect(await seed.next()).toMatchObject({ opened: true });
       seed.close();
       await seed.next();
-      const lockFile = join(store, 'lmdb', LMDB_HOLDER_LOCK_FILE);
-      rmSync(lockFile);
-      rmSync(join(store, 'lmdb', LMDB_HOLDER_RECORD_FILE), { force: true });
+      rmSync(join(store, 'lmdb', LMDB_HOLDER_LOCK_FILE));
+      const before = snapshotDirectory(join(store, 'lmdb'));
 
-      const asRoot = startChild(store, 'read', 1_000);
-      expect(await asRoot.next()).toMatchObject({ opened: true });
-      asRoot.close();
-      await asRoot.next();
-      expect(lstatSync(lockFile)).toMatchObject({
-        uid: owner.uid,
-        gid: owner.gid,
-      });
+      for (const mode of /** @type {const} */ (['read', 'write'])) {
+        const asRoot = startChild(store, mode, 1_000);
+        const refused = await asRoot.next();
+        expect(refused).toMatchObject({
+          refused: true,
+          code: 'local-store-lock',
+        });
+        expect(refused.message).toContain(`belongs to uid ${owner.uid}`);
+      }
+      expect(snapshotDirectory(join(store, 'lmdb'))).toEqual(before);
 
       const asOwner = startChild(store, 'write', 1_000, owner);
       expect(await asOwner.next()).toMatchObject({ opened: true });
@@ -473,42 +492,62 @@ describe('LMDB holder lock across processes', () => {
     await writer.next();
   }, 30_000);
 
-  test('a holder of another user writes no record, removes a stale one, and is described truthfully', async () => {
+  test('another user is refused before anything in the store is created, opened, removed or changed', async () => {
     const store = await createStore();
     const dbRoot = join(store, 'lmdb');
-    // A stale record naming a live process that does not hold the store.
+    // No lock file yet, so a create would show; a stale record, so a removal
+    // would show.
+    rmSync(join(dbRoot, LMDB_HOLDER_LOCK_FILE));
     writeFileSync(
       join(dbRoot, LMDB_HOLDER_RECORD_FILE),
       JSON.stringify({ pid: process.pid, startedAt: 1, command: 'stale' }),
       { mode: 0o600 },
     );
-    const victim = join(store, 'victim');
-    writeFileSync(victim, 'untouched', { mode: 0o600 });
-    rmSync(join(dbRoot, LMDB_HOLDER_LOCK_FILE));
-    // Act as a different user from the directory's owner (root, in
-    // production), without needing root here.
-    const held = tryAcquireLmdbHolderLock(dbRoot, {
-      exclusive: true,
-      readOnly: false,
-      effectiveUid: (process.geteuid?.() ?? 0) + 1,
-    });
-    try {
-      expect(existsSync(join(dbRoot, LMDB_HOLDER_RECORD_FILE))).toBe(false);
-      expect(
-        readdirSync(dbRoot).filter((name) => name.includes('.tmp')),
-      ).toEqual([]);
-      expect(readFileSync(victim, 'utf8')).toBe('untouched');
-      const reader = startChild(store, 'read', 200);
-      const refused = await reader.next();
-      expect(refused).toMatchObject({
-        refused: true,
-        code: 'local-store-busy',
-      });
-      expect(refused.message).toContain('left no holder record');
-      expect(refused.message).not.toContain(`pid ${process.pid}`);
-    } finally {
-      held?.release();
+    const before = snapshotDirectory(dbRoot);
+    const ownerUid = lstatSync(dbRoot).uid;
+    for (const exclusive of [true, false]) {
+      let refusal;
+      try {
+        // Act as a user who does not own the directory (root, in
+        // production), without needing root here.
+        tryAcquireLmdbHolderLock(dbRoot, {
+          exclusive,
+          readOnly: !exclusive,
+          effectiveUid: ownerUid + 1,
+        });
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toMatchObject({ code: 'local-store-lock' });
+      expect(/** @type {Error} */ (refusal).message).toContain(
+        `belongs to uid ${ownerUid}, and this process runs as uid ${ownerUid + 1}`,
+      );
+      expect(/** @type {Error} */ (refusal).message).toContain(
+        `sudo -u '#${ownerUid}'`,
+      );
     }
+    expect(snapshotDirectory(dbRoot)).toEqual(before);
+  }, 30_000);
+
+  test('refuses a store whose LMDB directory is a symbolic link, creating nothing through it', async () => {
+    const store = await createStore();
+    const dbRoot = join(store, 'lmdb');
+    const real = join(store, 'lmdb.real');
+    renameSync(dbRoot, real);
+    rmSync(join(real, LMDB_HOLDER_LOCK_FILE));
+    symlinkSync(real, dbRoot);
+    const before = snapshotDirectory(real);
+    // A writable open (the read-only adapter path refuses a linked volume
+    // itself, before the lock).
+    await expect(
+      createControlDBClient('lmdb', { path: store, lockWaitMs: 100 }),
+    ).rejects.toMatchObject({
+      code: 'local-store-lock',
+      message: expect.stringContaining(
+        'must be a directory, not a symbolic link',
+      ),
+    });
+    expect(snapshotDirectory(real)).toEqual(before);
   }, 30_000);
 
   test('ignores a holder record that is a link, a FIFO, oversized, or malformed', async () => {

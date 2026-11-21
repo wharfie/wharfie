@@ -119,9 +119,10 @@ application-state store) open in at most one process at a time:
 - A conflicting open waits up to 10 s, then fails with `LocalStoreBusyError`,
   which names the holder from `lmdb/wharfie-holder.json`. Readers leave no
   record; `lsof lmdb/wharfie-holder.lock` lists them.
-- The lock file belongs to the store's owner even when root creates it, as
-  the store's own files do. Never delete or replace it while any Wharfie
-  process uses the store: a second file is a second, independent lock.
+- A store is opened only by the user who owns it; run commands as that user.
+  Any other user, root included, is refused before anything in the store is
+  touched. Never delete or replace the lock file while any Wharfie process
+  uses the store: a second file is a second, independent lock.
 
 Test and verifier code follows the same rule: read through the product path,
 take the holder lock when opening an installed store directly, and read

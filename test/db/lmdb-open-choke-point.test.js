@@ -101,6 +101,19 @@ describe('LMDB open choke point', () => {
     });
   });
 
+  test('the lock module never changes the owner of anything', () => {
+    // A store is opened only by its owner (lmdb-holder-lock.js refuses any
+    // other user before touching the directory), so nothing there needs an
+    // ownership change, and none may come back.
+    const source = readFileSync(
+      join(SRC, 'core/lib/db/lmdb-holder-lock.js'),
+      'utf8',
+    );
+    // Calls only: the operator advice may still say "chown".
+    expect(source.match(/\b[fl]?chown(?:Sync)?\s*\(/g)).toBeNull();
+    expect(source).not.toMatch(/\bfchownSync\b|\blchownSync\b|\bchownSync\b/);
+  });
+
   test('only the lock module touches the holder lock file', () => {
     // POSIX drops every fcntl lock a process holds on a file when that
     // process closes any descriptor of it. Reading, copying or opening the
