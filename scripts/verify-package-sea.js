@@ -844,7 +844,45 @@ const observerControlReads = {
   // Application-state reads beside a live, unpaused holder. That store has
   // no read host, so these still open it under its writer (lmdb-js #370).
   applicationStateBesideHolder: 0,
+  // The same reads by code path; see assertApplicationStateResidual.
+  applicationStateBesideHolderByPath: {
+    readyProof: 0,
+    fixture: 0,
+  },
 };
+
+/**
+ * Ceilings for the declared residual: reads of the application-state store
+ * beside a live holder, by the code path that makes them. The verifier's
+ * scenarios are fixed, so these counts are fixed per platform:
+ * - readyProof: one per READY observation of a live resident (every
+ *   resident boot that reaches READY, plus the explicit post-recovery
+ *   checks); Linux adds the schedule-restart proof's boots;
+ * - fixture: crash-matrix and recovery readbacks of receipts and
+ *   destinations taken while a SEA process still holds the store.
+ * A larger count means a new read beside a writer, which must be reviewed,
+ * not absorbed. Remove the residual by hosting the application-state store
+ * (follow-up to PR #182); then these ceilings become zero.
+ */
+const APPLICATION_STATE_RESIDUAL_CEILING = Object.freeze({
+  // macOS: 11 READY observations (measured on 73505cf1 and after); Linux adds
+  // the schedule-restart proof's two resident boots.
+  readyProof: process.platform === 'linux' ? 13 : 11,
+  // One application-state readback by the crash-matrix fixture while a
+  // live, unpaused SEA process holds that store (measured on both platforms).
+  fixture: 1,
+});
+
+/** @returns {void} - Fails the verification when the residual grows. */
+function assertApplicationStateResidual() {
+  const { applicationStateBesideHolderByPath: byPath } = observerControlReads;
+  for (const path of /** @type {const} */ (['readyProof', 'fixture'])) {
+    assert.ok(
+      byPath[path] <= APPLICATION_STATE_RESIDUAL_CEILING[path],
+      `Application-state reads beside a live holder from ${path} grew to ${byPath[path]} (ceiling ${APPLICATION_STATE_RESIDUAL_CEILING[path]}; all paths: ${JSON.stringify(byPath)}). Route the new read, or review and raise the ceiling with its reason.`,
+    );
+  }
+}
 
 /**
  * Open an installed store under its holder lock (installed-store-open.js),
@@ -866,6 +904,7 @@ async function openInstalledStore(
     ...(options.unhostedStore === true ? { unhostedStore: true } : {}),
     onUnhostedRead: () => {
       observerControlReads.applicationStateBesideHolder += 1;
+      observerControlReads.applicationStateBesideHolderByPath.fixture += 1;
     },
   });
 }
@@ -976,6 +1015,7 @@ async function createInstalledLedgerLifecycleObserver(options) {
       // beside the live READY resident.
       onUnhostedRead: () => {
         observerControlReads.applicationStateBesideHolder += 1;
+        observerControlReads.applicationStateBesideHolderByPath.readyProof += 1;
       },
     },
   );
@@ -12091,6 +12131,7 @@ export default defineApp({
   process.stdout.write(
     `Observer control-store reads: ${JSON.stringify(observerControlReads)}\n`,
   );
+  assertApplicationStateResidual();
   process.stdout.write(
     `Verified installed Wharfie ${installedVersion}, source and generated CLI argv/stdio/exit semantics, source CLI activity, clean generated ${process.platform} SEA activity, and relocated-SEA durable managed-effect execution/idempotent replay plus app-scoped exact-run inspection/recovery/reconciliation/cancellation command boundaries, explicit public coordinator takeover-and-release with exact receipt replay before every confirmed killed-owner restart and unchanged RELEASED authority across owner-free response-loss crashes, eight-boundary relocated-SEA managed-effect SIGKILL recovery/replay without destination redispatch, three-boundary relocated-SEA mixed-settlement SIGKILL recovery/replay with exact payload reuse and no destination redispatch, four-disposition relocated-SEA effect reconciliation from a late receipt and permanent not-applied resolution with destination, payload-publication, and ledger-response SIGKILL replay and no authored app, activity, or normal adapter dispatch, six-boundary public-command relocated-SEA managed-effect successor authorization/start/destination/terminal SIGKILL recovery with response-loss replay, orphan payload reuse, inserted and already-present receipt outcomes, immutable causal source/target history, and no authored app, activity, or normal-adapter redispatch, cross-surface public workflow start/replay, offline run-level workflow cancellation, persisted timer-deadline SIGKILL/takeover plus current-wait signal acceptance and exact replay, and five-boundary relocated-SEA workflow claim/start/terminal/recovery-response/reconciliation-response SIGKILL recovery with exact linear successor authority and no authored redispatch, atomic mixed PENDING/STARTED managed-effect settlement from permanent receipt/absence evidence, live current-revision resident recovery without authored activity redispatch or process exit, relocated-SEA compound-recovery response-loss SIGKILL/restart, durable ledger-service crash recovery with locked LMDB and Node unavailable on PATH${scheduleProof ? `, and due schedule ${scheduleProof.expected.occurrenceId} with one physical dispatch across real SIGKILL/replacement and an unchanged post-restart poll` : ', with the due-schedule/restart proof correctly gated to Linux'} (${artifactSize} bytes; sha256 ${artifactSha256})\n`,
   );

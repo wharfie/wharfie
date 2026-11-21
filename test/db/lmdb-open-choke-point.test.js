@@ -187,6 +187,23 @@ describe('LMDB open choke point', () => {
     expect(countBySourceFile(/\bholderLock: true\b/g, SCRIPTS)).toEqual({
       'scripts/installed-store-open.js': 1,
     });
+    // The call count above sees `x.default(`. A file that loads the adapter
+    // must not take its default under another name either, by destructuring
+    // or indexing, which would make a direct open invisible to that count.
+    for (const file of [
+      'application-state-readiness-proof.js',
+      'installed-store-open.js',
+      'verify-package-sea.js',
+      'verify-systemd-user-service-linux.js',
+    ]) {
+      const source = readFileSync(join(SCRIPTS, file), 'utf8');
+      expect({
+        file,
+        renamed: source.match(
+          /\{\s*default\s*:\s*[A-Za-z_$]|\[\s*['"]default['"]\s*\]/g,
+        ),
+      }).toEqual({ file, renamed: null });
+    }
     const readinessProof = readFileSync(
       join(SCRIPTS, 'application-state-readiness-proof.js'),
       'utf8',
