@@ -11,7 +11,65 @@ Use the controller prerequisites and narrow SSH access described in
 `wharfie` profile in the examples below. A Hetzner token must be available as
 `HCLOUD_TOKEN`. Credentials stay on the controller.
 
-## September 2026 campaign result
+## Campaign results
+
+| Campaign                          | Candidate                                   | Result                                                        |
+| --------------------------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| `wharfie-soak-20261119-v017b`     | v0.0.17, source `ea93520`, 48 hours         | Passed on AWS and Hetzner. Published as the v0.0.17 preview.  |
+| `wharfie-soak-20261105-v016`      | v0.0.16, source `6739bb9`, 72 hours planned | Failed at the Hetzner rehearsal. v0.0.16 was never published. |
+| `wharfie-soak-20260915-stable-v6` | v0.0.15, source `aae74e0`, 72 hours         | Aborted after about fifteen hours on both providers.          |
+
+### November 2026 campaign result: v0.0.17
+
+Campaign `wharfie-soak-20261119-v017b` tested the exact v0.0.17 release files
+from source `ea93520`, with 48-hour soaks: AWS `t3.small` in `us-east-2` and
+Hetzner `cx23` in `fsn1`. One disposable EC2 controller ran it. The launch
+needed an operator retry of the gate-approval step, which
+[PR #180](https://github.com/wharfie/wharfie/pull/180) later fixed; the 48-hour
+soaks themselves ran unattended.
+
+Both fifteen-minute rehearsals passed on 2026-11-19 with three workflows each
+and cleanup verified absent. The AWS soak started at 2026-11-19T23:00:49Z and
+the Hetzner soak at 23:07:43Z, with fixed ends 48 hours later at
+2026-11-21T23:00:49Z and 23:07:43Z. Each completed 192 of 192 workflows. The
+same resident process and host boot remained throughout both soaks, and no
+resource guard tripped. The supervisor recorded the campaign as passed at
+2026-11-21T23:09:52Z.
+
+| Measurement                                      | AWS                          | Hetzner                      |
+| ------------------------------------------------ | ---------------------------- | ---------------------------- |
+| Resident RSS, start to end (peak); limit 512 MiB | 193 → 235 MiB (peak 235 MiB) | 196 → 235 MiB (peak 241 MiB) |
+| Mean workflow latency                            | 23 s (range 21–43 s)         | 51 s (range 48–55 s)         |
+
+A person reviewed the measured growth before publication. Both guests'
+cleanup was verified absent by the runner and by an independent inventory.
+The controller was removed and verified absent at 2026-11-23T15:36:16Z;
+the private S3 proof archive is retained.
+
+This is the first completed soak. It is 48 hours, not 72. It does not test
+crash, reboot, update, or disk loss; the live acceptance run covers the first
+three. The resident ran without a restart, but that does not rule out the
+[known issue](recipient-preview.md#known-issue-operator-commands-while-the-service-writes)
+with operator commands that run while the service writes.
+
+### November 2026 campaign result: v0.0.16
+
+Campaign `wharfie-soak-20261105-v016` started on November 5, 2026 to test
+v0.0.16 from source `6739bb9` for 72 hours. The AWS rehearsal passed and
+cleaned up. The Hetzner rehearsal failed at `preview` before creating
+anything: Hetzner had removed the image `deprecated` response field on
+November 2, and v0.0.16 required it. The campaign stopped there and stays
+recorded as failed. No full soak ran.
+
+Its controller was torn down on November 18 and verified absent; the private
+proof archive is retained. The held v0.0.16 publication was rejected on
+November 19, so v0.0.16 was never published.
+[PR #175](https://github.com/wharfie/wharfie/pull/175) fixed the decoder in
+v0.0.17, and [PR #177](https://github.com/wharfie/wharfie/pull/177) brought the
+controller into the repository and fixed how it settles a run that never
+created anything.
+
+### September 2026 campaign result
 
 The terminal reports for `wharfie-soak-20260915-stable-v6` were recovered and
 verified on November 4, 2026. Both fifteen-minute rehearsals passed. The full
@@ -37,10 +95,10 @@ Controller teardown is a separate operation: stopping a controller alone can
 leave its disk, allocated IP, credentials, and proof archive behind.
 
 The campaign tested published v0.0.15 from source `aae74e0`, before the journal
-performance change in PR #168. Acceptance remains open and requires a new,
-complete candidate-bound run; a cleaned failed run cannot be resumed into a
-passing result. [PR #165](https://github.com/wharfie/wharfie/pull/165) tracks this
-gate.
+performance change in PR #168. A cleaned failed run cannot be resumed into a
+passing result, so acceptance stayed open until the complete candidate-bound
+v0.0.17 campaign above. [PR #165](https://github.com/wharfie/wharfie/pull/165)
+added this gate.
 
 ## Rehearse, then run
 

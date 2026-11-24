@@ -14,11 +14,11 @@
 
 Wharfie is a local-first TypeScript application runtime that turns an ordinary CLI into a portable executable, then lets that same application become a durable, observable service across trusted machines without an architectural rewrite.
 
-The published preview is [v0.0.15](https://github.com/wharfie/wharfie/releases/tag/v0.0.15),
+The published preview is [v0.0.17](https://github.com/wharfie/wharfie/releases/tag/v0.0.17),
 available on npm and as standalone downloads. Start with
 [build, share, and run a preview](docs/guides/recipient-preview.md):
 
-1. Install v0.0.15 in a fresh project and run the starter as a CLI.
+1. Install v0.0.17 in a fresh project and run the starter as a CLI.
 2. Package it and share the executable for the recipient's platform.
 3. Install its persistent service on a Linux server, close the submitting
    controller, and reconnect to inspect the same durable work.

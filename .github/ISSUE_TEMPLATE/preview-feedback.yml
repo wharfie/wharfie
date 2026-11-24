@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version and source
       description: Copy the version and source commit from preview-release.json; include the AWS companion version if used.
-      placeholder: 'v0.0.15 / aae74e0de018fe340564c08c0c820ff590de1894 / AWS companion 0.0.15'
+      placeholder: 'v0.0.17 / ea93520d91d9020d8a192fd1fa0fa5779d6e02ad / AWS companion 0.0.17'
     validations:
       required: true
   - type: textarea

@@ -2,7 +2,7 @@
 
 Deploy [the landing page](../site/index.html) through private S3, CloudFront OAC, and a
 CloudFront Function. This manual AWS CLI runbook uses repository templates and local helpers; there is no CI deployment workflow.
-Staging verification passes; custom-domain publication remains pending. [Issue 137](https://github.com/wharfie/wharfie/issues/137) stays open until public acceptance and rollback records are complete.
+`https://docs.wharfie.dev/` is live on the custom domain: on 2026-11-20 its DNS name resolved to `d1sdjfclzv637e.cloudfront.net`, the CloudFront endpoint listed below, and its root returned the HTML with SHA-256 `0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808`, the verified staging bundle below. Public acceptance and rollback records are tracked in [issue 137](https://github.com/wharfie/wharfie/issues/137).
 
 The fixed destination is AWS account `411430101559`, region `us-east-1`, stack
 `wharfie-docs`, bucket `wharfie-docs-411430101559-us-east-1`, and certificate stack
@@ -232,9 +232,9 @@ Evidence checked on 2026-09-15: `staging-verification-v2.json` finished at 16:35
 | Clean committed release bundle                                     | Pending; staging records commit `00c5ec4d193b22eca3b609caf16fb0ea6b75609e` with `dirty: true`.                                               |
 | CloudFront staging endpoint                                        | [d1sdjfclzv637e.cloudfront.net](https://d1sdjfclzv637e.cloudfront.net/) (`EITEBWLWDGRVN`); **37/37 passed**.                                 |
 | AWS `LIVE` function runtime                                        | **6/6 passed** after the default-parameter syntax fix.                                                                                       |
-| Issued certificate and pre-DNS hostname/TLS report                 | Pending DNS validation and alias attachment.                                                                                                 |
-| PR 169 public guides and feedback form                             | Pending merge and public link verification.                                                                                                  |
-| Private DNS backup, cutover record, independent public reports     | Pending; `docs.wharfie.dev` has not been cut over.                                                                                           |
+| Issued certificate and pre-DNS hostname/TLS report                 | Certificate in use: HTTPS to `docs.wharfie.dev` succeeded on 2026-11-20. No pre-DNS report is in the repository.                             |
+| PR 169 public guides and feedback form                             | PR 169 merged on 2026-09-15. Public link verification is not recorded in the repository.                                                     |
+| Private DNS backup, cutover record, independent public reports     | DNS points to the distribution (checked 2026-11-20). No DNS backup, cutover record, or independent public report is in the repository.       |
 | Public rendering/keyboard/link review and verified rollback record | Pending.                                                                                                                                     |
 
-Attach sanitized evidence before closing issue 137. This cutover does not publish a Wharfie package or prove soak/tester acceptance.
+Attach sanitized evidence to issue 137. This cutover does not publish a Wharfie package or prove soak/tester acceptance.

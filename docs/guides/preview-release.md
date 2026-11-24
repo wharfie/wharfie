@@ -1,12 +1,13 @@
 # Preview releases
 
-The published [v0.0.15 preview](https://github.com/wharfie/wharfie/releases/tag/v0.0.15)
+The published [v0.0.17 preview](https://github.com/wharfie/wharfie/releases/tag/v0.0.17)
 is available on npm's `preview` channel. Its manifest records source commit
-[`aae74e0de018fe340564c08c0c820ff590de1894`](https://github.com/wharfie/wharfie/commit/aae74e0de018fe340564c08c0c820ff590de1894).
+[`ea93520d91d9020d8a192fd1fa0fa5779d6e02ad`](https://github.com/wharfie/wharfie/commit/ea93520d91d9020d8a192fd1fa0fa5779d6e02ad).
 Use the [recipient handoff](recipient-preview.md) to build, share, keep work
-running on Linux, reconnect, and clean up with that exact release. Since
-2026-11-02, v0.0.15 cannot preview or first-apply a Hetzner deployment; see the
-[known issue](recipient-preview.md#optional-provision-an-aws-or-hetzner-host).
+running on Linux, reconnect, and clean up with that exact release. Operator
+commands that run while the service writes have a
+[known issue](recipient-preview.md#known-issue-operator-commands-while-the-service-writes)
+in v0.0.17.
 
 Wharfie previews are experimental, intentionally outside npm's
 `latest` channel, and supported only for evaluation. The npm package requires
@@ -17,7 +18,7 @@ not Wharfie CLI release downloads.
 Install the exact Node-hosted preview version with:
 
 ```bash
-npm install --save-dev @wharfie/wharfie@0.0.15
+npm install --save-dev @wharfie/wharfie@0.0.17
 ./node_modules/.bin/wharfie --help
 ```
 
@@ -25,27 +26,27 @@ Use `@wharfie/wharfie@preview` to follow the moving evaluation channel instead.
 Do not omit a version or channel: preview publication does not move `latest`.
 For a Node-free Linux x64 glibc installation, download the versioned binary, its
 artifact record, `preview-release.json`, and `SHA256SUMS` from the matching
-[v0.0.15 prerelease](https://github.com/wharfie/wharfie/releases/tag/v0.0.15).
+[v0.0.17 prerelease](https://github.com/wharfie/wharfie/releases/tag/v0.0.17).
 Verify the checksums before running the binary:
 
 ```bash
 sha256sum --ignore-missing --check SHA256SUMS
-chmod +x wharfie-v0.0.15-linux-x64
-./wharfie-v0.0.15-linux-x64 --version
+chmod +x wharfie-v0.0.17-linux-x64
+./wharfie-v0.0.17-linux-x64 --version
 ```
 
-Expect version `0.0.15`. The recipient of a generated application likewise needs
+Expect version `0.0.17`. The recipient of a generated application likewise needs
 no separate Node installation, while the Node-hosted author/build recipe uses
-Node 24.13.1 and npm 11.12.0. Long-duration soak and unfamiliar-tester results
-remain pending; see the [versioned evidence table](recipient-preview.md#release-evidence).
-Later runtime changes on `master` require a new release and new evidence;
-the journal performance change in PR168 is not included in v0.0.15.
+Node 24.13.1 and npm 11.12.0. v0.0.17 passed a 48-hour operational soak on AWS
+and Hetzner; unfamiliar-tester results remain pending. See the
+[versioned evidence table](recipient-preview.md#release-evidence). Later
+runtime changes on `master` require a new release and new evidence.
 
 GitHub also records build-provenance attestations for every release asset.
 With a current GitHub CLI, verify a downloaded asset against this repository:
 
 ```bash
-gh attestation verify wharfie-v0.0.15-linux-x64 \
+gh attestation verify wharfie-v0.0.17-linux-x64 \
   --repo wharfie/wharfie
 ```
 
@@ -77,7 +78,7 @@ For example, after downloading the matching companion asset and
 
 ```bash
 sha256sum --ignore-missing --check SHA256SUMS
-npm install --save-dev @wharfie/wharfie@0.0.15 ./wharfie-aws-0.0.15.tgz
+npm install --save-dev @wharfie/wharfie@0.0.17 ./wharfie-aws-0.0.17.tgz
 ```
 
 `--ignore-missing` verifies the subset downloaded into the current directory;
@@ -185,7 +186,7 @@ After those checks pass, a maintainer with an interactive, short-lived
 npm session promotes only that immutable version:
 
 ```bash
-npm dist-tag add @wharfie/wharfie@0.0.15 preview \
+npm dist-tag add @wharfie/wharfie@0.0.17 preview \
   --registry=https://registry.npmjs.org
 ```
 
@@ -239,7 +240,7 @@ the full source commit recorded in its release manifest:
 
 ```bash
 gh workflow run recover-preview-release.yml --repo wharfie/wharfie \
-  --ref master -f tag=v0.0.15 -f source_commit='<full-manifest-source-commit>'
+  --ref master -f tag=v0.0.17 -f source_commit='<full-manifest-source-commit>'
 ```
 
 The recovery workflow checks out the exact dispatch commit. A job with draft

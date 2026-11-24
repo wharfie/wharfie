@@ -8,8 +8,8 @@ checksums, install both into the same clean builder:
 
 ```bash
 npm install \
-  @wharfie/wharfie@0.0.15 \
-  /absolute/path/to/wharfie-aws-0.0.15.tgz
+  @wharfie/wharfie@0.0.17 \
+  /absolute/path/to/wharfie-aws-0.0.17.tgz
 ```
 
 Wharfie validates the package identity and its exact SDK binding contract

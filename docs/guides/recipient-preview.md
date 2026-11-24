@@ -2,7 +2,7 @@
 
 Build a CLI, share its executable, and leave a durable workflow running on an
 existing Linux server after you disconnect. This guide uses the published
-**v0.0.15** preview and its included `steady-file` example: two file checks
+**v0.0.17** preview and its included `steady-file` example: two file checks
 separated by a one-minute durable timer. It is an evaluation release; the
 [release evidence below](#release-evidence) identifies what remains unproven.
 
@@ -27,15 +27,15 @@ supported recipient architecture; these commands select Linux x64 glibc.
 
 ## Obtain the published preview
 
-Use [v0.0.15](https://github.com/wharfie/wharfie/releases/tag/v0.0.15), whose
+Use [v0.0.17](https://github.com/wharfie/wharfie/releases/tag/v0.0.17), whose
 manifest source commit is
-[`aae74e0de018fe340564c08c0c820ff590de1894`](https://github.com/wharfie/wharfie/commit/aae74e0de018fe340564c08c0c820ff590de1894).
+[`ea93520d91d9020d8a192fd1fa0fa5779d6e02ad`](https://github.com/wharfie/wharfie/commit/ea93520d91d9020d8a192fd1fa0fa5779d6e02ad).
 Download these four files into one new directory:
 
-- [Core package: wharfie-wharfie-0.0.15.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.15/wharfie-wharfie-0.0.15.tgz)
-- [Matching AWS companion: wharfie-aws-0.0.15.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.15/wharfie-aws-0.0.15.tgz)
-- [preview-release.json](https://github.com/wharfie/wharfie/releases/download/v0.0.15/preview-release.json)
-- [SHA256SUMS](https://github.com/wharfie/wharfie/releases/download/v0.0.15/SHA256SUMS)
+- [Core package: wharfie-wharfie-0.0.17.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.17/wharfie-wharfie-0.0.17.tgz)
+- [Matching AWS companion: wharfie-aws-0.0.17.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.17/wharfie-aws-0.0.17.tgz)
+- [preview-release.json](https://github.com/wharfie/wharfie/releases/download/v0.0.17/preview-release.json)
+- [SHA256SUMS](https://github.com/wharfie/wharfie/releases/download/v0.0.17/SHA256SUMS)
 
 In that download directory, verify the files:
 
@@ -46,7 +46,7 @@ sha256sum --ignore-missing --check SHA256SUMS
 On macOS, use `shasum -a 256 --ignore-missing --check SHA256SUMS`. Check that
 both tarballs and `preview-release.json` report `OK`; `--ignore-missing`
 permits the standalone Wharfie download files to be absent. Confirm the
-manifest says version `0.0.15`, tag `v0.0.15`, and the source commit above.
+manifest says version `0.0.17`, tag `v0.0.17`, and the source commit above.
 The [release guide](preview-release.md) explains provenance verification.
 
 The core is also published on npm at the exact version and the `preview`
@@ -65,8 +65,8 @@ mkdir wharfie-preview-demo
 cd wharfie-preview-demo
 npm init -y
 npm install --save-dev \
-  /absolute/handoff/wharfie-wharfie-0.0.15.tgz \
-  /absolute/handoff/wharfie-aws-0.0.15.tgz
+  /absolute/handoff/wharfie-wharfie-0.0.17.tgz \
+  /absolute/handoff/wharfie-aws-0.0.17.tgz
 cp -R node_modules/@wharfie/wharfie/examples/steady-file ./app
 printf 'Wharfie preview recipient input.\n' > input.txt
 node ./app/local.js ./input.txt
@@ -178,6 +178,56 @@ Do not replace a healthy active coordinator just to reconnect. This single-host
 preview requires retained storage: loss of the host's root disk is not a
 supported automatic recovery path.
 
+## Known issue: operator commands while the service writes
+
+**Recorded 2026-11-24; affects v0.0.17 and earlier previews.** Each
+operator command, such as `wharfie inspect`, `list`, `output`, `start`, or
+`service status`, briefly opens and closes the application's local store on
+the host. `deployment exec` runs those same commands on a cloud host. If the
+resident service is writing at that moment, you may see either of these:
+
+- A briefly stale result. A command can miss the most recent committed step.
+  Running it again a second later shows it. In Wharfie's testing, the
+  missing step always reappeared within a second.
+- Rarely, the resident service exits with an error that mentions
+  `MDB_PROBLEM` or "No transaction to renew". A command such as `start` can
+  fail with the same error.
+
+In stress tests that opened and closed the store read-only every 5
+milliseconds next to a process that wrote continuously, the writer exited in
+four of six two-to-three-minute runs. At intervals from 50 milliseconds to one second, only
+stale results appeared. The 48-hour release soak opens the store this way about
+60 to 130 times every fifteen minutes on each provider, and its resident ran
+without a restart for the whole soak.
+
+What to do:
+
+- Do not poll in a tight loop. Run `inspect` by hand, or wait a few seconds
+  between calls. If a result looks one step behind, run it again.
+- If `start` fails, check `wharfie list` before submitting again, so you do not
+  start a second run.
+- The systemd user service restarts after a failure, about five seconds later.
+  Check it with `wharfie service status --json`, or `deployment status` for a
+  cloud host. If it does not return to health, or reports that the previous
+  coordinator is still active, follow the coordinator recovery for a
+  [local resident](../../README.md#submit-durable-work-and-run-a-local-resident)
+  or a [cloud deployment](remote-recovery.md). Do not delete the data
+  directory.
+- Report it through the
+  [preview feedback form](https://github.com/wharfie/wharfie/issues/new?template=preview-feedback.yml)
+  with the bounded diagnostic.
+
+The issue comes from LMDB, the store's database, when one process opens and
+closes a store that another process writes
+([lmdb-js #370](https://github.com/kriszyp/lmdb-js/issues/370)). It is not new
+in v0.0.17. It is tracked in
+[issue #183](https://github.com/wharfie/wharfie/issues/183). It is fixed on
+`master` by [PR #181](https://github.com/wharfie/wharfie/pull/181) and
+[PR #182](https://github.com/wharfie/wharfie/pull/182), which send operator
+reads through the running service and keep each store open in one process at
+a time. The fix ships in 0.0.18, which is not released yet; v0.0.17 does not
+include it.
+
 ## Remove the service and its data
 
 After the run is complete, run these commands as the same account:
@@ -202,16 +252,6 @@ enabled solely for this test, the administrator can disable it afterward;
 check that no other user service needs it first.
 
 ## Optional: provision an AWS or Hetzner host
-
-**Known issue, recorded 2026-11-19: Hetzner in v0.0.15.** Since 2026-11-02,
-Hetzner `deployment preview` and a first Hetzner `deployment apply` fail with
-"Hetzner API response document is invalid." They fail before creating anything.
-Hetzner removed the image `deprecated` response field, and v0.0.15 requires it.
-Resuming an apply that already has a local journal, `deployment status`,
-`deployment destroy`, SSH-side operations, the existing-server route, and the
-AWS route are not affected. A [fix is in progress](https://github.com/wharfie/wharfie/pull/175)
-for the next preview; no release date is set. Until then, evaluate with an
-existing server or AWS.
 
 The `--self-deployable` executable above also exposes the
 [packaged AWS and Hetzner deployment commands](quickstart.md#try-the-experimental-deployment-lifecycle).
@@ -253,7 +293,7 @@ is the one-minute durable timer.
 
 | Record                                                                   | Your result                                           |
 | ------------------------------------------------------------------------ | ----------------------------------------------------- |
-| Wharfie version/source                                                   | `0.0.15` / `aae74e0de018fe340564c08c0c820ff590de1894` |
+| Wharfie version/source                                                   | `0.0.17` / `ea93520d91d9020d8a192fd1fa0fa5779d6e02ad` |
 | Builder OS/architecture, Node/npm; recipient OS/architecture             |                                                       |
 | Route: existing server, AWS, or Hetzner                                  |                                                       |
 | Setup/install time; package time; ordinary CLI time                      |                                                       |
@@ -272,15 +312,16 @@ acceptance evidence.
 
 ## Release evidence
 
-Status recorded 2026-09-15:
+Status recorded 2026-11-24:
 
-| Version or check                                                                          | Evidence and limit                                                                                                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Published v0.0.15, source `aae74e0de018fe340564c08c0c820ff590de1894`                      | Matching GitHub/npm bytes, release provenance, and the automated recipient service journey passed the [publication gates](https://github.com/wharfie/wharfie/actions/runs/34883188483).                                                                          |
-| 48–72-hour operational soak                                                               | Pending. A short rehearsal or a running campaign does not establish completed long-duration proof.                                                                                                                                                               |
-| Hetzner route in v0.0.15                                                                  | Known issue since 2026-11-02: `deployment preview` and a first `deployment apply` fail before creating anything. A [fix is in progress](https://github.com/wharfie/wharfie/pull/175); it is not in v0.0.15. The existing-server and AWS routes are not affected. |
-| Unfamiliar tester handoffs                                                                | Pending; this guide and worksheet make those trials repeatable.                                                                                                                                                                                                  |
-| Journal performance change merged in [PR168](https://github.com/wharfie/wharfie/pull/168) | Newer than the published source above. v0.0.15 does not include that change, and its results do not validate the newer implementation.                                                                                                                           |
+| Version or check                                                                          | Evidence and limit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Published v0.0.17, source `ea93520d91d9020d8a192fd1fa0fa5779d6e02ad`                      | Matching GitHub/npm bytes, release provenance, and the automated recipient service journey passed the [publication gates](https://github.com/wharfie/wharfie/actions/runs/44589053894).                                                                                                                                                                                                                                                                                                                                                                                             |
+| 48-hour operational soak                                                                  | Passed for these exact release files in campaign `wharfie-soak-20261119-v017b`: AWS `t3.small` in `us-east-2` and Hetzner `cx23` in `fsn1`. Both fifteen-minute rehearsals passed. AWS completed 192 of 192 workflows and Hetzner 192 of 192, with the same resident and host boot throughout. Resident memory: AWS 193 → 235 MiB (peak 235 MiB); Hetzner 196 → 235 MiB (peak 241 MiB). Cleanup was verified on both providers. It ran 48 hours, not 72, and does not cover crash, reboot, or disk loss. Earlier campaigns did not pass; see the [soak guide](operational-soak.md). |
+| Hetzner route                                                                             | Fixed in v0.0.17 by [PR #175](https://github.com/wharfie/wharfie/pull/175). Since Hetzner's 2026-11-02 API change, v0.0.15 fails `deployment preview` and a first `deployment apply` before creating anything. The rehearsal and soak above ran on Hetzner.                                                                                                                                                                                                                                                                                                                         |
+| Operator commands while the service writes                                                | [Known issue](#known-issue-operator-commands-while-the-service-writes) in v0.0.17 and earlier: briefly stale results and, rarely, a resident exit. Not a regression. Fixed on `master` by #181 and #182; ships in 0.0.18, not yet released.                                                                                                                                                                                                                                                                                                                                         |
+| Unfamiliar tester handoffs                                                                | Pending; this guide and worksheet make those trials repeatable.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Journal performance change merged in [PR168](https://github.com/wharfie/wharfie/pull/168) | Included in v0.0.17, so the soak above ran with it. Journal rollover is not built; see the [capacity guide](deployment-journal-capacity.md).                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ## Maintainer acceptance
 
@@ -290,8 +331,8 @@ files and runs the standalone Wharfie CLI with an empty `PATH`:
 
 ```bash
 node scripts/verify-preview-recipient.js \
-  --tag v0.0.15 \
-  --expected-commit aae74e0de018fe340564c08c0c820ff590de1894 \
+  --tag v0.0.17 \
+  --expected-commit ea93520d91d9020d8a192fd1fa0fa5779d6e02ad \
   --download-only --report /absolute/new/public-recipient.json
 ```
 
