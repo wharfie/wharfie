@@ -328,19 +328,20 @@ describeOnUnix('one holder per local store', () => {
     );
     const waiting = await resident.next();
     expect(waiting).toMatchObject({ waiting: true });
-    // Hold phase 1 for most of the bound, so a fresh bound for phase 2 would
-    // end far later (about 11.5 s) than the shared one (about 6 s).
-    await new Promise((resolve) => setTimeout(resolve, 5_500));
+    // Hold phase 1 for 4.5 s of the 6 s bound: 1.5 s of slack before phase 1
+    // itself would give up, and a fresh bound for phase 2 would end near
+    // 10.5 s, far from the shared one (about 6 s).
+    await new Promise((resolve) => setTimeout(resolve, 4_500));
     endpointOnly.send('release');
     expect(await endpointOnly.next()).toMatchObject({ released: true });
 
     const ended = await resident.next();
     expect(ended).toMatchObject({ ended: true, code: 'local-store-busy' });
-    // One 6 s deadline for both phases: about 5.5 s of host wait, then only
-    // the remaining ~0.5 s for the lock. A fresh 6 s for the lock would end
-    // near 11.5 s, well clear of this window.
+    // One 6 s deadline for both phases: about 4.5 s of host wait, then only
+    // the remaining ~1.5 s for the lock. A fresh 6 s for the lock would end
+    // near 10.5 s, well clear of this window.
     expect(ended.at - waiting.at).toBeGreaterThanOrEqual(heldWaitMs - 200);
-    expect(ended.at - waiting.at).toBeLessThan(heldWaitMs + 3_000);
+    expect(ended.at - waiting.at).toBeLessThan(heldWaitMs + 2_500);
     expect(nativeOpensBy(root, resident.child.pid)).toEqual([]);
   }, 60_000);
 
