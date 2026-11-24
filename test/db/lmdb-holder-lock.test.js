@@ -124,6 +124,8 @@ function snapshotDirectory(directory) {
     });
 }
 
+const testUnlessRoot = process.geteuid?.() === 0 ? test.skip : test;
+
 describe('LMDB holder lock across processes', () => {
   test('lets direct readers share a store while nobody writes it', async () => {
     const store = await createStore();
@@ -469,47 +471,53 @@ describe('LMDB holder lock across processes', () => {
     30_000,
   );
 
-  test("another user is refused before a missing store is created in the owner's tree", async () => {
-    const parent = mkdtempSync(join(tmpdir(), 'wharfie-holder-lock-create-'));
-    roots.push(parent);
-    const ownerUid = lstatSync(parent).uid;
-    const before = snapshotDirectory(parent);
-    for (const dbRoot of [
-      join(parent, 'lmdb'),
-      join(parent, 'deeper', 'control', 'lmdb'),
-    ]) {
+  // As a non-root owner acting as another user: run as root, the store is
+  // root's, which the root-only test covers.
+  testUnlessRoot(
+    "another user is refused before a missing store is created in the owner's tree",
+    async () => {
+      const parent = mkdtempSync(join(tmpdir(), 'wharfie-holder-lock-create-'));
+      roots.push(parent);
+      const ownerUid = lstatSync(parent).uid;
+      const before = snapshotDirectory(parent);
+      for (const dbRoot of [
+        join(parent, 'lmdb'),
+        join(parent, 'deeper', 'control', 'lmdb'),
+      ]) {
+        expect(() =>
+          assertMayCreateLocalStore(dbRoot, { effectiveUid: ownerUid + 1 }),
+        ).toThrow(
+          expect.objectContaining({
+            code: 'local-store-lock',
+            message: expect.stringContaining(
+              `${parent}, belongs to uid ${ownerUid}`,
+            ),
+          }),
+        );
+        // The owner, and the tree's root-owned ancestors, may create it.
+        expect(() =>
+          assertMayCreateLocalStore(dbRoot, { effectiveUid: ownerUid }),
+        ).not.toThrow();
+      }
+      expect(snapshotDirectory(parent)).toEqual(before);
+      // Root-owned ancestors only: anyone may create a store under them.
       expect(() =>
-        assertMayCreateLocalStore(dbRoot, { effectiveUid: ownerUid + 1 }),
-      ).toThrow(
-        expect.objectContaining({
-          code: 'local-store-lock',
-          message: expect.stringContaining(
-            `${parent}, belongs to uid ${ownerUid}`,
-          ),
+        assertMayCreateLocalStore('/wharfie-missing-test-root/control/lmdb', {
+          effectiveUid: ownerUid + 1,
         }),
-      );
-      // The owner, and the tree's root-owned ancestors, may create it.
-      expect(() =>
-        assertMayCreateLocalStore(dbRoot, { effectiveUid: ownerUid }),
       ).not.toThrow();
-    }
-    expect(snapshotDirectory(parent)).toEqual(before);
-    // Root-owned ancestors only: anyone may create a store under them.
-    expect(() =>
-      assertMayCreateLocalStore('/wharfie-missing-test-root/control/lmdb', {
-        effectiveUid: ownerUid + 1,
-      }),
-    ).not.toThrow();
-    // A link on the way counts its own owner too: root acting through a
-    // user's link is refused.
-    const link = join(parent, 'link-to-root');
-    symlinkSync('/', link);
-    expect(() =>
-      assertMayCreateLocalStore(join(link, 'wharfie-missing-test', 'lmdb'), {
-        effectiveUid: 0,
-      }),
-    ).toThrow(expect.objectContaining({ code: 'local-store-lock' }));
-  }, 30_000);
+      // A link on the way counts its own owner too: root acting through a
+      // user's link is refused.
+      const link = join(parent, 'link-to-root');
+      symlinkSync('/', link);
+      expect(() =>
+        assertMayCreateLocalStore(join(link, 'wharfie-missing-test', 'lmdb'), {
+          effectiveUid: 0,
+        }),
+      ).toThrow(expect.objectContaining({ code: 'local-store-lock' }));
+    },
+    30_000,
+  );
 
   test('a root-owned store directory is refused without suggesting to run as root', async () => {
     const failure = (() => {
@@ -570,42 +578,48 @@ describe('LMDB holder lock across processes', () => {
     await writer.next();
   }, 30_000);
 
-  test('another user is refused before anything in the store is created, opened, removed or changed', async () => {
-    const store = await createStore();
-    const dbRoot = join(store, 'lmdb');
-    // No lock file yet, so a create would show; a stale record, so a removal
-    // would show.
-    rmSync(join(dbRoot, LMDB_HOLDER_LOCK_FILE));
-    writeFileSync(
-      join(dbRoot, LMDB_HOLDER_RECORD_FILE),
-      JSON.stringify({ pid: process.pid, startedAt: 1, command: 'stale' }),
-      { mode: 0o600 },
-    );
-    const before = snapshotDirectory(dbRoot);
-    const ownerUid = lstatSync(dbRoot).uid;
-    for (const exclusive of [true, false]) {
-      let refusal;
-      try {
-        // Act as a user who does not own the directory (root, in
-        // production), without needing root here.
-        tryAcquireLmdbHolderLock(dbRoot, {
-          exclusive,
-          readOnly: !exclusive,
-          effectiveUid: ownerUid + 1,
-        });
-      } catch (error) {
-        refusal = error;
+  // As a non-root owner acting as another user: run as root, the store is
+  // root's, which the root-only test covers.
+  testUnlessRoot(
+    'another user is refused before anything in the store is created, opened, removed or changed',
+    async () => {
+      const store = await createStore();
+      const dbRoot = join(store, 'lmdb');
+      // No lock file yet, so a create would show; a stale record, so a removal
+      // would show.
+      rmSync(join(dbRoot, LMDB_HOLDER_LOCK_FILE));
+      writeFileSync(
+        join(dbRoot, LMDB_HOLDER_RECORD_FILE),
+        JSON.stringify({ pid: process.pid, startedAt: 1, command: 'stale' }),
+        { mode: 0o600 },
+      );
+      const before = snapshotDirectory(dbRoot);
+      const ownerUid = lstatSync(dbRoot).uid;
+      for (const exclusive of [true, false]) {
+        let refusal;
+        try {
+          // Act as a user who does not own the directory (root, in
+          // production), without needing root here.
+          tryAcquireLmdbHolderLock(dbRoot, {
+            exclusive,
+            readOnly: !exclusive,
+            effectiveUid: ownerUid + 1,
+          });
+        } catch (error) {
+          refusal = error;
+        }
+        expect(refusal).toMatchObject({ code: 'local-store-lock' });
+        expect(/** @type {Error} */ (refusal).message).toContain(
+          `belongs to uid ${ownerUid}, and this process runs as uid ${ownerUid + 1}`,
+        );
+        expect(/** @type {Error} */ (refusal).message).toContain(
+          `sudo -u '#${ownerUid}'`,
+        );
       }
-      expect(refusal).toMatchObject({ code: 'local-store-lock' });
-      expect(/** @type {Error} */ (refusal).message).toContain(
-        `belongs to uid ${ownerUid}, and this process runs as uid ${ownerUid + 1}`,
-      );
-      expect(/** @type {Error} */ (refusal).message).toContain(
-        `sudo -u '#${ownerUid}'`,
-      );
-    }
-    expect(snapshotDirectory(dbRoot)).toEqual(before);
-  }, 30_000);
+      expect(snapshotDirectory(dbRoot)).toEqual(before);
+    },
+    30_000,
+  );
 
   test('refuses a store whose LMDB directory is a symbolic link, creating nothing through it', async () => {
     const store = await createStore();
