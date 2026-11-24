@@ -302,7 +302,7 @@ describe('docs command surface', () => {
     expect(installationDoc).toContain('node ./bin/wharfie --help');
     expect(installationDoc).toMatch(/standalone builder\s+binary/u);
     expect(installationDoc).toContain(
-      'npm install --save-dev @wharfie/wharfie@0.0.15',
+      'npm install --save-dev @wharfie/wharfie@0.0.17',
     );
     expect(installationDoc).toContain('not ready for production use');
     expect(installationDoc).not.toContain('releases/latest');

@@ -1,13 +1,13 @@
 # Installation
 
-Wharfie **v0.0.15** is published for evaluation on npm's `preview` channel and
-as a [GitHub prerelease](https://github.com/wharfie/wharfie/releases/tag/v0.0.15).
+Wharfie **v0.0.17** is published for evaluation on npm's `preview` channel and
+as a [GitHub prerelease](https://github.com/wharfie/wharfie/releases/tag/v0.0.17).
 It is experimental and not ready for production use. Start with the
 [build, share, and persistent-host guide](recipient-preview.md) for one complete
 tested journey. To install its exact Node-hosted builder version:
 
 ```bash
-npm install --save-dev @wharfie/wharfie@0.0.15
+npm install --save-dev @wharfie/wharfie@0.0.17
 ./node_modules/.bin/wharfie --help
 ```
 
@@ -18,9 +18,9 @@ promotion. Preview publication does not move npm's `latest` tag.
 
 The exact preview package and provider-free Linux x64 glibc standalone builder
 binary release contract is documented in
-[Preview releases](./preview-release.md). v0.0.15 records source commit
-`aae74e0de018fe340564c08c0c820ff590de1894`; later changes on `master`, including
-the journal performance work in PR168, are not part of those published bytes.
+[Preview releases](./preview-release.md). v0.0.17 records source commit
+`ea93520d91d9020d8a192fd1fa0fa5779d6e02ad`; later changes on `master` are not
+part of those published bytes.
 For development against current source instead:
 
 ```bash
@@ -45,7 +45,7 @@ The smallest application example is the
 [magnetic hello-world starter](../../examples/hello-world/README.md). Its
 repository gate copies only that starter, installs Wharfie's freshly packed npm
 tarball, hides the disposable builder, and proves relocated Node-absent
-execution plus named durable resumption. The v0.0.15 publication gates also ran
+execution plus named durable resumption. The v0.0.17 publication gates also ran
 the matching public-registry consumer proof. For the service and fresh-controller
 journey, use the single [recipient handoff guide](recipient-preview.md).
 
@@ -74,12 +74,12 @@ operations use the one version-matched `@wharfie/aws` companion. A source
 checkout receives it through `npm ci`; a clean consumer installs the matching
 companion tarball next to core. The preview workflow publishes core on npm and
 attaches the checksummed companion to the matching GitHub prerelease; it does
-not publish the companion to npm. For v0.0.15, download and verify
-[wharfie-aws-0.0.15.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.15/wharfie-aws-0.0.15.tgz)
+not publish the companion to npm. For v0.0.17, download and verify
+[wharfie-aws-0.0.17.tgz](https://github.com/wharfie/wharfie/releases/download/v0.0.17/wharfie-aws-0.0.17.tgz)
 using that release's manifest and checksums, then install the exact pair:
 
 ```bash
-npm install --save-dev @wharfie/wharfie@0.0.15 /absolute/handoff/wharfie-aws-0.0.15.tgz
+npm install --save-dev @wharfie/wharfie@0.0.17 /absolute/handoff/wharfie-aws-0.0.17.tgz
 ```
 
 If the companion is absent, malformed, or version-incompatible, a deployment

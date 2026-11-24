@@ -59,8 +59,8 @@ npm pack --workspace @wharfie/aws --ignore-scripts \
 
 The commands create two intentional handoff artifacts:
 
-- `wharfie-wharfie-0.0.15.tgz` is the AWS-provider-free core builder.
-- `wharfie-aws-0.0.15.tgz` is the version-matched AWS companion.
+- `wharfie-wharfie-0.0.17.tgz` is the AWS-provider-free core builder.
+- `wharfie-aws-0.0.17.tgz` is the version-matched AWS companion.
 
 The verification commands create and remove their own temporary tarballs, npm
 caches, clean consumers, and relocated SEA proof. The final `npm pack` commands
@@ -73,7 +73,7 @@ In a clean builder workspace, install core without bypassing package scripts:
 ```bash
 npm init -y
 npm install --no-audit --no-fund \
-  /absolute/path/to/wharfie-handoff/wharfie-wharfie-0.0.15.tgz
+  /absolute/path/to/wharfie-handoff/wharfie-wharfie-0.0.17.tgz
 
 cp -R node_modules/@wharfie/wharfie/examples/steady-file ./steady-file
 
@@ -94,8 +94,8 @@ install both handoff artifacts first when that outer operator must support AWS:
 
 ```bash
 npm install --no-audit --no-fund \
-  /absolute/path/to/wharfie-handoff/wharfie-wharfie-0.0.15.tgz \
-  /absolute/path/to/wharfie-handoff/wharfie-aws-0.0.15.tgz
+  /absolute/path/to/wharfie-handoff/wharfie-wharfie-0.0.17.tgz \
+  /absolute/path/to/wharfie-handoff/wharfie-aws-0.0.17.tgz
 
 ./node_modules/.bin/wharfie app package ./steady-file \
   --self-deployable \

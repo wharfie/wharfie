@@ -9,8 +9,8 @@ through a durable timer, reconnect, and cleanup. Use an existing Linux server
 first, or follow its optional AWS and Hetzner routes.
 
 The published preview is
-[v0.0.15](https://github.com/wharfie/wharfie/releases/tag/v0.0.15), built from
-[`aae74e0de018fe340564c08c0c820ff590de1894`](https://github.com/wharfie/wharfie/commit/aae74e0de018fe340564c08c0c820ff590de1894).
+[v0.0.17](https://github.com/wharfie/wharfie/releases/tag/v0.0.17), built from
+[`ea93520d91d9020d8a192fd1fa0fa5779d6e02ad`](https://github.com/wharfie/wharfie/commit/ea93520d91d9020d8a192fd1fa0fa5779d6e02ad).
 The guide pins the matching downloads and checksums. npm's `preview` channel is
 separate from `latest`; use the exact version when reporting results.
 
@@ -41,12 +41,13 @@ application's data and, for cloud deployments, the controller's deployment
 journal and SSH authority. Destroying a cloud host removes its root-disk data.
 This preview does not provide automatic recovery from loss of that disk.
 
-Published-download and recipient acceptance passed for v0.0.15. The full
-72-hour operational soak and unfamiliar-tester acceptance are still pending.
-The merged journal-capacity performance fix is newer than v0.0.15; results for
-that preview do not establish results for the newer runtime. The
-[handoff's evidence record](guides/recipient-preview.md) keeps these boundaries
-next to the version being tested.
+Published-download and recipient acceptance passed for v0.0.17, and so did a
+48-hour operational soak on AWS and Hetzner. Unfamiliar-tester acceptance is
+still pending. Operator commands that run while the service writes have a
+[known issue](guides/recipient-preview.md#known-issue-operator-commands-while-the-service-writes)
+in this preview. The
+[handoff's evidence record](guides/recipient-preview.md#release-evidence) keeps
+these boundaries next to the version being tested.
 
 ## Maintainers and contributors
 
@@ -66,7 +67,7 @@ next to the version being tested.
   evidence. Check each checkpoint's date and source before applying its claims
   to a release.
 
-The old Athena/table product and its installers are retired. Until
-[issue 137](https://github.com/wharfie/wharfie/issues/137) is verified resolved,
-share the repository guide above with testers; the public docs domain still
-needs its current landing page deployed.
+The old Athena/table product and its installers are retired. The landing page
+at <https://docs.wharfie.dev/> links to these repository guides. It is
+published separately from this repository and can lag behind it; when it does,
+share the recipient guide above with testers directly.

@@ -2,7 +2,7 @@
 
 **Status:** product-outcome rebaseline
 
-**Last updated:** 2026-11-18
+**Last updated:** 2026-11-24
 
 Wharfie's roadmap now tracks three user-visible outcomes. Historical
 implementation detail belongs in the
@@ -295,29 +295,39 @@ internal-only status of coordinator replacement.
 - **Consumer dependencies and 0.0.16
   ([#172](https://github.com/wharfie/wharfie/pull/172)).** Two runtime tooling
   dependencies that caused 19 moderate findings in fresh core-only installs
-  were removed. The package version on `master` is 0.0.16.
+  were removed. It set the version to 0.0.16, which was tagged but never
+  published; `master` is 0.0.17 since [#178](https://github.com/wharfie/wharfie/pull/178).
 
-### Release state at 2026-11-18
+### Release state
 
-- npm `@wharfie/wharfie` dist-tags: `latest` 0.0.14, `preview` 0.0.15,
-  `preview-candidate` 0.0.15, `next` 0.0.13-0. The GitHub prerelease is
-  v0.0.15.
-- Tag `v0.0.16` exists on `6739bb92` (PR #172). Version 0.0.16 was never
-  published. The next release is 0.0.17.
-- **Hetzner is broken in 0.0.15 and 0.0.16.** Hetzner removed the `deprecated`
-  field from image responses on 2026-11-02
-  ([Hetzner changelog](https://docs.hetzner.cloud/changelog)). The image
-  decoder on `master` (`decodeHetznerImage` in
-  `src/core/runtime/providers/hetzner/api-documents.js`) still requires that
-  field, so `preview` fails with "Hetzner API response document is invalid."
-  before anything is created. The fix is
-  [PR #175](https://github.com/wharfie/wharfie/pull/175); 0.0.17 is the first
-  release planned to carry it.
-- The November soak campaign for 0.0.16 failed at its Hetzner rehearsal for
-  that reason. Its AWS rehearsal passed. Its controller was removed and
-  verified absent on 2026-11-18. The campaign stays recorded as failed.
-- The release plan and handoff are in the
-  [November checkpoint](llm/checkpoints/2026-11-18-release-recovery.md).
+Recorded 2026-11-24.
+
+- npm `@wharfie/wharfie` dist-tags: `latest` 0.0.14, `preview` 0.0.17,
+  `preview-candidate` 0.0.17, `next` 0.0.13-0. The GitHub prerelease is
+  [v0.0.17](https://github.com/wharfie/wharfie/releases/tag/v0.0.17), from
+  `ea93520d` (PR #179).
+- Since 0.0.16, 0.0.17 adds Hetzner image decoding after Hetzner's 2026-11-02
+  API change ([#175](https://github.com/wharfie/wharfie/pull/175)), the soak
+  controller in the repository
+  ([#177](https://github.com/wharfie/wharfie/pull/177)), pinned CI runner
+  images ([#174](https://github.com/wharfie/wharfie/pull/174)), and lmdb
+  3.5.11 so a failed store open throws instead of crashing
+  ([#179](https://github.com/wharfie/wharfie/pull/179)). 0.0.15 is still
+  broken on Hetzner.
+- 0.0.17 passed the first completed operational soak: 48 hours on AWS and
+  Hetzner, 192 of 192 workflows on each, cleanup verified. See the
+  [soak guide](docs/guides/operational-soak.md#campaign-results).
+- Tag `v0.0.16` stays on `6739bb92` (PR #172). Version 0.0.16 was never
+  published: its November 5 campaign failed at the Hetzner rehearsal.
+- 0.0.17 ships a dated known issue: an operator command that opens and closes
+  the local store while the resident writes can cause briefly stale reads and,
+  rarely, a resident exit. It is fixed on `master` by
+  [#181](https://github.com/wharfie/wharfie/pull/181) and
+  [#182](https://github.com/wharfie/wharfie/pull/182) and ships in 0.0.18. See
+  the
+  [recipient guide](docs/guides/recipient-preview.md#known-issue-operator-commands-while-the-service-writes).
+- The release record is the
+  [0.0.17 checkpoint](llm/checkpoints/2026-11-24-0.0.17-released.md).
 
 ## Outcome 1: a local CLI becomes a durable portable service
 
@@ -772,11 +782,10 @@ capability.
    durable work, guest audit, reboot, fault injection, and bounded proof
    receipts. `verify:deployment:live` now covers packaged remote durable work,
    resident crash, provider-requested reboot, and release update and
-   interruption on both providers (#161–#163). The 48- or 72-hour soak (#165)
-   has never completed, and the November 0.0.16 attempt stopped at the Hetzner
-   rehearsal because of the image-decoding defect described under
-   [Release state](#release-state-at-2026-11-18). Abrupt disk or power loss is
-   not covered.
+   interruption on both providers (#161–#163). The first completed soak (#165)
+   ran 48 hours on both providers for 0.0.17 (see
+   [Release state](#release-state)); no 72-hour soak has completed. Abrupt
+   disk or power loss is not covered.
 2. Add authenticated journal checkpoint/epoch rollover before treating one
    coordinator as indefinitely evolving; v3 currently reserves terminal
    records for recovery and destruction, then refuses further updates. PR #168
