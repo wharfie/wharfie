@@ -869,7 +869,9 @@ const APPLICATION_STATE_RESIDUAL_CEILING = Object.freeze({
   // the schedule-restart proof's two resident boots.
   readyProof: process.platform === 'linux' ? 13 : 11,
   // One application-state readback by the crash-matrix fixture while a
-  // live, unpaused SEA process holds that store (measured on both platforms).
+  // live, unpaused SEA process holds that store. A holder that is merely
+  // exiting is waited out first (installed-store-open.js unhostedGraceMs);
+  // without that wait this count varied with timing (2 on one hosted run).
   fixture: 1,
 });
 

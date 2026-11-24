@@ -44,7 +44,7 @@ async function heldStore() {
   })[Symbol.asyncIterator]();
   const first = await lines.next();
   expect(JSON.parse(String(first.value))).toMatchObject({ opened: true });
-  return { root, holderPid: /** @type {number} */ (holder.pid) };
+  return { root, holder, holderPid: /** @type {number} */ (holder.pid) };
 }
 
 describeOnUnix("a verifier's direct open of an installed store", () => {
@@ -72,12 +72,30 @@ describeOnUnix("a verifier's direct open of an installed store", () => {
   test('reads a store with no read host beside its holder only when told to, and reports it', async () => {
     const { root } = await heldStore();
     const onUnhostedRead = jest.fn();
+    const started = Date.now();
     const db = await openInstalledStore(adapterModule, root, true, {
       isPausedHere: () => false,
       unhostedStore: true,
       onUnhostedRead,
+      unhostedGraceMs: 300,
     });
+    // Only after the grace period: a holder that stays is counted.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(300);
     expect(onUnhostedRead).toHaveBeenCalledTimes(1);
+    await db.close();
+  }, 30_000);
+
+  test('waits out a holder that leaves within the grace period instead of counting it', async () => {
+    const { root, holder } = await heldStore();
+    setTimeout(() => holder.kill('SIGKILL'), 200);
+    const onUnhostedRead = jest.fn();
+    const db = await openInstalledStore(adapterModule, root, true, {
+      isPausedHere: () => false,
+      unhostedStore: true,
+      onUnhostedRead,
+      unhostedGraceMs: 5_000,
+    });
+    expect(onUnhostedRead).not.toHaveBeenCalled();
     await db.close();
   }, 30_000);
 });
