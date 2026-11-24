@@ -31,6 +31,9 @@ MAX_POLL_FAILURE_SECONDS = 900
 # Least time `prepare` must leave before `latest_start` for apply, bootstrap,
 # token, and start. Measured: 9 min on 2026-11-05 and 46 min on 2026-11-19.
 PROVISION_BUDGET = 3600
+# Least time a stack-creating `apply` must leave before `latest_start` so that
+# `start` can still follow. Measured apply to start: 10 m 55 s on 2026-11-19.
+APPLY_START_MARGIN = 1200
 DEFAULT_SSM_KEY = 'alias/aws/ssm'
 
 
@@ -107,6 +110,8 @@ def prepare(options):
     }
     config['specSha256'] = canonical_digest(config)
     # The same rule `apply` and `start` enforce, applied before anything is written.
+    # With the current constants latest_start is 75 min after createdAt, so this
+    # cannot fire; it guards future changes to the supervisor's constants.
     if latest_start(config) - created < PROVISION_BUDGET:
         raise RuntimeError('campaign-window-cannot-hold-setup-and-full-soak')
     atomic_json(root / 'campaign.json', config)
@@ -244,6 +249,13 @@ class Operator:
 
     def apply(self):
         self.verify_local_bundle()
+        # An apply that may still create a stack refuses when `start` could not
+        # follow before latest_start; that stack would be billed but unusable.
+        remaining = int(latest_start(self.config) - time.time())
+        if not self.ownership.get('stackId') and remaining < APPLY_START_MARGIN:
+            print(json.dumps({'status': 'apply-refused', 'secondsBeforeStartBy': remaining,
+                              'requiredSeconds': APPLY_START_MARGIN}), file=sys.stderr)
+            raise RuntimeError('campaign-start-too-close-for-apply-prepare-new-campaign')
         self.identity()
         image = self.aws('ec2', 'describe-images', {'ImageIds': [self.config['imageId']], 'Owners': ['099720109477']})
         if len(image['Images']) != 1 or image['Images'][0]['State'] != 'available':
@@ -298,7 +310,8 @@ class Operator:
         self.ownership['status'] = 'provisioned'
         self.save()
         self.stage_inputs()
-        print(json.dumps({'status': 'provisioned', 'controllerId': self.ownership['outputs']['ControllerId']}))
+        print(json.dumps({'status': 'provisioned', 'controllerId': self.ownership['outputs']['ControllerId'],
+                          'secondsBeforeStartBy': int(latest_start(self.config) - time.time())}))
 
     def stage_inputs(self):
         """Upload and read back the exact frozen inputs while bootstrap waits."""

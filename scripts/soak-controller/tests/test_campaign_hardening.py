@@ -270,7 +270,8 @@ class RecoverableAttemptTests(unittest.TestCase):
         self.operator.aws = aws
         self.operator.wait_stack = wait_stack
         self.operator.stage_inputs = mock.Mock()
-        with contextlib.redirect_stdout(io.StringIO()):
+        self.output = io.StringIO()
+        with contextlib.redirect_stdout(self.output):
             self.operator.apply()
 
     def missing_stack(self, _value):
@@ -326,6 +327,40 @@ class RecoverableAttemptTests(unittest.TestCase):
             self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
         self.operator.bucket_state.assert_called_once()
         self.assertIsNone(self.operator.ownership['stackId'])
+
+    def test_apply_refuses_inside_the_start_margin_before_any_aws_call(self):
+        boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
+        for attempted in (False, True):
+            with self.subTest(createAttempted=attempted):
+                self.operator.ownership['createAttempted'] = attempted
+                self.calls.clear()
+                errors = io.StringIO()
+                with mock.patch.object(ops.time, 'time', return_value=boundary + 1), \
+                     contextlib.redirect_stderr(errors), \
+                     self.assertRaisesRegex(RuntimeError, 'campaign-start-too-close-for-apply-prepare-new-campaign'):
+                    self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
+                self.assertEqual(self.calls, [])
+                self.operator.identity.assert_not_called()
+                self.operator.bucket_state.assert_not_called()
+                self.operator.save.assert_not_called()
+                self.assertIsNone(self.operator.ownership['stackId'])
+                self.assertEqual(json.loads(errors.getvalue())['secondsBeforeStartBy'],
+                                 ops.APPLY_START_MARGIN - 1)
+
+    def test_apply_is_accepted_at_the_start_margin_and_reports_the_time_left(self):
+        boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
+        with mock.patch.object(ops.time, 'time', return_value=boundary):
+            self.apply(lambda _value: {'StackId': 'arn:aws:cloudformation:exact'}, self.missing_stack)
+        self.assertEqual(self.operator.ownership['status'], 'provisioned')
+        self.assertEqual([action for action, _ in self.calls].count('create-stack'), 1)
+        self.assertEqual(json.loads(self.output.getvalue())['secondsBeforeStartBy'], ops.APPLY_START_MARGIN)
+
+    def test_apply_for_a_recorded_stack_is_not_held_to_the_start_margin(self):
+        self.operator.ownership.update(stackId='arn:aws:cloudformation:exact', createAttempted=True)
+        boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
+        with mock.patch.object(ops.time, 'time', return_value=boundary + 1):
+            self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
+        self.assertEqual(self.operator.ownership['status'], 'provisioned')
 
     def test_cli_absence_codes_are_parsed_privately(self):
         for stderr, code in (
