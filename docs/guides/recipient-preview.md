@@ -193,9 +193,9 @@ resident service is writing at that moment, you may see either of these:
   `MDB_PROBLEM` or "No transaction to renew". A command such as `start` can
   fail with the same error.
 
-In stress tests that opened and closed the store every 5 milliseconds next to
-a process that wrote continuously, the writer exited in about half of the
-two-to-three-minute runs. At intervals from 50 milliseconds to one second, only
+In stress tests that opened and closed the store read-only every 5
+milliseconds next to a process that wrote continuously, the writer exited in
+four of six two-to-three-minute runs. At intervals from 50 milliseconds to one second, only
 stale results appeared. The 48-hour release soak opens the store this way about
 60 to 130 times every fifteen minutes on each provider, and its resident ran
 without a restart for the whole soak.

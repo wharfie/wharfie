@@ -23,7 +23,10 @@ Use the controller prerequisites and narrow SSH access described in
 
 Campaign `wharfie-soak-20261119-v017b` tested the exact v0.0.17 release files
 from source `ea93520`, with 48-hour soaks: AWS `t3.small` in `us-east-2` and
-Hetzner `cx23` in `fsn1`. One disposable EC2 controller ran it unattended.
+Hetzner `cx23` in `fsn1`. One disposable EC2 controller ran it. The launch
+needed an operator retry of the gate-approval step, which
+[PR #180](https://github.com/wharfie/wharfie/pull/180) later fixed; the 48-hour
+soaks themselves ran unattended.
 
 Both fifteen-minute rehearsals passed on 2026-11-19 with three workflows each
 and cleanup verified absent. The AWS soak started at 2026-11-19T23:00:49Z and

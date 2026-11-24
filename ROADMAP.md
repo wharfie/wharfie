@@ -284,8 +284,8 @@ internal-only status of coordinator replacement.
   templates, a bundle helper, and an HTTPS route verifier are in the
   repository (see the [docs site runbook](docs/guides/docs-site.md)). The
   merged text records that the public DNS cutover was still pending and that
-  issue #137 stayed open. [PR #171](https://github.com/wharfie/wharfie/pull/171)
-  is a separate open draft for hosting; it is not merged.
+  issue #137 stayed open. [PR #171](https://github.com/wharfie/wharfie/pull/171),
+  a separate draft for hosting, was closed unmerged on 2026-11-24.
 - **Repository cleanup
   ([#159](https://github.com/wharfie/wharfie/pull/159)).** The source
   `wharfie deployment` command and the `@wharfie/wharfie/deployment-profile`
