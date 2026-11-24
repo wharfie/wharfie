@@ -11,6 +11,7 @@ import { getLmdbModule } from '../../lmdb-module.js';
 import {
   LocalStoreBusyError,
   LocalStoreLockError,
+  assertMayCreateLocalStore,
   tryAcquireLmdbHolderLock,
 } from '../lmdb-holder-lock.js';
 import {
@@ -320,6 +321,9 @@ export default function createLMDB(options = {}) {
     // login shell uses a group-writable umask. Packaged work admitted before
     // service installation must remain acceptable to the service manager's
     // ownership and permission checks.
+    // A store is created only by the user who owns its directory tree (see
+    // lmdb-holder-lock.js), so this check runs before anything is created.
+    if (options.holderLock === true) assertMayCreateLocalStore(dbRoot);
     mkdirSync(dbRoot, { recursive: true, mode: 0o700 });
   }
 

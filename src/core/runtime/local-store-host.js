@@ -7,7 +7,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import v8 from 'node:v8';
 
 import { DB_ADAPTER_NAMES, brandDBClient } from '../lib/db/base.js';
-import { waitForLocalStore } from '../lib/db/lmdb-holder-lock.js';
+import {
+  assertMayCreateLocalStore,
+  waitForLocalStore,
+} from '../lib/db/lmdb-holder-lock.js';
 import {
   ensureLocalServiceSocketDirectory,
   getLocalServiceSessionPrincipalId,
@@ -741,6 +744,8 @@ function heldBy(endpoint) {
  */
 export async function acquireLocalStoreHost(options) {
   if (process.platform === 'win32') return undefined;
+  // The same refusal as the store's own creation, before creating its path.
+  assertMayCreateLocalStore(join(options.storePath, 'lmdb'));
   await fsp.mkdir(options.storePath, { recursive: true, mode: 0o700 });
   const storeRoot = realpathSync(options.storePath);
   if (hostsInProcess.has(storeRoot)) {
