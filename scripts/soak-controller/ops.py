@@ -124,7 +124,8 @@ def prepare(options):
         'assetsDirectory': str(assets),
     })
     print(json.dumps({'status': 'prepared', 'state': str(root), 'stopAtUtc':
-        datetime.fromtimestamp(config['stopAt'], timezone.utc).isoformat(), 'startByUtc':
+        datetime.fromtimestamp(config['stopAt'], timezone.utc).isoformat(), 'applyByUtc':
+        datetime.fromtimestamp(latest_start(config) - APPLY_START_MARGIN, timezone.utc).isoformat(), 'startByUtc':
         datetime.fromtimestamp(latest_start(config), timezone.utc).isoformat()}))
 
 
@@ -247,15 +248,21 @@ class Operator:
             time.sleep(5)
         raise RuntimeError('campaign-stack-deadline')
 
-    def apply(self):
-        self.verify_local_bundle()
-        # An apply that may still create a stack refuses when `start` could not
-        # follow before latest_start; that stack would be billed but unusable.
+    def refuse_create_too_close_to_start(self):
+        # A stack created now would be billed, but `start` could not follow it
+        # before latest_start.
         remaining = int(latest_start(self.config) - time.time())
-        if not self.ownership.get('stackId') and remaining < APPLY_START_MARGIN:
+        if remaining < APPLY_START_MARGIN:
             print(json.dumps({'status': 'apply-refused', 'secondsBeforeStartBy': remaining,
                               'requiredSeconds': APPLY_START_MARGIN}), file=sys.stderr)
             raise RuntimeError('campaign-start-too-close-for-apply-prepare-new-campaign')
+
+    def apply(self):
+        self.verify_local_bundle()
+        # A first apply refuses before any AWS call. A rerun after an attempted
+        # create first reconciles, so a stack that exists is still recorded.
+        if not self.ownership.get('stackId') and not self.ownership.get('createAttempted'):
+            self.refuse_create_too_close_to_start()
         self.identity()
         image = self.aws('ec2', 'describe-images', {'ImageIds': [self.config['imageId']], 'Owners': ['099720109477']})
         if len(image['Images']) != 1 or image['Images'][0]['State'] != 'available':
@@ -267,6 +274,7 @@ class Operator:
             # the request token is unchanged, so a retry cannot add a second stack.
             found = self.existing_stack() if self.ownership.get('createAttempted') else None
             if found is None:
+                self.refuse_create_too_close_to_start()
                 if self.ownership.get('status') != 'prepared':
                     raise RuntimeError('campaign-not-in-prepared-state')
                 # The retained proof bucket has a fixed name. If it exists, an

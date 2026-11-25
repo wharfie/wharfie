@@ -428,9 +428,18 @@ class SoakLengthPreparationTests(unittest.TestCase):
         with contextlib.redirect_stdout(output):
             ops.prepare(options)
         config = ops.read_json(options.state / 'campaign.json')
-        reported = datetime.fromisoformat(json.loads(output.getvalue())['startByUtc']).timestamp()
+        printed = json.loads(output.getvalue())
+        reported = datetime.fromisoformat(printed['startByUtc']).timestamp()
         self.assertEqual(reported, ops.latest_start(config))
         self.assertGreaterEqual(ops.latest_start(config) - config['createdAt'], ops.PROVISION_BUDGET)
+        apply_by = datetime.fromisoformat(printed['applyByUtc']).timestamp()
+        self.assertEqual(apply_by, ops.latest_start(config) - ops.APPLY_START_MARGIN)
+        self.assertGreater(apply_by, config['createdAt'])
+
+    def test_every_prepared_campaign_leaves_time_to_apply(self):
+        # prepare guarantees PROVISION_BUDGET before latest_start; apply needs
+        # APPLY_START_MARGIN of it, so a prepared campaign always has an apply window.
+        self.assertLess(ops.APPLY_START_MARGIN, ops.PROVISION_BUDGET)
 
     def test_prepare_refuses_a_window_that_cannot_hold_setup_and_the_full_soak(self):
         # One more hour of setup leaves less than the provisioning budget: refuse

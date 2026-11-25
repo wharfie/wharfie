@@ -328,24 +328,46 @@ class RecoverableAttemptTests(unittest.TestCase):
         self.operator.bucket_state.assert_called_once()
         self.assertIsNone(self.operator.ownership['stackId'])
 
-    def test_apply_refuses_inside_the_start_margin_before_any_aws_call(self):
+    def test_first_apply_refuses_inside_the_start_margin_before_any_aws_call(self):
         boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
-        for attempted in (False, True):
-            with self.subTest(createAttempted=attempted):
-                self.operator.ownership['createAttempted'] = attempted
-                self.calls.clear()
-                errors = io.StringIO()
-                with mock.patch.object(ops.time, 'time', return_value=boundary + 1), \
-                     contextlib.redirect_stderr(errors), \
-                     self.assertRaisesRegex(RuntimeError, 'campaign-start-too-close-for-apply-prepare-new-campaign'):
-                    self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
-                self.assertEqual(self.calls, [])
-                self.operator.identity.assert_not_called()
-                self.operator.bucket_state.assert_not_called()
-                self.operator.save.assert_not_called()
-                self.assertIsNone(self.operator.ownership['stackId'])
-                self.assertEqual(json.loads(errors.getvalue())['secondsBeforeStartBy'],
-                                 ops.APPLY_START_MARGIN - 1)
+        errors = io.StringIO()
+        with mock.patch.object(ops.time, 'time', return_value=boundary + 1), \
+             contextlib.redirect_stderr(errors), \
+             self.assertRaisesRegex(RuntimeError, 'campaign-start-too-close-for-apply-prepare-new-campaign'):
+            self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
+        self.assertEqual(self.calls, [])
+        self.operator.identity.assert_not_called()
+        self.operator.bucket_state.assert_not_called()
+        self.operator.save.assert_not_called()
+        self.assertIsNone(self.operator.ownership['stackId'])
+        self.assertEqual(json.loads(errors.getvalue())['secondsBeforeStartBy'],
+                         ops.APPLY_START_MARGIN - 1)
+
+    def test_rerun_inside_the_start_margin_refuses_another_create_only_after_reconciling(self):
+        self.operator.ownership['createAttempted'] = True
+        boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
+        errors = io.StringIO()
+        with mock.patch.object(ops.time, 'time', return_value=boundary + 1), \
+             contextlib.redirect_stderr(errors), \
+             self.assertRaisesRegex(RuntimeError, 'campaign-start-too-close-for-apply-prepare-new-campaign'):
+            self.apply(lambda _value: self.fail('must not create'), self.missing_stack)
+        self.assertEqual([action for action, _ in self.calls], ['describe-images', 'describe-stacks'])
+        self.operator.bucket_state.assert_not_called()
+        self.operator.save.assert_not_called()
+        self.assertIsNone(self.operator.ownership['stackId'])
+        self.assertEqual(json.loads(errors.getvalue())['secondsBeforeStartBy'],
+                         ops.APPLY_START_MARGIN - 1)
+
+    def test_rerun_inside_the_start_margin_still_records_a_live_unrecorded_stack(self):
+        # create-stack succeeded but its response was lost before stackId was saved.
+        self.operator.ownership['createAttempted'] = True
+        boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
+        with mock.patch.object(ops.time, 'time', return_value=boundary + 1):
+            self.apply(lambda _value: self.fail('must not create'),
+                       lambda _value: {'Stacks': [self.stack_value()]})
+        self.assertNotIn('create-stack', [action for action, _ in self.calls])
+        self.assertEqual(self.operator.ownership['stackId'], 'arn:aws:cloudformation:exact')
+        self.assertEqual(self.operator.ownership['status'], 'provisioned')
 
     def test_apply_is_accepted_at_the_start_margin_and_reports_the_time_left(self):
         boundary = ops.latest_start(self.operator.config) - ops.APPLY_START_MARGIN
