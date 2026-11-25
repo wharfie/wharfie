@@ -94,6 +94,7 @@ export LC_ALL=C
 test "$(/usr/bin/cat /proc/sys/kernel/random/boot_id)" = "$1"
 test "$(/usr/bin/stat -c %u /proc/"$2")" = "$4"
 /usr/bin/cat /proc/"$2"/stat
+/usr/bin/grep -E '^Rss(Anon|File|Shmem):' /proc/"$2"/status
 /usr/bin/getconf PAGESIZE
 /usr/bin/getconf CLK_TCK
 for root in /home /home/wharfie /home/wharfie/.local /home/wharfie/.local/share /home/wharfie/.local/share/wharfie-nodejs /home/wharfie/.local/share/wharfie-nodejs/applications "$5" "$6" "$6/control" "$7"; do
@@ -562,7 +563,7 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
             .toString('utf8')
             .trim()
             .split('\n');
-          assert.equal(lines.length, 10);
+          assert.equal(lines.length, 13);
           const process = processIdentity(
             Buffer.from(`${before.uid}\n${lines[0]}\n`),
             before.process.pid,
@@ -579,8 +580,21 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
             assert.ok(Number.isSafeInteger(result) && result >= 0);
             return result;
           };
-          const pageBytes = number(lines[1]);
-          const clockTicksPerSecond = number(lines[2]);
+          // The total above counts file-backed pages (LMDB maps) with anonymous
+          // memory; /proc/<pid>/status reports the parts in kB, in this order.
+          const [
+            residentRssAnonBytes,
+            residentRssFileBytes,
+            residentRssShmemBytes,
+          ] = ['RssAnon', 'RssFile', 'RssShmem'].map((name, index) => {
+            const match = new RegExp(`^${name}:\\s+([0-9]{1,16}) kB$`).exec(
+              lines[index + 1],
+            );
+            assert.ok(match);
+            return number(match[1]) * 1024;
+          });
+          const pageBytes = number(lines[4]);
+          const clockTicksPerSecond = number(lines[5]);
           assert.ok(pageBytes > 0 && clockTicksPerSecond > 0);
           const trees = [
             '/home/wharfie',
@@ -588,32 +602,35 @@ export async function createLiveDeploymentHost(input, dependencies = {}) {
             layout.stateRoot,
             layout.payloadPath,
           ].map((root, index) => {
-            const line = lines[index + 3].split('\t');
+            const line = lines[index + 6].split('\t');
             assert.equal(line.length, 2);
             assert.equal(line[1], root);
             return number(line[0]);
           });
           assert.equal(
-            lines[7].trim().split(/\s+/).join(' '),
+            lines[10].trim().split(/\s+/).join(' '),
             '1B-blocks Avail',
           );
-          const disk = lines[8].trim().split(/\s+/);
+          const disk = lines[11].trim().split(/\s+/);
           assert.equal(disk.length, 2);
           const journal =
             /^Archived and active journals take up ([0-9]+(?:\.[0-9]+)?)([BKMGT]) in the file system\.$/.exec(
-              lines[9],
+              lines[12],
             );
           assert.ok(journal);
           const userJournalBytesApprox = Math.round(
             Number(journal[1]) * 1024 ** 'BKMGT'.indexOf(journal[2]),
           );
           const result = {
-            schemaVersion: 1,
+            schemaVersion: 2,
             kind: 'wharfie.live-deployment.resources',
             bootId: before.bootId,
             pid: before.process.pid,
             startTicks: before.process.startTicks,
             residentRssBytes: number(fields[21]) * pageBytes,
+            residentRssAnonBytes,
+            residentRssFileBytes,
+            residentRssShmemBytes,
             residentCpuTicks: number(fields[11]) + number(fields[12]),
             clockTicksPerSecond,
             homeBytes: trees[0],

@@ -52,6 +52,18 @@ const SEP = '\u001f';
 /** @type {Map<string, SharedLmdbEnvironment>} */
 const sharedLmdbEnvironments = new Map();
 
+/**
+ * Initial memory map for every native environment: address space, not disk.
+ * Without a map size, lmdb-js 3.x starts at 128 KiB and remaps as the data
+ * file grows, and its bundled LMDB keeps every outgrown map until close for
+ * lingering readers (mdb.c, mdb_env_set_mapsize). A long-lived resident then
+ * maps data.mdb several times, and its RSS counts each touched page once per
+ * map (#198). With one map the file-backed RSS matches the file. Without
+ * writemap, Linux and macOS never extend data.mdb to this size; a store that
+ * outgrows it still grows the map on demand, and a larger existing file opens.
+ */
+export const LMDB_MAP_SIZE_BYTES = 0x40000000; // 1 GiB
+
 /** A read-only lookup cannot find an existing LMDB volume or named table. */
 export class LMDBReadOnlyStoreNotFoundError extends Error {
   /** @param {string} message - Safe operator-facing diagnostic. */
@@ -175,6 +187,7 @@ function acquireSharedLmdbEnvironment(dbRoot, readOnly, holderLock) {
       readOnly,
       eventTurnBatching: false,
       commitDelay: 0,
+      mapSize: LMDB_MAP_SIZE_BYTES,
       // Encoding defaults to msgpack; we store plain JSON-ish objects.
     });
   } catch (error) {
