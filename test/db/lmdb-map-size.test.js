@@ -13,17 +13,21 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 const realLmdb = createRequire(import.meta.url)('lmdb');
 /** @type {Array<Record<string, any>>} */
 const opens = [];
+/** @type {any[]} */
+const environments = [];
 /** @type {number | undefined} */
 let mapSizeOverride;
 const wrappedLmdb = {
   ...realLmdb,
   open(/** @type {Record<string, any>} */ options) {
     opens.push({ ...options });
-    return realLmdb.open(
+    const environment = realLmdb.open(
       mapSizeOverride === undefined
         ? options
         : { ...options, mapSize: mapSizeOverride },
     );
+    environments.push(environment);
+    return environment;
   },
 };
 jest.unstable_mockModule('../../src/core/lib/lmdb-module.js', () => ({
@@ -42,6 +46,7 @@ const temporaryDirectories = [];
 afterEach(() => {
   mapSizeOverride = undefined;
   opens.length = 0;
+  environments.length = 0;
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { force: true, recursive: true });
   }
@@ -104,7 +109,13 @@ describe('LMDB map size', () => {
     const path = temporaryStore();
 
     const writer = createLMDB({ path, holderLock: true });
+    // The native environment really started at the small map, so the writes
+    // below have to grow it.
+    const mapSize = () => environments.at(-1).getStats().mapSize;
+    expect(environments).toHaveLength(1);
+    expect(mapSize()).toBe(tinyMap);
     await putRange(writer, 0, 1500);
+    expect(mapSize()).toBeGreaterThan(tinyMap * 16);
     expect(await read(writer, 0)).toBe(0);
     expect(await read(writer, 1499)).toBe(1499);
     await writer.close();
@@ -112,12 +123,15 @@ describe('LMDB map size', () => {
     expect(grown).toBeGreaterThan(tinyMap * 16);
 
     const reopened = createLMDB({ path, holderLock: true });
+    // Opening a file larger than the configured map maps the whole file.
+    expect(mapSize()).toBeGreaterThanOrEqual(grown);
     expect(await read(reopened, 0)).toBe(0);
     await putRange(reopened, 1500, 2000);
     expect(await read(reopened, 1999)).toBe(1999);
     await reopened.close();
 
     const reader = createLMDB({ path, readOnly: true, holderLock: true });
+    expect(mapSize()).toBeGreaterThanOrEqual(grown);
     expect(await read(reader, 0)).toBe(0);
     expect(await read(reader, 1999)).toBe(1999);
     await reader.close();
