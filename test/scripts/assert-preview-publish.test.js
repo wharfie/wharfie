@@ -28,12 +28,12 @@ const AUTHORIZED_ENVIRONMENT = Object.freeze({
   GITHUB_ACTIONS: 'true',
   GITHUB_EVENT_NAME: 'push',
   GITHUB_REPOSITORY: 'wharfie/wharfie',
-  GITHUB_REF: 'refs/tags/v0.0.17',
+  GITHUB_REF: 'refs/tags/v0.0.18',
   GITHUB_REF_TYPE: 'tag',
-  GITHUB_REF_NAME: 'v0.0.17',
+  GITHUB_REF_NAME: 'v0.0.18',
   GITHUB_SHA: 'a'.repeat(40),
   GITHUB_WORKFLOW_REF:
-    'wharfie/wharfie/.github/workflows/release-preview.yml@refs/tags/v0.0.17',
+    'wharfie/wharfie/.github/workflows/release-preview.yml@refs/tags/v0.0.18',
 });
 
 function runGuard(overrides = {}) {
@@ -59,7 +59,7 @@ describe('preview publication guard', () => {
     const result = runGuard(AUTHORIZED_ENVIRONMENT);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      'Preview publication authorized for v0.0.17',
+      'Preview publication authorized for v0.0.18',
     );
   });
 
@@ -69,7 +69,7 @@ describe('preview publication guard', () => {
     ['GITHUB_SHA', 'not-a-commit'],
     [
       'GITHUB_WORKFLOW_REF',
-      'wharfie/wharfie/.github/workflows/ci.yml@refs/tags/v0.0.17',
+      'wharfie/wharfie/.github/workflows/ci.yml@refs/tags/v0.0.18',
     ],
   ])('rejects an unauthorized %s', (key, value) => {
     const result = runGuard({ ...AUTHORIZED_ENVIRONMENT, [key]: value });
