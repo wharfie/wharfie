@@ -9,7 +9,10 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { recordCommandFailure } from './validation-failure.js';
+import {
+  recordCommandFailure,
+  startTimeoutSampler,
+} from './validation-failure.js';
 import { fileURLToPath } from 'node:url';
 
 import { WHARFIE_VERSION } from '../src/core/lib/version.js';
@@ -66,7 +69,7 @@ export function readJson(filePath) {
 /**
  * @param {string} command - Executable to run.
  * @param {string[]} args - Command arguments.
- * @param {{ cwd?: string, env?: Record<string, string | undefined>, capture?: boolean, timeoutMs?: number, killSignal?: 'SIGKILL' }} [options] - Execution options. A bounded command must use the hard-kill policy so a child cannot trap the deadline signal and hold the verifier open.
+ * @param {{ cwd?: string, env?: Record<string, string | undefined>, capture?: boolean, timeoutMs?: number, killSignal?: 'SIGKILL', sampleDirectory?: string }} [options] - Execution options. A bounded command must use the hard-kill policy so a child cannot trap the deadline signal and hold the verifier open. A bounded command is sampled shortly before its deadline, and a timeout keeps that sample (see validation-failure.js).
  * @returns {{ stdout: string, stderr: string }} - Captured output, when requested.
  */
 export function runCommand(command, args, options = {}) {
@@ -91,6 +94,13 @@ export function runCommand(command, args, options = {}) {
     );
   }
   const capture = options.capture === true;
+  const sampler =
+    timeoutMs === undefined
+      ? undefined
+      : startTimeoutSampler(
+          timeoutMs,
+          options.sampleDirectory ? { directory: options.sampleDirectory } : {},
+        );
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env || process.env,
@@ -101,7 +111,18 @@ export function runCommand(command, args, options = {}) {
     killSignal,
   });
 
-  if (result.error) throw recordCommandFailure(result.error, command, result);
+  const sample = sampler?.settle(
+    /** @type {NodeJS.ErrnoException | undefined} */ (result.error)?.code ===
+      'ETIMEDOUT',
+  );
+  if (sample) {
+    process.stderr.write(
+      `Timed-out command sampled before it was killed: .wharfie/validation-failures/samples/${sample}\n`,
+    );
+  }
+  if (result.error) {
+    throw recordCommandFailure(result.error, command, result, { sample });
+  }
 
   if (result.status !== 0) {
     const rendered = [

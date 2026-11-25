@@ -27,11 +27,15 @@ export const PACKAGE_SEA_COORDINATOR_COMMAND_TIMEOUT_MS = 30_000;
  * Use only public packaged commands to inspect authority and explicitly fence
  * one predecessor that this verifier has already killed. Stale ownership,
  * socket absence, and heartbeat age never authorize a handoff on their own.
- * @param {{runCommand?: typeof runCommand}} [ports] - Injectable command port for isolated tests.
+ * @param {{runCommand?: typeof runCommand, log?: (line: string) => void}} [ports] - Injectable command and log ports for isolated tests.
  * @returns {{inspect: (input: SeaCoordinatorCommandInput) => Record<string, any>, assertReleased: (input: SeaCoordinatorCommandInput) => Record<string, any>, afterSigkill: (input: SeaCoordinatorCommandInput & {exit: {code: number | null, signal: string | null}, ownership: Record<string, any>}) => Record<string, any>, afterStoppedServiceLoss: (input: SeaCoordinatorCommandInput & StoppedServiceLossInput) => Record<string, any>}} - Public-command verifier operations.
  */
 export function createPackageSeaCoordinatorHandoff(ports = {}) {
   const execute = ports.runCommand || runCommand;
+
+  const log =
+    ports.log ||
+    ((/** @type {string} */ line) => process.stdout.write(`${line}\n`));
 
   /**
    * @param {SeaCoordinatorCommandInput} input - Packaged command context.
@@ -39,6 +43,7 @@ export function createPackageSeaCoordinatorHandoff(ports = {}) {
    * @returns {Record<string, any>} - Complete JSON command document.
    */
   const command = (input, args) => {
+    const started = performance.now();
     try {
       return JSON.parse(
         execute(input.artifactPath, ['wharfie', 'coordinator', ...args], {
@@ -53,6 +58,12 @@ export function createPackageSeaCoordinatorHandoff(ports = {}) {
       throw new Error(
         `${input.label} coordinator command failed: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error },
+      );
+    } finally {
+      // How close each public command comes to its timeout, in passing runs
+      // too (a macOS run once hit it with no other evidence).
+      log(
+        `coordinator ${args[0]} for ${input.label}: ${Math.round(performance.now() - started)} ms (limit ${PACKAGE_SEA_COORDINATOR_COMMAND_TIMEOUT_MS} ms)`,
       );
     }
   };
