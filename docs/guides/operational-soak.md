@@ -169,7 +169,12 @@ Each observation verifies one committed attempt and one physical execution per
 activity, expected workflow output, and the original and most recent retained
 histories. The final observation audits every physical activity marker file. Samples track
 resident identity, RSS, cumulative CPU ticks, application/state/payload disk use,
-available disk space, and approximate user journal size. Samples retain their
+available disk space, and approximate user journal size. RSS is recorded as the
+total and as its anonymous, file-backed, and shared-memory parts
+(`RssAnon`, `RssFile`, `RssShmem`), and the progress summary reports each. The
+file-backed part includes the resident's mapped LMDB pages, which grow with the
+store and are reclaimable; the 512 MiB guard still applies to the total.
+Samples retain their
 observation start and resource collection times. `maximumSampleGapMs` reports
 the actual gap between resource samples; `maximumObserverIdleGapMs` reports
 the inactive portion checked against the two-interval limit. Older checkpoints

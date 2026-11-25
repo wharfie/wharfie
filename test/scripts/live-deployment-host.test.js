@@ -62,6 +62,11 @@ async function hostFixture() {
     markers: '',
     disappeared: false,
     resourceOutput: /** @type {string|null} */ (null),
+    statusLines: [
+      'RssAnon:\t    3000 kB',
+      'RssFile:\t    1000 kB',
+      'RssShmem:\t       0 kB',
+    ],
     artifactDigest: fixture.artifactRecord.byteDigest.value,
     service: createHealthySingleNodeServiceStatus(fixture),
   };
@@ -105,6 +110,7 @@ async function hostFixture() {
           observed.resourceOutput ??
           [
             `${observed.pid} (fixture name) ${fields.join(' ')}`,
+            ...observed.statusLines,
             '4096',
             '100',
             '500000000\t/home/wharfie',
@@ -206,12 +212,15 @@ describe('live acceptance pinned host operations', () => {
     const { host, remote } = await hostFixture();
     const value = await host.observeResources();
     expect(value).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: 'wharfie.live-deployment.resources',
       bootId: BOOT_ID,
       pid: 1257,
       startTicks: '32931',
       residentRssBytes: 4096000,
+      residentRssAnonBytes: 3000 * 1024,
+      residentRssFileBytes: 1000 * 1024,
+      residentRssShmemBytes: 0,
       residentCpuTicks: 30,
       clockTicksPerSecond: 100,
       homeBytes: 500000000,
@@ -229,7 +238,27 @@ describe('live acceptance pinned host operations', () => {
     expect(command?.argv[2]).toContain('export LC_ALL=C');
     expect(command?.argv[2]).toContain('test ! -L "$root"');
     expect(command?.argv[2]).toContain('test "${21}" = "$1"');
+    expect(command?.argv[2]).toContain(
+      `/usr/bin/grep -E '^Rss(Anon|File|Shmem):' /proc/"$2"/status`,
+    );
     expect(JSON.stringify(value)).not.toContain('private-token');
+  });
+
+  it.each([
+    ['a missing part', ['RssAnon:\t3000 kB', 'RssFile:\t1000 kB']],
+    [
+      'parts out of order',
+      ['RssFile:\t1000 kB', 'RssAnon:\t3000 kB', 'RssShmem:\t0 kB'],
+    ],
+    [
+      'a unit other than kB',
+      ['RssAnon:\t3000 MB', 'RssFile:\t1000 kB', 'RssShmem:\t0 kB'],
+    ],
+  ])('refuses a resident RSS split with %s', async (_label, lines) => {
+    const { host, observed } = await hostFixture();
+    observed.statusLines = lines;
+    const error = await host.observeResources().catch((failure) => failure);
+    expect(error.diagnostic.phase).toBe('host-observe-resources');
   });
 
   it('refuses malformed resource probes without retaining raw output', async () => {

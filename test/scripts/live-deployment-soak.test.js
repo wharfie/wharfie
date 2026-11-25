@@ -37,12 +37,15 @@ function fixture(settings = /** @type {Record<string, any>} */ ({})) {
   const receipts = /** @type {Record<string, any>} */ ({});
   const saves = /** @type {Record<string, any>[]} */ ([]);
   const resource = /** @type {Record<string, any>} */ ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: 'wharfie.live-deployment.resources',
     bootId,
     pid: 100,
     startTicks: '1000',
     residentRssBytes: 100 * 1024 * 1024,
+    residentRssAnonBytes: 70 * 1024 * 1024,
+    residentRssFileBytes: 30 * 1024 * 1024,
+    residentRssShmemBytes: 0,
     residentCpuTicks: 200,
     clockTicksPerSecond: 100,
     homeBytes: 100_000_000,
@@ -752,6 +755,50 @@ describe('bounded periodic live soak', () => {
     expect((await f.tick()).complete).toBe(false);
     expect(f.checkpoint.completed).toHaveLength(1);
     expect(f.checkpoint.samples[0].resource).toEqual(f.resource);
+  });
+
+  test('records anonymous and file-backed RSS and reports both, guarding only the total', async () => {
+    const f = fixture();
+    let result = await f.tick();
+    f.setWall(result.nextAt);
+    // Anonymous memory alone over 512 MiB is recorded, not a guard failure:
+    // the guard stays on total RSS until a later decision.
+    Object.assign(f.resource, {
+      residentRssBytes: 512 * 1024 * 1024,
+      residentRssAnonBytes: 600 * 1024 * 1024,
+      residentRssFileBytes: 40 * 1024 * 1024,
+      residentRssShmemBytes: 1024 * 1024,
+    });
+    result = await f.tick();
+    expect(f.checkpoint.samples[1].resource).toEqual(f.resource);
+    expect(f.receipts['soak-progress.json'].observations.metrics).toMatchObject(
+      {
+        residentRssAnonBytes: {
+          first: 70 * 1024 * 1024,
+          last: 600 * 1024 * 1024,
+          peak: 600 * 1024 * 1024,
+          change: 530 * 1024 * 1024,
+        },
+        residentRssFileBytes: {
+          first: 30 * 1024 * 1024,
+          last: 40 * 1024 * 1024,
+          change: 10 * 1024 * 1024,
+        },
+        residentRssShmemBytes: { first: 0, last: 1024 * 1024 },
+        residentRssBytes: { last: 512 * 1024 * 1024 },
+      },
+    );
+  });
+
+  test('rejects a resource sample without the RSS split', async () => {
+    const f = fixture();
+    f.resource.schemaVersion = 1;
+    delete f.resource.residentRssAnonBytes;
+    delete f.resource.residentRssFileBytes;
+    delete f.resource.residentRssShmemBytes;
+    await expect(f.tick()).rejects.toMatchObject({
+      diagnostic: { soakFaultStage: 'resources', soakFaultCode: 'assertion' },
+    });
   });
 
   test('rejects tampered scope, run identity, pending path and unknown metadata before host access', async () => {

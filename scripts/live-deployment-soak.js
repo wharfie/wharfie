@@ -50,6 +50,9 @@ const RESOURCE_KEYS = [
   'pid',
   'startTicks',
   'residentRssBytes',
+  'residentRssAnonBytes',
+  'residentRssFileBytes',
+  'residentRssShmemBytes',
   'residentCpuTicks',
   'clockTicksPerSecond',
   'homeBytes',
@@ -138,7 +141,7 @@ function intent(state, sequence) {
 /** @param {Record<string, any>} resource */
 function assertResources(resource) {
   exact(resource, RESOURCE_KEYS);
-  assert.equal(resource.schemaVersion, 1);
+  assert.equal(resource.schemaVersion, 2);
   assert.equal(resource.kind, 'wharfie.live-deployment.resources');
   assert.match(resource.bootId, BOOT_ID);
   assert.match(resource.startTicks, /^[0-9]{1,20}$/);
@@ -355,6 +358,9 @@ export function summarizeLiveDeploymentSoak(checkpoint) {
   if (first && last) {
     for (const key of [
       'residentRssBytes',
+      'residentRssAnonBytes',
+      'residentRssFileBytes',
+      'residentRssShmemBytes',
       'homeBytes',
       'appBytes',
       'stateBytes',
@@ -734,6 +740,8 @@ export async function advanceLiveDeploymentSoak(options, dependencies = {}) {
           previous.clockTicksPerSecond,
         );
       }
+      // Still the total, including reclaimable file-backed pages; the anon and
+      // file parts are recorded beside it so a later guard can use them.
       guard(
         resource.residentRssBytes <= 512 * 1024 * 1024,
         'resident-rss-limit',
