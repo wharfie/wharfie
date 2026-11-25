@@ -31,6 +31,9 @@ MAX_POLL_FAILURE_SECONDS = 900
 # Least time `prepare` must leave before `latest_start` for apply, bootstrap,
 # token, and start. Measured: 9 min on 2026-11-05 and 46 min on 2026-11-19.
 PROVISION_BUDGET = 3600
+# Least time a stack-creating `apply` must leave before `latest_start` so that
+# `start` can still follow. Measured apply to start: 10 m 55 s on 2026-11-19.
+APPLY_START_MARGIN = 1200
 DEFAULT_SSM_KEY = 'alias/aws/ssm'
 
 
@@ -107,6 +110,8 @@ def prepare(options):
     }
     config['specSha256'] = canonical_digest(config)
     # The same rule `apply` and `start` enforce, applied before anything is written.
+    # With the current constants latest_start is 75 min after createdAt, so this
+    # cannot fire; it guards future changes to the supervisor's constants.
     if latest_start(config) - created < PROVISION_BUDGET:
         raise RuntimeError('campaign-window-cannot-hold-setup-and-full-soak')
     atomic_json(root / 'campaign.json', config)
@@ -119,7 +124,8 @@ def prepare(options):
         'assetsDirectory': str(assets),
     })
     print(json.dumps({'status': 'prepared', 'state': str(root), 'stopAtUtc':
-        datetime.fromtimestamp(config['stopAt'], timezone.utc).isoformat(), 'startByUtc':
+        datetime.fromtimestamp(config['stopAt'], timezone.utc).isoformat(), 'applyByUtc':
+        datetime.fromtimestamp(latest_start(config) - APPLY_START_MARGIN, timezone.utc).isoformat(), 'startByUtc':
         datetime.fromtimestamp(latest_start(config), timezone.utc).isoformat()}))
 
 
@@ -242,8 +248,21 @@ class Operator:
             time.sleep(5)
         raise RuntimeError('campaign-stack-deadline')
 
+    def refuse_create_too_close_to_start(self):
+        # A stack created now would be billed, but `start` could not follow it
+        # before latest_start.
+        remaining = int(latest_start(self.config) - time.time())
+        if remaining < APPLY_START_MARGIN:
+            print(json.dumps({'status': 'apply-refused', 'secondsBeforeStartBy': remaining,
+                              'requiredSeconds': APPLY_START_MARGIN}), file=sys.stderr)
+            raise RuntimeError('campaign-start-too-close-for-apply-prepare-new-campaign')
+
     def apply(self):
         self.verify_local_bundle()
+        # A first apply refuses before any AWS call. A rerun after an attempted
+        # create first reconciles, so a stack that exists is still recorded.
+        if not self.ownership.get('stackId') and not self.ownership.get('createAttempted'):
+            self.refuse_create_too_close_to_start()
         self.identity()
         image = self.aws('ec2', 'describe-images', {'ImageIds': [self.config['imageId']], 'Owners': ['099720109477']})
         if len(image['Images']) != 1 or image['Images'][0]['State'] != 'available':
@@ -255,6 +274,7 @@ class Operator:
             # the request token is unchanged, so a retry cannot add a second stack.
             found = self.existing_stack() if self.ownership.get('createAttempted') else None
             if found is None:
+                self.refuse_create_too_close_to_start()
                 if self.ownership.get('status') != 'prepared':
                     raise RuntimeError('campaign-not-in-prepared-state')
                 # The retained proof bucket has a fixed name. If it exists, an
@@ -298,7 +318,8 @@ class Operator:
         self.ownership['status'] = 'provisioned'
         self.save()
         self.stage_inputs()
-        print(json.dumps({'status': 'provisioned', 'controllerId': self.ownership['outputs']['ControllerId']}))
+        print(json.dumps({'status': 'provisioned', 'controllerId': self.ownership['outputs']['ControllerId'],
+                          'secondsBeforeStartBy': int(latest_start(self.config) - time.time())}))
 
     def stage_inputs(self):
         """Upload and read back the exact frozen inputs while bootstrap waits."""
