@@ -29,7 +29,7 @@ import {
 import { recoverPreviewRelease } from '../../scripts/recover-preview-release.js';
 
 const COMMIT = 'a'.repeat(40);
-const VERSION = '0.0.17';
+const VERSION = '0.0.18';
 const TARGET = Object.freeze({
   nodeVersion: '24.13.1',
   platform: 'linux',
@@ -54,7 +54,7 @@ function makeNpmNotFoundFailure() {
     stdout: JSON.stringify({
       error: {
         code: 'E404',
-        summary: 'No match found for version 0.0.17',
+        summary: 'No match found for version 0.0.18',
       },
     }),
     stderr: '',
@@ -529,7 +529,7 @@ function createFakeCommands(candidate, initial = {}) {
         state.failPublishAfterMutation = false;
         throw makeCommandFailure('publish response lost');
       }
-      return { stdout: '+ @wharfie/wharfie@0.0.17\n', stderr: '' };
+      return { stdout: '+ @wharfie/wharfie@0.0.18\n', stderr: '' };
     }
     throw new Error(`Unexpected command: ${command} ${args.join(' ')}`);
   }
@@ -1146,7 +1146,7 @@ describe('preview publication reconciliation', () => {
       },
       {
         options: { names: { core: 'wharfie-wharfie.tgz' } },
-        error: /filename must be exactly wharfie-wharfie-0\.0\.17\.tgz/u,
+        error: /filename must be exactly wharfie-wharfie-0\.0\.18\.tgz/u,
       },
     ];
     for (const testCase of cases) {
@@ -1260,7 +1260,7 @@ describe('preview publication reconciliation', () => {
       (metadata) => delete metadata.private,
       (metadata) => (metadata.engines.node = '>=20'),
       (metadata) => (metadata.repository.directory = 'packages/not-aws'),
-      (metadata) => (metadata.peerDependencies['@wharfie/wharfie'] = '^0.0.17'),
+      (metadata) => (metadata.peerDependencies['@wharfie/wharfie'] = '^0.0.18'),
     ];
     for (const mutateCompanionPackage of cases) {
       const artifactDir = writeCandidate({ mutateCompanionPackage });
@@ -1304,8 +1304,8 @@ describe('preview publication reconciliation', () => {
         publicationDependencies(fake),
       ),
     ).resolves.toEqual({
-      tag: 'v0.0.17',
-      version: '0.0.17',
+      tag: 'v0.0.18',
+      version: '0.0.18',
       published: true,
       finalized: false,
     });
@@ -1365,7 +1365,7 @@ describe('preview publication reconciliation', () => {
         '--force',
         '--no-write-fetch-head',
         'https://github.com/wharfie/wharfie.git',
-        '+refs/tags/v0.0.17:refs/wharfie-preview-authority/tag',
+        '+refs/tags/v0.0.18:refs/wharfie-preview-authority/tag',
         '+refs/heads/master:refs/wharfie-preview-authority/master',
       ]);
       expect(
@@ -1528,7 +1528,7 @@ describe('preview publication reconciliation', () => {
 
     const absentTag = createFakeCommands(candidate, {
       previewTagOutput: '\n',
-      versions: ['0.0.14', '0.0.17-rc.1'],
+      versions: ['0.0.14', '0.0.18-rc.1'],
     });
     await expect(
       publishPreviewRelease(
@@ -1971,7 +1971,7 @@ describe('preview publication reconciliation', () => {
       'noncanonical provenance host',
       (npmVersion) => {
         npmVersion.dist.attestations.url =
-          'https://example.com/-/npm/v1/attestations/%40wharfie%2Fwharfie@0.0.17';
+          'https://example.com/-/npm/v1/attestations/%40wharfie%2Fwharfie@0.0.18';
       },
       /does not match preview-release\.json/u,
     ],
