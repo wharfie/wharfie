@@ -264,21 +264,43 @@ function assertStoreOwner(dbRoot, effectiveUid) {
  * Refuse to create a store inside another user's directory tree. Called
  * before a writable open creates a missing LMDB directory (and any missing
  * parents): the nearest directory that already exists on the way up decides.
- * It may belong to this process's user, or to root (only root can change a
- * root-owned directory, so creating there hands no one else anything, and an
- * ordinary user may keep a store under, say, /tmp). Any other owner is
- * refused, so in particular root never creates a store in a user's tree.
- * A link on the way is judged by both its own owner and its target's.
+ * It must belong to this process's user, or to root. A root-owned directory
+ * counts only if other users cannot rename entries in it: not group- or
+ * world-writable, or sticky (like /tmp, where only an entry's owner may
+ * rename it). A root-owned directory that anyone can write is no safer than
+ * another user's. So root never creates a store in a user's tree, and an
+ * ordinary user may still keep one under, say, /tmp.
+ * A link on the way is judged by its target, then by its own owner.
  * @param {string} dbRoot - LMDB directory a writable open would create.
  * @param {{effectiveUid?: number}} [options] - For tests only: the effective uid to act as.
  * @returns {void}
- * @throws {LocalStoreLockError} - When the containing directory belongs to another user.
+ * @throws {LocalStoreLockError} - When the containing directory is not this user's or a safe root directory.
  */
 export function assertMayCreateLocalStore(dbRoot, options = {}) {
   if (process.platform === 'win32') return;
   const effectiveUid = options.effectiveUid ?? process.geteuid?.();
-  const allowed = (/** @type {number} */ uid) =>
-    uid === effectiveUid || uid === 0;
+  const refuse = (/** @type {string} */ reason) =>
+    new LocalStoreLockError(
+      `This local store does not exist yet, and ${reason}, while this process runs as uid ${effectiveUid}. A store is created and opened only inside a directory its user owns (or a root directory other users cannot change). Run the command as that directory's owner, or use a directory you own. Nothing was created.`,
+    );
+  /**
+   * @param {import('node:fs').Stats} stats - A directory on the way.
+   * @param {string} what - How to name it.
+   * @returns {LocalStoreLockError | undefined} - Why it is unsafe, if it is.
+   */
+  const judge = (stats, what) => {
+    if (stats.uid === effectiveUid) return undefined;
+    if (stats.uid !== 0) {
+      return refuse(
+        `${what} belongs to uid ${stats.uid} (for example: sudo -u '#${stats.uid}' <command>)`,
+      );
+    }
+    const sticky = (stats.mode & 0o1000) !== 0;
+    if (sticky || (stats.mode & 0o022) === 0) return undefined;
+    return refuse(
+      `${what} belongs to root but other users can write to it (mode ${(stats.mode & 0o7777).toString(8).padStart(4, '0')}, not sticky), so they could move or replace a store created there`,
+    );
+  };
   for (let candidate = dbRoot; ; candidate = dirname(candidate)) {
     let stats;
     try {
@@ -290,19 +312,41 @@ export function assertMayCreateLocalStore(dbRoot, options = {}) {
     }
     // An existing store is judged by the lock itself (assertStoreOwner).
     if (candidate === dbRoot) return;
-    const owners = [stats.uid];
     if (stats.isSymbolicLink()) {
-      const target = statSync(candidate);
+      let target;
+      try {
+        target = statSync(candidate);
+      } catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EACCES') {
+          throw error;
+        }
+        // Linux's protected_symlinks refuses to follow another user's link
+        // in a sticky world-writable directory.
+        throw refuse(
+          `the link ${candidate} on the way (uid ${stats.uid}) could not be followed: the system refused (protected symbolic links)`,
+        );
+      }
       if (!target.isDirectory()) break;
-      owners.push(target.uid);
-    } else if (!stats.isDirectory()) {
-      break;
+      const unsafe =
+        judge(
+          target,
+          `the link ${candidate} on the way points to a directory that`,
+        ) ??
+        (stats.uid === effectiveUid || stats.uid === 0
+          ? undefined
+          : refuse(
+              `the link ${candidate} on the way belongs to uid ${stats.uid}`,
+            ));
+      if (unsafe) throw unsafe;
+      return;
     }
-    const foreign = owners.find((uid) => !allowed(uid));
-    if (foreign === undefined) return;
-    throw new LocalStoreLockError(
-      `This local store does not exist yet, and the directory it would be created in, ${candidate}, belongs to uid ${foreign} while this process runs as uid ${effectiveUid}. A store is created and opened only by the user who owns its directory: run the command as that user (for example: sudo -u '#${foreign}' <command>). Nothing was created.`,
+    if (!stats.isDirectory()) break;
+    const unsafe = judge(
+      stats,
+      `the directory it would be created in, ${candidate},`,
     );
+    if (unsafe) throw unsafe;
+    return;
   }
   // Not a directory: let the creation fail with its own error.
 }

@@ -37,19 +37,28 @@ function countBySourceFile(pattern, root = SRC) {
   return counts;
 }
 
-/** The only node:fs bindings the lock module may import. */
-const LOCK_MODULE_FS_IMPORTS = [
-  'closeSync',
-  'constants as fsConstants',
-  'fstatSync',
-  'lstatSync',
-  'openSync',
-  'readSync',
-  'renameSync',
-  'statSync',
-  'unlinkSync',
-  'writeSync',
-];
+/**
+ * Every module the lock module may import, and the exact bindings it may take
+ * from each. Any other specifier (including 'fs', 'fs/promises' or
+ * 'node:module'), form (namespace, default) or binding fails the guard.
+ */
+const LOCK_MODULE_IMPORTS = {
+  'node:crypto': ['randomBytes'],
+  'node:fs': [
+    'closeSync',
+    'constants as fsConstants',
+    'fstatSync',
+    'lstatSync',
+    'openSync',
+    'readSync',
+    'renameSync',
+    'statSync',
+    'unlinkSync',
+    'writeSync',
+  ],
+  'node:path': ['basename', 'dirname', 'join'],
+  'node:url': ['pathToFileURL'],
+};
 
 /**
  * Remove comments and the text of string and template literals (keeping
@@ -112,7 +121,7 @@ function codeOnly(source) {
 }
 
 /**
- * Ways a module could change a file's owner, found lexically.
+ * Ways the lock module could change a file's owner, found lexically.
  * @param {string} source
  * @returns {string[]}
  */
@@ -123,34 +132,58 @@ function ownershipChangeViolations(source) {
   for (const match of code.matchAll(/\b[fl]?chown(?:Sync)?\b/g)) {
     violations.push(`identifier ${match[0]}`);
   }
-  const fsImports = [
+  // Static imports and re-exports: an allowed specifier, once, as one named
+  // list of allowed bindings.
+  /** @type {Set<string>} */
+  const seen = new Set();
+  for (const [, clause = '', specifier] of [
     ...source.matchAll(
-      /import\s+([^;]*?)\s+from\s+['"]node:fs(\/promises)?['"]/g,
+      /(?:^|\n)\s*import\s+(?:([^;'"]*?)\s+from\s+)?['"]([^'"]+)['"]/g,
     ),
-  ];
-  if (fsImports.length !== 1)
-    violations.push(`node:fs imports: ${fsImports.length}`);
-  for (const [, clause, promises] of fsImports) {
-    const names = /^\{([\s\S]*)\}$/.exec(clause.trim());
-    if (promises || !names) {
-      violations.push(`node:fs import form: ${clause.trim()}`);
+    ...source.matchAll(
+      /(?:^|\n)\s*export\s+([^;'"]*?)\s+from\s+['"]([^'"]+)['"]/g,
+    ),
+  ]) {
+    const allowed = Object.hasOwn(LOCK_MODULE_IMPORTS, specifier)
+      ? LOCK_MODULE_IMPORTS[
+          /** @type {keyof typeof LOCK_MODULE_IMPORTS} */ (specifier)
+        ]
+      : undefined;
+    if (!allowed) {
+      violations.push(`import of ${specifier}`);
       continue;
     }
-    const listed = names[1]
+    if (seen.has(specifier)) violations.push(`second import of ${specifier}`);
+    seen.add(specifier);
+    const names = /^\{([\s\S]*)\}$/.exec(clause.trim());
+    if (!names) {
+      violations.push(`${specifier} import form: ${clause.trim() || '(bare)'}`);
+      continue;
+    }
+    for (const name of names[1]
       .split(',')
-      .map((name) => name.trim().replace(/\s+/g, ' '))
-      .filter(Boolean);
-    for (const name of listed) {
-      if (!LOCK_MODULE_FS_IMPORTS.includes(name)) {
-        violations.push(`node:fs import ${name}`);
-      }
+      .map((part) => part.trim().replace(/\s+/g, ' '))
+      .filter(Boolean)) {
+      if (!allowed.includes(name))
+        violations.push(`${specifier} import ${name}`);
     }
   }
-  if (/getBuiltinModule\(\s*['"](?:node:)?fs/.test(source)) {
-    violations.push('getBuiltinModule of fs');
+  // The one built-in loaded at run time is SQLite, by a literal name.
+  const builtinCalls = code.match(/\bgetBuiltinModule\b/g)?.length ?? 0;
+  const sqliteCalls =
+    source.match(/\bprocess\.getBuiltinModule\(\s*'node:sqlite'\s*\)/g)
+      ?.length ?? 0;
+  if (builtinCalls !== sqliteCalls) {
+    violations.push('getBuiltinModule of something other than node:sqlite');
   }
-  if (/\bimport\s*\(|\brequire\s*\(/.test(code)) {
-    violations.push('dynamic import or require');
+  for (const [pattern, what] of /** @type {Array<[RegExp, string]>} */ ([
+    [/\bimport\s*\(/, 'dynamic import'],
+    [/\brequire\b/, 'require'],
+    [/\bcreateRequire\b/, 'createRequire'],
+    [/\bprocess\s*(?:\?\.)?\s*\[/, 'computed access on process'],
+    [/\bglobalThis\b/, 'globalThis'],
+  ])) {
+    if (pattern.test(code)) violations.push(what);
   }
   return violations;
 }
@@ -222,43 +255,38 @@ describe('LMDB open choke point', () => {
   test('the lock module never changes the owner of anything', () => {
     // A store is opened only by its owner (lmdb-holder-lock.js refuses any
     // other user before touching or creating it), so nothing there needs an
-    // ownership change, and none may come back. Checked lexically: no
-    // chown-family identifier in code (strings and comments may still advise
-    // `chown`), and an exact node:fs import list, so an aliased import or a
-    // namespace import cannot slip one in. A name built at run time from a
-    // module imported some other way would still pass a lexical check; the
-    // import pins below close the ways this file can reach node:fs.
+    // ownership change, and none may come back. This is a lexical tripwire
+    // against accidents, not a proof: no chown-family identifier in code
+    // (strings and comments may still advise `chown`); every import pinned,
+    // specifier and bindings; no dynamic import, require or createRequire; no
+    // computed access on process or globalThis; getBuiltinModule only for
+    // node:sqlite. It cannot see a chown done by another module this one
+    // calls, or a name assembled through some route not listed here.
     const source = readFileSync(
       join(SRC, 'core/lib/db/lmdb-holder-lock.js'),
       'utf8',
     );
     expect(ownershipChangeViolations(source)).toEqual([]);
-    // Each bypass reviewer B listed is caught.
-    const header = "import { closeSync } from 'node:fs';\n";
-    expect(
-      ownershipChangeViolations(
-        `import { closeSync, fchown as giveAway } from 'node:fs';\ngiveAway(fd, 0, 0);\n`,
-      ),
-    ).not.toEqual([]);
-    expect(
-      ownershipChangeViolations(
-        `${header}import * as nodeFs from 'node:fs';\nnodeFs['ch' + 'own'](path, 0, 0);\n`,
-      ),
-    ).not.toEqual([]);
-    expect(
-      ownershipChangeViolations(
-        `${header}const { fchownSync: g } = process.getBuiltinModule('node:fs');\ng(fd, 0, 0);\n`,
-      ),
-    ).not.toEqual([]);
-    expect(
-      ownershipChangeViolations(
-        `${header}const fs = await import('node:fs');\n`,
-      ),
-    ).not.toEqual([]);
+    // Every bypass reviewer B listed, added to the real module, is caught.
+    for (const bypass of [
+      "import { fchown as giveAway } from 'node:fs';\ngiveAway(fd, 0, 0);",
+      "import * as nodeFs from 'node:fs';\nnodeFs['ch' + 'own'](p, 0, 0);",
+      "const { fchownSync: g } = process.getBuiltinModule('node:fs');",
+      "const fs = await import('node:fs');",
+      "import * as f from 'fs';\nf['ch' + 'own'](p, 0, 0);",
+      "import * as fp from 'fs/promises';\nfp['ch' + 'own'](p, 0, 0);",
+      "import { createRequire } from 'node:module';\ncreateRequire(import.meta.url)('fs')['ch' + 'own'](p, 0, 0);",
+      "process['getBuiltin' + 'Module']('node:fs')['ch' + 'own'](p, 0, 0);",
+    ]) {
+      expect({
+        bypass,
+        caught: ownershipChangeViolations(`${bypass}\n${source}`).length > 0,
+      }).toEqual({ bypass, caught: true });
+    }
     // ...and text is not code.
     expect(
       ownershipChangeViolations(
-        `${header}// chown it\nconst advice = 'Fix its owner (chown)';\n`,
+        `${source}\n// chown it\nconst advice = 'Fix its owner (chown)';\n`,
       ),
     ).toEqual([]);
   });

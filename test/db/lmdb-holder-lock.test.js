@@ -519,6 +519,110 @@ describe('LMDB holder lock across processes', () => {
     30_000,
   );
 
+  testUnlessRoot(
+    "a link this user owns that points into another user's directory is refused by its target",
+    async () => {
+      // The target belongs to someone other than the acting user, and the
+      // target is judged first: the refusal must name it. (Without a target
+      // check, only the link's own owner would refuse, with another message.)
+      const parent = mkdtempSync(join(tmpdir(), 'wharfie-holder-lock-link-'));
+      roots.push(parent);
+      const foreign = join(parent, 'foreign');
+      mkdirSync(foreign, { mode: 0o700 });
+      const foreignUid = lstatSync(foreign).uid;
+      const actingUid = foreignUid + 1;
+      const link = join(parent, 'mine');
+      symlinkSync(foreign, link);
+      let refusal;
+      try {
+        assertMayCreateLocalStore(join(link, 'store', 'lmdb'), {
+          effectiveUid: actingUid,
+        });
+      } catch (error) {
+        refusal = /** @type {Error & {code?: string}} */ (error);
+      }
+      expect(refusal).toMatchObject({ code: 'local-store-lock' });
+      expect(refusal?.message).toContain(
+        `the link ${link} on the way points to a directory that belongs to uid ${foreignUid}`,
+      );
+      expect(readdirSync(foreign)).toEqual([]);
+    },
+    30_000,
+  );
+
+  (process.geteuid?.() === 0 ? test : test.skip)(
+    'root-owned directories count only when other users cannot change them, and protected links are refused as the store',
+    async () => {
+      // Run as root (the Linux container run). The checks run in a child as
+      // an ordinary user, as they would for that user's command.
+      const user = { uid: 1000, gid: 1000 };
+      const other = { uid: 1001, gid: 1001 };
+      const base = mkdtempSync('/tmp/wharfie-holder-lock-modes-');
+      roots.push(base);
+      chmodSync(base, 0o755);
+      const writable = join(base, 'writable');
+      const sticky = join(base, 'sticky');
+      const closed = join(base, 'closed');
+      for (const [directory, mode] of /** @type {const} */ ([
+        [writable, 0o777],
+        [sticky, 0o1777],
+        [closed, 0o755],
+      ])) {
+        mkdirSync(directory);
+        chmodSync(directory, mode);
+      }
+      // Another user's link in a sticky world-writable directory: Linux's
+      // protected_symlinks refuses to let this user follow it.
+      const otherTarget = join(base, 'other-target');
+      mkdirSync(otherTarget);
+      chmodSync(otherTarget, 0o777);
+      const otherLink = join(sticky, 'others-link');
+      spawnSync('/bin/ln', ['-s', otherTarget, otherLink], other);
+      const moduleUrl = new URL(
+        '../../src/core/lib/db/lmdb-holder-lock.js',
+        import.meta.url,
+      ).href;
+      const judge = (/** @type {string} */ dbRoot) => {
+        const result = spawnSync(
+          process.execPath,
+          [
+            '--input-type=module',
+            '-e',
+            `const { assertMayCreateLocalStore } = await import(${JSON.stringify(moduleUrl)});
+             try { assertMayCreateLocalStore(process.argv[1]); console.log(JSON.stringify({ allowed: true })); }
+             catch (error) { console.log(JSON.stringify({ code: error.code ?? null, message: error.message })); }`,
+            dbRoot,
+          ],
+          { ...user, encoding: 'utf8' },
+        );
+        return JSON.parse(result.stdout.trim());
+      };
+      const fromWritable = judge(join(writable, 'store', 'lmdb'));
+      expect(fromWritable).toMatchObject({ code: 'local-store-lock' });
+      expect(fromWritable.message).toContain(
+        'belongs to root but other users can write to it (mode 0777, not sticky)',
+      );
+      expect(judge(join(sticky, 'store', 'lmdb'))).toEqual({ allowed: true });
+      expect(judge(join(closed, 'store', 'lmdb'))).toEqual({ allowed: true });
+      const protectedSymlinks = (() => {
+        try {
+          return readFileSync('/proc/sys/fs/protected_symlinks', 'utf8').trim();
+        } catch {
+          return '';
+        }
+      })();
+      const throughLink = judge(join(otherLink, 'store', 'lmdb'));
+      expect(throughLink).toMatchObject({ code: 'local-store-lock' });
+      expect(throughLink.message).toContain(`the link ${otherLink} on the way`);
+      if (protectedSymlinks === '1') {
+        expect(throughLink.message).toContain('protected symbolic links');
+      }
+      expect(readdirSync(writable)).toEqual([]);
+      expect(readdirSync(closed)).toEqual([]);
+    },
+    30_000,
+  );
+
   test('a root-owned store directory is refused without suggesting to run as root', async () => {
     const failure = (() => {
       try {

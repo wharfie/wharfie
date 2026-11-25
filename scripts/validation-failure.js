@@ -1,14 +1,20 @@
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  constants,
+  copyFileSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   rmdirSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,6 +38,7 @@ const COMMANDS = new Set([
  * @property {string} command - Safe executable identifier, never its arguments.
  * @property {number | null} status - Child exit status.
  * @property {string | null} signal - Terminating signal.
+ * @property {string} [sample] - File name of a sample taken of the stuck process before a timeout killed it.
  */
 
 /** @type {WeakMap<object, CommandFailure>} */
@@ -61,16 +68,145 @@ function ensureRealDirectory(directory) {
  * @param {Error} error - Original command failure.
  * @param {string} executable - Executable path.
  * @param {{status?: number | null, signal?: string | null}} result - Child result.
+ * @param {{sample?: string}} [extra] - File name of a sample taken before a timeout kill.
  * @returns {Error} - The original error.
  */
-export function recordCommandFailure(error, executable, result) {
+export function recordCommandFailure(error, executable, result, extra = {}) {
   const name = path.basename(executable).replace(/\.(cmd|exe)$/, '');
   commandFailures.set(error, {
     command: COMMANDS.has(name) ? name : 'packaged-app',
     status: result.status ?? null,
     signal: result.signal ?? null,
+    ...(extra.sample ? { sample: extra.sample } : {}),
   });
   return error;
+}
+
+const SAMPLE_NAME = /^command-sample-[0-9a-f-]{36}\.txt$/;
+const MAX_SAMPLES = 10;
+/** How long before a bounded command's deadline its children are sampled. */
+const SAMPLE_LEAD_MS = 6_000;
+// Runs detached beside a bounded command: shortly before the deadline it
+// records every child of the waiting process (and their children) with a
+// stack sample: `sample` on macOS, per-thread state, wchan and kernel stack
+// (where readable) on Linux. Samples run in parallel, so the command is still
+// alive while they run; the kill comes afterwards.
+const SAMPLER_SCRIPT = `
+parent=$1; delay=$2; out=$3; self=$$
+sleep "$delay"
+{
+  echo "sampled $(date -u +%Y-%m-%dT%H:%M:%SZ), $delay s into a bounded command of pid $parent"
+  for pid in $(pgrep -P "$parent"); do
+    [ "$pid" = "$self" ] && continue
+    echo "=== pid $pid"
+    ps -o pid=,ppid=,stat=,etime=,wchan=,command= -p "$pid"
+    for child in $(pgrep -P "$pid"); do ps -o pid=,ppid=,stat=,etime=,command= -p "$child"; done
+    if [ -x /usr/bin/sample ]; then
+      /usr/bin/sample "$pid" 2 -file "$out.$pid" > /dev/null 2>&1 &
+    else
+      for task in /proc/$pid/task/*; do
+        echo "-- task \${task##*/} $(cat "$task/comm" 2>/dev/null) state=$(awk '{print $3}' "$task/stat" 2>/dev/null) wchan=$(cat "$task/wchan" 2>/dev/null)"
+        cat "$task/stack" 2>/dev/null
+      done
+    fi
+  done
+  wait
+  for part in "$out".*; do
+    [ -f "$part" ] || continue
+    echo "=== sample of pid \${part##*.}"; head -n 800 "$part"; rm -f "$part"
+  done
+} > "$out" 2>&1
+`;
+
+/**
+ * Sample a bounded command's children shortly before its deadline, so a
+ * timeout leaves evidence of what the stuck process was doing. Call
+ * `settle(timedOut)` once the command returns: on a timeout it waits for the
+ * sample and returns its file name; otherwise it stops the sampler and
+ * discards the file.
+ * @param {number} timeoutMs - The command's deadline.
+ * @param {{directory?: string}} [options] - Sample destination.
+ * @returns {{settle: (timedOut: boolean) => string | undefined} | undefined} - Sampler, or undefined when the deadline is too short or sampling is unavailable.
+ */
+export function startTimeoutSampler(timeoutMs, options = {}) {
+  if (process.platform === 'win32' || timeoutMs < 2 * SAMPLE_LEAD_MS) {
+    return undefined;
+  }
+  try {
+    const directory =
+      options.directory ?? path.join(DEFAULT_DIRECTORY, 'samples');
+    // Staged privately; only a timeout moves it into the reports directory.
+    const staging = mkdtempSync(path.join(tmpdir(), 'wharfie-command-sample-'));
+    const name = `command-sample-${randomUUID()}.txt`;
+    const file = path.join(staging, name);
+    const sampler = spawn(
+      '/bin/sh',
+      [
+        '-c',
+        SAMPLER_SCRIPT,
+        'wharfie-timeout-sampler',
+        String(process.pid),
+        String((timeoutMs - SAMPLE_LEAD_MS) / 1000),
+        file,
+      ],
+      { detached: true, stdio: 'ignore' },
+    );
+    sampler.unref();
+    return {
+      settle: (timedOut) => {
+        // A diagnostic never replaces the command's own failure.
+        try {
+          if (!timedOut) {
+            try {
+              if (sampler.pid) process.kill(-sampler.pid, 'SIGKILL');
+            } catch {}
+            rmSync(staging, { recursive: true, force: true });
+            return undefined;
+          }
+          // The sampler started before the kill; give it a bounded while to
+          // finish writing.
+          spawnSync(
+            '/bin/sh',
+            [
+              '-c',
+              'i=0; while kill -0 "$1" 2>/dev/null && [ $i -lt 150 ]; do sleep 0.1; i=$((i+1)); done',
+              'wait-for-sampler',
+              String(sampler.pid),
+            ],
+            { stdio: 'ignore', timeout: 20_000 },
+          );
+          ensureRealDirectory(path.dirname(path.dirname(directory)));
+          ensureRealDirectory(path.dirname(directory));
+          ensureRealDirectory(directory);
+          copyFileSync(
+            file,
+            path.join(directory, name),
+            constants.COPYFILE_EXCL,
+          );
+          rmSync(staging, { recursive: true, force: true });
+          const samples = readdirSync(directory)
+            .filter((entry) => SAMPLE_NAME.test(entry))
+            .map((entry) => ({
+              entry,
+              modified: lstatSync(path.join(directory, entry)).mtimeMs,
+            }))
+            .sort((left, right) => left.modified - right.modified);
+          for (const old of samples.slice(
+            0,
+            Math.max(0, samples.length - MAX_SAMPLES),
+          )) {
+            unlinkSync(path.join(directory, old.entry));
+          }
+          return name;
+        } catch {
+          rmSync(staging, { recursive: true, force: true });
+          return undefined;
+        }
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -91,6 +227,7 @@ export function getCommandFailure(error) {
  * @property {number} durationMs - Total elapsed time.
  * @property {number | null} [status] - Child exit status, if known.
  * @property {string | null} [signal] - Child terminating signal, if known.
+ * @property {string} [sample] - File name of a timeout sample in samples/.
  */
 
 /**
@@ -134,6 +271,9 @@ export function retainFailureDiagnostic(input, options = {}) {
         /^SIG[A-Z0-9]{1,12}$/.test(input.signal)
           ? input.signal
           : null,
+      ...(typeof input.sample === 'string' && SAMPLE_NAME.test(input.sample)
+        ? { sample: `samples/${input.sample}` }
+        : {}),
     };
     const bytes = `${JSON.stringify(report, null, 2)}\n`;
     if (Buffer.byteLength(bytes) > MAX_BYTES)

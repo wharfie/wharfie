@@ -122,6 +122,35 @@ describe('retained validation failure reports', () => {
     );
   });
 
+  it('names a timeout sample only when it is a sample file name', () => {
+    const options = fixture();
+    const sample = 'command-sample-00000000-0000-4000-8000-000000000000.txt';
+    const kept = retainFailureDiagnostic(
+      { ...failure, runner: 'package-sea', command: 'package-sea', sample },
+      options,
+    );
+    expect(JSON.parse(readFileSync(String(kept), 'utf8')).sample).toBe(
+      `samples/${sample}`,
+    );
+    for (const bad of ['../../etc/passwd', 'command-sample-x.txt', 'a b']) {
+      const dropped = retainFailureDiagnostic(
+        {
+          ...failure,
+          runner: 'package-sea',
+          command: 'package-sea',
+          sample: bad,
+        },
+        options,
+      );
+      expect(
+        Object.hasOwn(
+          JSON.parse(readFileSync(String(dropped), 'utf8')),
+          'sample',
+        ),
+      ).toBe(false);
+    }
+  });
+
   it('omits raw arguments, environment, output, error messages and invalid scalar values', () => {
     const options = fixture();
     const error = recordCommandFailure(
