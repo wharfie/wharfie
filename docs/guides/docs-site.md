@@ -2,11 +2,11 @@
 
 Deploy [the landing page](../site/index.html) through private S3, CloudFront OAC, and a
 CloudFront Function. This manual AWS CLI runbook uses repository templates and local helpers; there is no CI deployment workflow.
-`https://docs.wharfie.dev/` is live on the custom domain: on 2026-11-20 its DNS name resolved to `d1sdjfclzv637e.cloudfront.net`, the CloudFront endpoint listed below, and its root returned the HTML with SHA-256 `0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808`, the verified staging bundle below. Public acceptance and rollback records are tracked in [issue 137](https://github.com/wharfie/wharfie/issues/137).
+`https://docs.wharfie.dev/` is live on the custom domain. Its DNS name resolves to `d1sdjfclzv637e.cloudfront.net`, the CloudFront endpoint listed below (first checked 2026-11-20). Since 2026-11-24 it serves the v0.0.17 page, `ContentSha256` `7df7fc8cf8a8a1f5bb4c69d799fef8f6cc523bb7fd97e6d52580fdd6286d2051`; see [publication record](#publication-record).
 
 The fixed destination is AWS account `411430101559`, region `us-east-1`, stack
 `wharfie-docs`, bucket `wharfie-docs-411430101559-us-east-1`, and certificate stack
-`wharfie-docs-certificate`. The bucket blocks public access; its policy permits this distribution to read release HTML through signed [OAC requests](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html).
+`wharfie-docs-certificate`. The bucket blocks public access (restored 2026-11-25; see [publication record](#publication-record)); its policy permits this distribution to read release HTML through signed [OAC requests](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/private-content-restricting-access-to-s3.html).
 CloudFront serves HTTPS and the function enforces this route contract:
 
 | Request                                                                | Response                                                               |
@@ -166,24 +166,25 @@ node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
 
 `--connect-host` changes only the connection destination; verified TLS, SNI, and HTTP Host use `docs.wharfie.dev`. Public DNS remains unchanged.
 
-## Cut over the existing Cloudflare record
+## Cut over the Cloudflare record (completed)
 
-Before cutover, merge [PR 169](https://github.com/wharfie/wharfie/pull/169) and check its public guide and feedback links: the landing page targets `master`, where the new `preview-feedback.yml` form was still absent during staging. Confirm the revised recipient and installation guides are visible too.
-Prepare the clean committed release bundle and compare its HTML and rendered hosting-template hashes with the verified staging bundle; restage and reverify any changed artifact.
+This cutover is done: by 2026-11-20 the `docs` record resolved to the
+distribution, and the custom domain has passed the live verifier since. No
+private DNS backup or cutover record from that change is retained. Before the
+cutover the record targeted `docs.wharfie.dev.s3-website-us-west-2.amazonaws.com`,
+an old origin whose AWS bucket owner remains unknown; DNS ownership does not
+establish S3 ownership. Leave that bucket untouched.
 
-The zone is managed in a personal Cloudflare account. Its existing `docs` CNAME targets
-`docs.wharfie.dev.s3-website-us-west-2.amazonaws.com`; the old AWS bucket owner remains
-unknown. DNS ownership does not establish S3 ownership. Leave that bucket untouched
-and record existing Cloudflare redirect/cache rules.
+The zone is managed in a personal Cloudflare account. Before any future change
+to the `docs` record, privately back up the **exact DNS record**: ID, type, full
+name, target, proxy state, TTL, and other editable metadata. The intended record
+is type `CNAME`, name `docs`, target `$docs_distribution`, **DNS only**
+(`proxied: false`), TTL `300`. Save the resulting record and timestamp. Keep
+validation CNAMEs separate; leave other records and Cloudflare rules unchanged.
 
-Privately back up the **exact DNS record**: ID, type, full name, target, proxy state,
-TTL, and other editable metadata. In Cloudflare's DNS dashboard update that record:
-type `CNAME`, name `docs`, target `$docs_distribution`, **DNS only** (`proxied: false`),
-TTL `300`. Save the resulting record and timestamp. Keep validation CNAMEs separate;
-leave other records and Cloudflare rules unchanged.
-
-Check DNS with an independent resolver and allow the previous TTL to expire. Run
-from a fresh client/network with the bundle and scripts, without a connection override:
+After a DNS change, check with an independent resolver and allow the previous
+TTL to expire. Run from a fresh client/network with the bundle and scripts,
+without a connection override:
 
 ```bash
 node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
@@ -192,7 +193,6 @@ node scripts/verify-docs-site.js --url https://docs.wharfie.dev \
 
 Require all 37 checks, including the manifest's root SHA. Repeat after DNS convergence with a new report path.
 Check public mobile/desktop rendering, keyboard navigation, links, and the feedback form without submitting an issue.
-Until then, give testers the [recipient guide](recipient-preview.md) directly.
 
 ## Update content or roll it back
 
@@ -224,17 +224,47 @@ successful recovery. If no safe origin is available, send testers the repository
 and record the outage. Retain the bucket, certificate, and rollback releases; do not
 use recursive sync, broad deletion, or old-origin cleanup.
 
+## Publication record
+
+**2026-11-24, v0.0.17 page.** A clean detached checkout of `fd4d9cef`
+(`git.dirty: false`) produced `ContentSha256`
+`7df7fc8cf8a8a1f5bb4c69d799fef8f6cc523bb7fd97e6d52580fdd6286d2051`. It was
+uploaded immutably to `releases/<sha>/index.html` and read back. The
+content-only change set modified only `DocsRoutes` and `DocsDistribution` and
+ran 23:49:55–23:51:03Z. The live verifier then passed 37/37 against
+`https://d1sdjfclzv637e.cloudfront.net/` and 37/37 against
+`https://docs.wharfie.dev/`.
+
+**Rollback target.** The previous `ContentSha256`,
+`0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808`, remains in
+the bucket and was confirmed present; the stack's state before the switch is
+saved privately. Rollback is a content-only change set back to that hash, as
+described above. It has not been rehearsed.
+
+**2026-11-25, private bucket (00:28:09–00:29:13Z).** The `wharfie-docs` stack
+had been running a September template from PR #171 that gave the bucket an
+S3-website configuration and a public-read policy on root `index.html` and
+`404.html`. It now runs this repository's template from the `fd4d9cef` bundle,
+with every parameter unchanged; the change set modified only `DocsBucket` and
+`DocsBucketPolicy`. All four public-access-block settings are on, the policy
+holds only `DenyInsecureTransport` and the distribution's read grant, and there
+is no website configuration. The S3 website endpoint returns 404 and a direct
+object request returns 403. Both public endpoints passed 37/37 again
+afterwards. The old root `index.html` and `404.html` and two earlier
+`releases/*` objects remain, now private, because this runbook forbids broad
+deletion.
+
 Evidence checked on 2026-09-15: `staging-verification-v2.json` finished at 16:35 UTC with all 37 checks passing; `fixed-api-proof.json` records six passing AWS `LIVE` function cases. Retain these bounded reports with the bundle; they do not establish custom-domain publication.
 
-| Acceptance evidence                                                | Status                                                                                                                                       |
-| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Staging immutable object and authenticated readback                | Passed; SHA-256 `0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808` matches bundle, origin readback, and public staging HTML. |
-| Clean committed release bundle                                     | Pending; staging records commit `00c5ec4d193b22eca3b609caf16fb0ea6b75609e` with `dirty: true`.                                               |
-| CloudFront staging endpoint                                        | [d1sdjfclzv637e.cloudfront.net](https://d1sdjfclzv637e.cloudfront.net/) (`EITEBWLWDGRVN`); **37/37 passed**.                                 |
-| AWS `LIVE` function runtime                                        | **6/6 passed** after the default-parameter syntax fix.                                                                                       |
-| Issued certificate and pre-DNS hostname/TLS report                 | Certificate in use: HTTPS to `docs.wharfie.dev` succeeded on 2026-11-20. No pre-DNS report is in the repository.                             |
-| PR 169 public guides and feedback form                             | PR 169 merged on 2026-09-15. Public link verification is not recorded in the repository.                                                     |
-| Private DNS backup, cutover record, independent public reports     | DNS points to the distribution (checked 2026-11-20). No DNS backup, cutover record, or independent public report is in the repository.       |
-| Public rendering/keyboard/link review and verified rollback record | Pending.                                                                                                                                     |
+| Acceptance evidence                                                | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Staging immutable object and authenticated readback                | Passed; SHA-256 `0c17e89550a07f3ebb05fdff691eb6ba7da8d75abdfaf1168a6e83ccb67cd808` matches bundle, origin readback, and public staging HTML.                                                                                                                                                                                                                                                                                                                                                     |
+| Clean committed release bundle                                     | Done 2026-11-24: built from a clean checkout of `fd4d9cef` (`git.dirty: false`), `ContentSha256` `7df7fc8cf8a8a1f5bb4c69d799fef8f6cc523bb7fd97e6d52580fdd6286d2051`, uploaded immutably and read back.                                                                                                                                                                                                                                                                                           |
+| CloudFront staging endpoint                                        | [d1sdjfclzv637e.cloudfront.net](https://d1sdjfclzv637e.cloudfront.net/) (`EITEBWLWDGRVN`); **37/37 passed** on 2026-09-15, 2026-11-24 and 2026-11-25.                                                                                                                                                                                                                                                                                                                                            |
+| AWS `LIVE` function runtime                                        | **6/6 passed** after the default-parameter syntax fix.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Issued certificate and pre-DNS hostname/TLS report                 | Certificate in use: the custom-domain verifier, which checks TLS, passed 37/37 on 2026-11-24 and 2026-11-25. No pre-DNS report was retained; the cutover has already happened, so one can no longer be produced.                                                                                                                                                                                                                                                                                 |
+| PR 169 public guides and feedback form                             | PR 169 merged on 2026-09-15. The published page's guide and feedback links resolve (static review, 2026-11-25).                                                                                                                                                                                                                                                                                                                                                                                  |
+| Private DNS backup, cutover record, independent public reports     | Public reports: 37/37 against `https://docs.wharfie.dev/` on 2026-11-24 and 2026-11-25. No DNS backup or cutover record was retained from the cutover.                                                                                                                                                                                                                                                                                                                                           |
+| Public rendering/keyboard/link review and verified rollback record | Static review of `docs/site/index.html` passed (2026-11-25): viewport meta, `lang`, one `h1` then `h2`s, skip link to `main`, visible `:focus-visible` outline, links and no scripts, buttons, click handlers or `tabindex`; every link resolves. No human visual or keyboard review on real devices is recorded. Rollback record: the prior `ContentSha256` `0c17e895…` object is retained and was confirmed present, and the stack's previous state is saved; rollback has not been rehearsed. |
 
-Attach sanitized evidence to issue 137. This cutover does not publish a Wharfie package or prove soak/tester acceptance.
+This cutover does not publish a Wharfie package or prove soak/tester acceptance.
