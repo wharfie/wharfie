@@ -37,6 +37,124 @@ function countBySourceFile(pattern, root = SRC) {
   return counts;
 }
 
+/** The only node:fs bindings the lock module may import. */
+const LOCK_MODULE_FS_IMPORTS = [
+  'closeSync',
+  'constants as fsConstants',
+  'fstatSync',
+  'lstatSync',
+  'openSync',
+  'readSync',
+  'renameSync',
+  'statSync',
+  'unlinkSync',
+  'writeSync',
+];
+
+/**
+ * Remove comments and the text of string and template literals (keeping
+ * the code inside `${...}`), so a check sees only code.
+ * @param {string} source
+ * @returns {string}
+ */
+function codeOnly(source) {
+  let out = '';
+  /** @type {number[]} template nesting: brace depth at each `${` */
+  const templates = [];
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    const next = source[index + 1];
+    const inTemplateText =
+      templates.length > 0 && templates[templates.length - 1] === -1;
+    if (inTemplateText) {
+      if (char === '\\') index += 1;
+      else if (char === '`') templates.pop();
+      else if (char === '$' && next === '{') {
+        templates[templates.length - 1] = depth;
+        depth += 1;
+        index += 1;
+      }
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      while (index < source.length && source[index] !== '\n') index += 1;
+      out += '\n';
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      index = source.indexOf('*/', index + 2) + 1;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      for (index += 1; index < source.length; index += 1) {
+        if (source[index] === '\\') index += 1;
+        else if (source[index] === char) break;
+      }
+      out += '""';
+      continue;
+    }
+    if (char === '`') {
+      templates.push(-1);
+      continue;
+    }
+    if (char === '{') depth += 1;
+    if (char === '}') {
+      depth -= 1;
+      if (templates.length > 0 && templates[templates.length - 1] === depth) {
+        templates[templates.length - 1] = -1;
+        continue;
+      }
+    }
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * Ways a module could change a file's owner, found lexically.
+ * @param {string} source
+ * @returns {string[]}
+ */
+function ownershipChangeViolations(source) {
+  /** @type {string[]} */
+  const violations = [];
+  const code = codeOnly(source);
+  for (const match of code.matchAll(/\b[fl]?chown(?:Sync)?\b/g)) {
+    violations.push(`identifier ${match[0]}`);
+  }
+  const fsImports = [
+    ...source.matchAll(
+      /import\s+([^;]*?)\s+from\s+['"]node:fs(\/promises)?['"]/g,
+    ),
+  ];
+  if (fsImports.length !== 1)
+    violations.push(`node:fs imports: ${fsImports.length}`);
+  for (const [, clause, promises] of fsImports) {
+    const names = /^\{([\s\S]*)\}$/.exec(clause.trim());
+    if (promises || !names) {
+      violations.push(`node:fs import form: ${clause.trim()}`);
+      continue;
+    }
+    const listed = names[1]
+      .split(',')
+      .map((name) => name.trim().replace(/\s+/g, ' '))
+      .filter(Boolean);
+    for (const name of listed) {
+      if (!LOCK_MODULE_FS_IMPORTS.includes(name)) {
+        violations.push(`node:fs import ${name}`);
+      }
+    }
+  }
+  if (/getBuiltinModule\(\s*['"](?:node:)?fs/.test(source)) {
+    violations.push('getBuiltinModule of fs');
+  }
+  if (/\bimport\s*\(|\brequire\s*\(/.test(code)) {
+    violations.push('dynamic import or require');
+  }
+  return violations;
+}
+
 describe('LMDB open choke point', () => {
   test('only the DB config module loads the LMDB adapter factory', () => {
     // Only lazily, from the DB config module: a static import elsewhere would
@@ -103,15 +221,63 @@ describe('LMDB open choke point', () => {
 
   test('the lock module never changes the owner of anything', () => {
     // A store is opened only by its owner (lmdb-holder-lock.js refuses any
-    // other user before touching the directory), so nothing there needs an
-    // ownership change, and none may come back.
+    // other user before touching or creating it), so nothing there needs an
+    // ownership change, and none may come back. Checked lexically: no
+    // chown-family identifier in code (strings and comments may still advise
+    // `chown`), and an exact node:fs import list, so an aliased import or a
+    // namespace import cannot slip one in. A name built at run time from a
+    // module imported some other way would still pass a lexical check; the
+    // import pins below close the ways this file can reach node:fs.
     const source = readFileSync(
       join(SRC, 'core/lib/db/lmdb-holder-lock.js'),
       'utf8',
     );
-    // Calls only: the operator advice may still say "chown".
-    expect(source.match(/\b[fl]?chown(?:Sync)?\s*\(/g)).toBeNull();
-    expect(source).not.toMatch(/\bfchownSync\b|\blchownSync\b|\bchownSync\b/);
+    expect(ownershipChangeViolations(source)).toEqual([]);
+    // Each bypass reviewer B listed is caught.
+    const header = "import { closeSync } from 'node:fs';\n";
+    expect(
+      ownershipChangeViolations(
+        `import { closeSync, fchown as giveAway } from 'node:fs';\ngiveAway(fd, 0, 0);\n`,
+      ),
+    ).not.toEqual([]);
+    expect(
+      ownershipChangeViolations(
+        `${header}import * as nodeFs from 'node:fs';\nnodeFs['ch' + 'own'](path, 0, 0);\n`,
+      ),
+    ).not.toEqual([]);
+    expect(
+      ownershipChangeViolations(
+        `${header}const { fchownSync: g } = process.getBuiltinModule('node:fs');\ng(fd, 0, 0);\n`,
+      ),
+    ).not.toEqual([]);
+    expect(
+      ownershipChangeViolations(
+        `${header}const fs = await import('node:fs');\n`,
+      ),
+    ).not.toEqual([]);
+    // ...and text is not code.
+    expect(
+      ownershipChangeViolations(
+        `${header}// chown it\nconst advice = 'Fix its owner (chown)';\n`,
+      ),
+    ).toEqual([]);
+  });
+
+  test('a store is created only after the creation owner check', () => {
+    const adapter = readFileSync(
+      join(SRC, 'core/lib/db/adapters/lmdb.js'),
+      'utf8',
+    );
+    expect(adapter).toMatch(
+      /if \(options\.holderLock === true\) assertMayCreateLocalStore\(dbRoot\);\s+mkdirSync\(dbRoot, /,
+    );
+    const host = readFileSync(
+      join(SRC, 'core/runtime/local-store-host.js'),
+      'utf8',
+    );
+    expect(host).toMatch(
+      /assertMayCreateLocalStore\(join\(options\.storePath, 'lmdb'\)\);\s+await fsp\.mkdir\(options\.storePath, /,
+    );
   });
 
   test('only the lock module touches the holder lock file', () => {

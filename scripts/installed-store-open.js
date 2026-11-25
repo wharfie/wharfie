@@ -10,12 +10,14 @@
  *   debugger: it cannot release the lock, and it cannot write while stopped.
  *   Only that holder counts; another paused process does not open this store;
  * - the store has no read host (the application-state store) and a live
- *   holder has it: there is nowhere else to read it, so the open is reported
+ *   holder still has it after a short grace period (`unhostedGraceMs`,
+ *   default 3 s, so a holder that is just exiting is waited out rather than
+ *   counted): there is nowhere else to read it, so the open is reported
  *   through `onUnhostedRead` and counted by the caller.
  * @param {{default: (options: Record<string, any>) => Record<string, any>}} adapterModule - Installed LMDB adapter.
  * @param {string} storePath - Store path.
  * @param {boolean} readOnly - Access mode.
- * @param {{isPausedHere: (processId: number) => boolean, unhostedStore?: boolean, onUnhostedRead?: () => void, waitMs?: number}} options - Which processes the caller holds paused, and the unhosted-store exception.
+ * @param {{isPausedHere: (processId: number) => boolean, unhostedStore?: boolean, onUnhostedRead?: () => void, waitMs?: number, unhostedGraceMs?: number}} options - Which processes the caller holds paused, and the unhosted-store exception.
  * @returns {Promise<Record<string, any>>} - Open DB client.
  */
 export async function openInstalledStore(
@@ -25,6 +27,7 @@ export async function openInstalledStore(
   options,
 ) {
   const deadline = Date.now() + (options.waitMs ?? 10_000);
+  const unhostedDeadline = Date.now() + (options.unhostedGraceMs ?? 3_000);
   for (;;) {
     try {
       return adapterModule.default({
@@ -42,7 +45,11 @@ export async function openInstalledStore(
       ) {
         return adapterModule.default({ path: storePath, readOnly });
       }
-      if (readOnly && options.unhostedStore === true) {
+      if (
+        readOnly &&
+        options.unhostedStore === true &&
+        Date.now() >= unhostedDeadline
+      ) {
         options.onUnhostedRead?.();
         return adapterModule.default({ path: storePath, readOnly });
       }

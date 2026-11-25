@@ -7,10 +7,11 @@ import {
   openSync,
   readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
@@ -229,18 +230,81 @@ function directoryOwnerUid(dbRoot) {
 
 /**
  * Refuse a process that does not own the store, before it touches anything
- * in it.
+ * in it. A directory this user cannot even open (a 0700 directory of another
+ * user) is judged by its lstat owner instead: it is refused either way.
  * @param {string} dbRoot - LMDB directory.
  * @param {number | undefined} effectiveUid - This process's effective uid.
  * @returns {void}
  */
 function assertStoreOwner(dbRoot, effectiveUid) {
-  const owner = directoryOwnerUid(dbRoot);
-  if (effectiveUid !== owner) {
+  let owner;
+  try {
+    owner = directoryOwnerUid(dbRoot);
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EACCES') {
+      throw error;
+    }
+    const stats = lstatSync(dbRoot);
+    if (!stats.isDirectory() || stats.uid === effectiveUid) throw error;
+    owner = stats.uid;
+  }
+  if (effectiveUid === owner) return;
+  if (owner === 0) {
+    // Running as root is never the fix: root left this directory behind.
     throw new LocalStoreLockError(
-      `This local store belongs to uid ${owner}, and this process runs as uid ${effectiveUid}. A store is opened only by the user who owns it: run the command as that user (for example: sudo -u '#${owner}' <command>). Nothing in the store was changed.`,
+      `This local store's directory ${dbRoot} belongs to root (uid 0): a command run as root (for example sudo wharfie ...) created it, and this process runs as uid ${effectiveUid}. Do not run Wharfie as root for this store. If you own the directory that contains it, move root's directory aside (mv ${dbRoot} ${dbRoot}.root-owned) or remove it if it holds nothing you need, then run the command again as yourself. Nothing in the store was changed.`,
     );
   }
+  throw new LocalStoreLockError(
+    `This local store belongs to uid ${owner}, and this process runs as uid ${effectiveUid}. A store is opened only by the user who owns it: run the command as that user (for example: sudo -u '#${owner}' <command>). Nothing in the store was changed.`,
+  );
+}
+
+/**
+ * Refuse to create a store inside another user's directory tree. Called
+ * before a writable open creates a missing LMDB directory (and any missing
+ * parents): the nearest directory that already exists on the way up decides.
+ * It may belong to this process's user, or to root (only root can change a
+ * root-owned directory, so creating there hands no one else anything, and an
+ * ordinary user may keep a store under, say, /tmp). Any other owner is
+ * refused, so in particular root never creates a store in a user's tree.
+ * A link on the way is judged by both its own owner and its target's.
+ * @param {string} dbRoot - LMDB directory a writable open would create.
+ * @param {{effectiveUid?: number}} [options] - For tests only: the effective uid to act as.
+ * @returns {void}
+ * @throws {LocalStoreLockError} - When the containing directory belongs to another user.
+ */
+export function assertMayCreateLocalStore(dbRoot, options = {}) {
+  if (process.platform === 'win32') return;
+  const effectiveUid = options.effectiveUid ?? process.geteuid?.();
+  const allowed = (/** @type {number} */ uid) =>
+    uid === effectiveUid || uid === 0;
+  for (let candidate = dbRoot; ; candidate = dirname(candidate)) {
+    let stats;
+    try {
+      stats = lstatSync(candidate);
+    } catch (error) {
+      const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+      if (code === 'ENOENT' && dirname(candidate) !== candidate) continue;
+      throw error;
+    }
+    // An existing store is judged by the lock itself (assertStoreOwner).
+    if (candidate === dbRoot) return;
+    const owners = [stats.uid];
+    if (stats.isSymbolicLink()) {
+      const target = statSync(candidate);
+      if (!target.isDirectory()) break;
+      owners.push(target.uid);
+    } else if (!stats.isDirectory()) {
+      break;
+    }
+    const foreign = owners.find((uid) => !allowed(uid));
+    if (foreign === undefined) return;
+    throw new LocalStoreLockError(
+      `This local store does not exist yet, and the directory it would be created in, ${candidate}, belongs to uid ${foreign} while this process runs as uid ${effectiveUid}. A store is created and opened only by the user who owns its directory: run the command as that user (for example: sudo -u '#${foreign}' <command>). Nothing was created.`,
+    );
+  }
+  // Not a directory: let the creation fail with its own error.
 }
 
 /**
@@ -571,6 +635,7 @@ export default {
   LocalStoreBusyError,
   LocalStoreLockError,
   LocalStoreWaitAbortedError,
+  assertMayCreateLocalStore,
   waitForLocalStore,
   describeLmdbHolder,
   readLmdbHolderRecord,
