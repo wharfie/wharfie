@@ -237,7 +237,7 @@ class OperatorCliTests(unittest.TestCase):
         self.assert_start('activating', ['daemon-reload', 'show'], success=False)
 
     def assert_start(self, state, expected, success=True):
-        self.operator.config = {}
+        self.operator.config = {'specSha256': 'e' * 64}
         self.operator.ownership = {'tokenStored': True, 'outputs': {'ControllerId': 'i-test'}}
         self.operator.verify_operations_files = lambda: None
         self.operator.identity = lambda: None
@@ -257,6 +257,9 @@ class OperatorCliTests(unittest.TestCase):
             self.operator.start()
         commands = requests[0]['Parameters']['commands']
         self.assertEqual(requests[0]['InstanceIds'], ['i-test'])
+        # The first check is the spec-bound readiness receipt (tested in
+        # test_readiness); here it is replaced to exercise the unit control flow.
+        self.assertEqual(commands[1], ops.readiness_check('e' * 64))
         commands[1] = 'test -f "$BOOTSTRAP_READY"'
         (self.root / 'ready').touch()
         # Only external systemctl and timeout are injected. The actual emitted
