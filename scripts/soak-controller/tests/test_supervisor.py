@@ -210,9 +210,11 @@ class SupervisorTests(unittest.TestCase):
     def test_real_signal_during_a_main_thread_wait_stops_with_its_cause(self):
         campaign = self.campaign()
         label = 'rehearsal-aws'
-        started = int(time.time() * 1000)
+        # The next tick is 5 s away, so a stop that never wakes the wait fails
+        # this test quickly instead of hanging it.
+        started = int(time.time() * 1000) - 900000 + 5000
         self.write(supervisor.safe_relative_run(label) / 'soak.json', {
-            'startedAt': started, 'endAt': started + 900000 + 300000, 'intervalMs': 900000,
+            'startedAt': started, 'endAt': started + 2 * 900000 + 300000, 'intervalMs': 900000,
             'completed': [{}], 'pending': None, 'complete': False,
         })
         with self.signal_handlers():
@@ -224,7 +226,7 @@ class SupervisorTests(unittest.TestCase):
                     campaign.wait_for_tick(label)
             finally:
                 timer.cancel()
-        self.assertLess(time.monotonic() - began, 10)
+        self.assertLess(time.monotonic() - began, 4)
         self.assertEqual(raised.exception.cause, 'signal-SIGTERM')
         # Persisted when observed, before any settlement.
         self.assertEqual(supervisor.read_json(campaign.state_path)['stopReason']['cause'], 'signal-SIGTERM')
@@ -348,6 +350,7 @@ class SupervisorTests(unittest.TestCase):
         saved = supervisor.read_json(campaign.state_path)
         self.assertEqual(saved['stopReason']['cause'], 'signal-SIGINT')
         self.assertNotIn('finishedAt', saved)
+        original = saved['stopReason']
 
         self.reset_process()
         restarted = self.campaign()
@@ -363,7 +366,8 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(calls, [(label, ['--cleanup', str(run_dir)], True)])
         self.assertTrue(supervisor.STOP.is_set())
         state = supervisor.read_json(restarted.state_path)
-        self.assertEqual(state['stopReason']['cause'], 'signal-SIGINT')
+        # The first process's stop, not the restart's latched copy of it.
+        self.assertEqual(state['stopReason'], original)
         self.assertEqual(state['status'], 'failed')
         self.assertEqual(set(state['runs']), {label})
         self.assertTrue(state['runs'][label]['cleanupVerifiedAbsent'])
@@ -494,6 +498,25 @@ class SupervisorTests(unittest.TestCase):
                 self.assertTrue(state['runs']['soak-hetzner']['cleanupVerifiedAbsent'])
                 self.assertNotIn('rehearsal-aws', state['runs'])
 
+    def test_replay_with_an_outstanding_run_export_exits_non_zero(self):
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        run_dir = self.run_fixture('soak-aws')
+        self.cleanup_success(run_dir)
+        campaign.state['runs']['soak-aws'] = {'provider': 'aws', 'label': 'soak-aws', 'status': 'failed',
+                                               'cleanupVerifiedAbsent': True, 'proofExported': False,
+                                               'settlementAttempts': 0}
+        campaign.save()
+        self.reset_process()
+        restarted = self.campaign()
+        # The run export keeps failing; the summary upload succeeds.
+        with patch.object(restarted, 'export_run', side_effect=RuntimeError('injected-export-failure')), \
+             patch.object(supervisor.time, 'sleep'), \
+             self.assertRaisesRegex(RuntimeError, 'replay-settlement-incomplete'):
+            restarted.run()
+        self.assertIn('fixture-campaign/supervisor.json', self.client.objects)
+
     def test_terminal_null_stop_reason_is_kept_when_the_replay_is_signalled(self):
         campaign = self.campaign()
         for label in LABELS_FOR_TEST:
@@ -508,6 +531,7 @@ class SupervisorTests(unittest.TestCase):
             supervisor.request_stop('signal-SIGHUP', 1)
             self.assertEqual(restarted.run(), 0)
         restarted.diagnostic_thread.join(5)
+        restarted.record_stop()
         final = supervisor.read_json(restarted.state_path)
         self.assertIsNone(final['stopReason'])
         self.assertEqual((final['status'], final['finishedAt']), ('passed', first['finishedAt']))

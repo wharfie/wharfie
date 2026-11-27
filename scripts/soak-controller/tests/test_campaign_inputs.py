@@ -223,14 +223,15 @@ class CampaignInputTests(unittest.TestCase):
         operator.identity = Mock()
         bundle = operator.root / 'operations.json.xz'
         store, puts = {}, []
-        # The file changes between the pin check and the upload.
-        store_aws = self.staging_store(operator, puts, store)
-        def changed_upload(service, action, value, **kwargs):
-            if action == 'put-object' and value['Key'].endswith('operations.json.xz'):
-                bundle.write_bytes(bundle.read_bytes() + b'\0')
-            return store_aws(service, action, value, **kwargs)
-        operator.aws = changed_upload
-        with self.assertRaisesRegex(RuntimeError, 'frozen-input-readback-mismatch'):
+        operator.aws = self.staging_store(operator, puts, store)
+        # The file changes after the pin check, while the assets are hashed.
+        real_sha256 = ops.sha256
+        def changed_during_hashing(path):
+            if Path(path).parent.resolve() == self.assets.resolve() and not bundle.read_bytes().endswith(b'\0changed'):
+                bundle.write_bytes(bundle.read_bytes() + b'\0changed')
+            return real_sha256(path)
+        with patch.object(ops, 'sha256', side_effect=changed_during_hashing), \
+             self.assertRaisesRegex(RuntimeError, 'frozen-input-readback-mismatch'):
             operator.stage_inputs()
         self.assertNotIn('inputsUploaded', operator.ownership)
 

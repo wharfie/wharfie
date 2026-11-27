@@ -361,11 +361,15 @@ class OsMaintenanceTests(unittest.TestCase):
                                         capture_output=True, text=True, timeout=60)
                 self.assertNotEqual(result.returncode, 0)
 
-    def userdata_update(self):
+    def userdata_update(self, budget):
         userdata, _ = self.userdata_drain()
         update = userdata[userdata.index('# apt-update: begin\n'):userdata.index('# apt-update: end\n')]
         self.assertIn('update_deadline=$((SECONDS + 900))', update)
-        return update.replace('update_deadline=$((SECONDS + 900))', 'update_deadline=$((SECONDS + 2))')
+        return update.replace('update_deadline=$((SECONDS + 900))', 'update_deadline=$((SECONDS + %d))' % budget)
+
+    def bootstrap_update(self, budget):
+        return (section().replace('/etc/', str(self.root) + '/etc/')
+                .replace('apt_update_seconds=900', 'apt_update_seconds=%d' % budget) + 'apt_update\n')
 
     def run_update(self, script, mode):
         (self.state / 'apt-calls').unlink(missing_ok=True)
@@ -376,17 +380,17 @@ class OsMaintenanceTests(unittest.TestCase):
         return result, calls
 
     def test_apt_update_retries_only_lock_contention_within_its_budget(self):
-        bootstrap = (section().replace('/etc/', str(self.root) + '/etc/')
-                     .replace('apt_update_seconds=900', 'apt_update_seconds=2') + 'apt_update\n')
         self.assertIn('apt_update_seconds=900', section())
-        for name, script in (('bootstrap', bootstrap), ('userdata', self.userdata_update())):
+        for name, stage in (('bootstrap', self.bootstrap_update), ('userdata', self.userdata_update)):
             with self.subTest(stage=name):
-                result, calls = self.run_update(script, 'lock:2')
+                # A generous budget, so only the retry rule decides these.
+                result, calls = self.run_update(stage(60), 'lock:2')
                 self.assertEqual((result.returncode, calls), (0, 3), result.stderr)
-                result, calls = self.run_update(script, 'fail')
+                result, calls = self.run_update(stage(60), 'fail')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(calls, 1)
-                result, calls = self.run_update(script, 'lock:1000000')
+                # A lock that is never released fails within the budget.
+                result, calls = self.run_update(stage(2), 'lock:1000000')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertGreater(calls, 1)
 

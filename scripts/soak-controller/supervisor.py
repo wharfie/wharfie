@@ -897,7 +897,9 @@ class Campaign:
             except Exception as error:
                 failures.append(type(error).__name__)
         self.finish()
-        if failures:
+        outstanding = [label for label, outcome in self.state['runs'].items()
+                       if not (cleanup_settled(outcome) and outcome.get('proofExported'))]
+        if failures or outstanding:
             # Every eligible cleanup was attempted; exit non-zero so systemd
             # restarts the supervisor and the exports are retried.
             raise RuntimeError('replay-settlement-incomplete')
