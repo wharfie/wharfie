@@ -235,11 +235,20 @@ def describe(path):
         return ['link', hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()]
     if not stat.S_ISREG(info.st_mode):
         return ['other', '']
-    digest = hashlib.sha256()
-    with open(path, 'rb') as source:
-        for chunk in iter(lambda: source.read(1048576), b''):
+    # One no-follow, non-blocking descriptor, so the bytes hashed belong to
+    # the regular file checked. A hard link could share them with a path the
+    # installer still controls, so a tracked file has exactly one link.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            return ['other', '']
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: os.read(descriptor, 1048576), b''):
             digest.update(chunk)
-    return ['exec' if info.st_mode & 0o111 else 'file', digest.hexdigest()]
+    finally:
+        os.close(descriptor)
+    return ['exec' if opened.st_mode & 0o111 else 'file', digest.hexdigest()]
 
 if action == 'record':
     # Root runs git once, on its own fresh clone, before the installer owns anything.
@@ -313,8 +322,8 @@ timeout 1200 /usr/sbin/runuser -u wharfie-soak -- env -i \
   AWS_EC2_METADATA_DISABLED=true npm ci --no-audit --no-fund
 cd /
 chown -R root:root /opt/wharfie-soak/harness
-harness_manifest verify /opt/wharfie-soak/harness /opt/wharfie-soak/harness-manifest.json
 chmod -R a+rX,go-w /opt/wharfie-soak/harness
+harness_manifest verify /opt/wharfie-soak/harness /opt/wharfie-soak/harness-manifest.json
 # harness: end
 timeout 900 python3 /opt/wharfie-soak/ops/download_candidate.py
 timeout 180 /usr/sbin/runuser -u wharfie-soak -- env -i \

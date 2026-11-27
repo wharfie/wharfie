@@ -107,7 +107,11 @@ class BootstrapRetryTests(unittest.TestCase):
                 ('rm package.json && ln -s .gitignore package.json', 'harness file changed during npm ci: package.json'),
                 ('rm package.json', 'harness file removed during npm ci: package.json'),
                 ('echo new > generated.js', 'harness file added during npm ci: generated.js'),
-                ('mkdir -p build/cache', 'harness directory added during npm ci: build')):
+                ('mkdir -p build/cache', 'harness directory added during npm ci: build'),
+                # A same-content hard link from a path the installer controls.
+                ('mkdir -p node_modules/fixture && ln package.json node_modules/fixture/linked.json',
+                 'harness file changed during npm ci: package.json'),
+                ('rm package.json && mkfifo package.json', 'harness file changed during npm ci: package.json')):
             with self.subTest(action=action):
                 self.npm(action)
                 self.assert_refused(self.install(), message)
