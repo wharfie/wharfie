@@ -36,6 +36,7 @@ class ReadinessTests(unittest.TestCase):
         self.home.mkdir(parents=True)
         (self.etc / 'campaign.json').write_text(json.dumps({'specSha256': SPEC}))
         self.receipt = self.etc / 'bootstrap-ready.json'
+        self.token = self.home / ('creator-token-' + SPEC)
         self.old_receipt = self.home / 'bootstrap-ready.json'
 
     def relocate(self, text):
@@ -56,6 +57,7 @@ class ReadinessTests(unittest.TestCase):
         stale = json.dumps({'ready': True, 'specSha256': SPEC})
         self.receipt.write_text(stale)
         self.old_receipt.write_text(stale)
+        self.token.write_text(SPEC)
 
     def test_stale_receipt_and_a_failed_retry_never_satisfy_start(self):
         self.stale_receipts()
@@ -65,6 +67,8 @@ class ReadinessTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.receipt.exists())
         self.assertFalse(self.old_receipt.exists())
+        # Nor does an earlier attempt's creator token survive a failed retry.
+        self.assertFalse(self.token.exists())
         self.assertFalse(self.ready())
 
     def test_a_complete_bootstrap_publishes_a_spec_bound_receipt(self):
@@ -76,6 +80,8 @@ class ReadinessTests(unittest.TestCase):
         self.assertFalse((self.etc / 'bootstrap-ready.json.tmp').exists())
         self.assertFalse(self.old_receipt.exists())
         self.assertTrue(self.ready())
+        # A fresh creator token for this spec is published with the receipt.
+        self.assertEqual(self.token.read_text(), SPEC)
         # Another campaign's spec, or a receipt that is not a regular file, fails.
         self.assertFalse(self.ready('d' * 64))
         self.receipt.unlink()

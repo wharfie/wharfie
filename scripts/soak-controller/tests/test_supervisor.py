@@ -777,6 +777,9 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(latch.stop)
         return runtime / 'started'
 
+    def creator_token(self):
+        supervisor.creator_token_path(self.config['specSha256']).write_text(self.config['specSha256'])
+
     def bootstrap_state_layout(self):
         # Exactly what bootstrap and its `npm ci` (HOME is this directory)
         # leave before the first supervisor start.
@@ -785,6 +788,7 @@ class SupervisorTests(unittest.TestCase):
         (self.root / '.npm/_logs/2026-11-27T05_00_00_000Z-debug-0.log').write_text('npm log')
         (self.root / '.npm/_update-notifier-last-checked').write_text('')
         (self.root / 'supervisor.lock').touch()
+        self.creator_token()
 
     def test_first_start_after_a_real_bootstrap_is_the_creator(self):
         self.runtime_latch()
@@ -806,6 +810,7 @@ class SupervisorTests(unittest.TestCase):
         import errno
         latch = self.runtime_latch()
         spec = self.config['specSha256']
+        self.creator_token()
         real_open = os.open
         def state_disk_full(path, *args, **kwargs):
             if str(path).startswith(str(self.root)):
@@ -821,30 +826,84 @@ class SupervisorTests(unittest.TestCase):
             supervisor.bind_stop_record(spec)
             with patch('sys.stdout', new_callable=io.StringIO):
                 supervisor.request_stop('signal-SIGTERM', 15)
+        # The token was spent all the same: an unlink needs no free space.
         self.assertEqual(list(self.root.iterdir()), [])
         self.assertTrue(latch.exists())
         # Capacity returns; the next start in this boot is still cleanup-only.
         self.reset_process()
         self.assertFalse(supervisor.startup_creator(spec))
+        # The reviewer's reboot case: a reboot clears /run, capacity is back,
+        # and nothing is written in the state directory. Still no creator.
+        self.clear_root()
+        latch.unlink()
+        self.assertFalse(supervisor.startup_creator(spec))
 
     def test_each_latch_alone_prevents_a_creator(self):
         spec = self.config['specSha256']
         latch = self.runtime_latch()
+        # No token: cleanup-only, even on an empty state directory, and no
+        # latch is taken from a later token holder.
+        self.assertFalse(supervisor.startup_creator(spec))
+        self.assertFalse(latch.exists())
+        self.clear_root()
+        self.creator_token()
         self.assertTrue(supervisor.startup_creator(spec))
         # A reboot clears /run; the durable marker still applies.
         latch.unlink()
+        self.creator_token()
         self.assertFalse(supervisor.startup_creator(spec))
         # The in-boot latch cannot be created: cleanup-only, but the durable
         # marker is still claimed.
         self.clear_root()
         latch.unlink()
         latch.parent.rmdir()
+        self.creator_token()
         self.assertFalse(supervisor.startup_creator(spec))
         self.assertTrue((self.root / 'first-start.json').exists())
         unit = (ROOT_DIR / 'wharfie-soak.service').read_text()
         for line in ('RuntimeDirectory=wharfie-soak\n', 'RuntimeDirectoryPreserve=yes\n'):
             self.assertIn(line, unit)
         self.assertEqual(str(ops_latch_parent()), '/run/wharfie-soak')
+
+    def test_concurrent_first_starts_give_exactly_one_creator(self):
+        # Each competing process unlinks the same token; separate processes,
+        # so the latches and marker race for real.
+        self.runtime_latch()
+        self.creator_token()
+        script = (
+            'import importlib.util, sys\n'
+            'from pathlib import Path\n'
+            'spec = importlib.util.spec_from_file_location("s", sys.argv[1])\n'
+            's = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)\n'
+            's.ROOT = Path(sys.argv[2]); s.RUNTIME_LATCH = Path(sys.argv[3])\n'
+            'print(s.startup_creator(sys.argv[4]))\n')
+        self.process_patch.stop()
+        processes = [subprocess.Popen([sys.executable, '-c', script, str(MODULE_PATH), str(self.root),
+                                       str(supervisor.RUNTIME_LATCH), self.config['specSha256']],
+                                      stdout=subprocess.PIPE, text=True) for _ in range(8)]
+        results = [process.communicate(timeout=60)[0].strip() for process in processes]
+        self.assertEqual(sorted(results), ['False'] * 7 + ['True'])
+
+    def test_reserve_is_rechecked_after_a_slow_credential_lookup(self):
+        clock = [1900000000.0]
+        self.config['stopAt'] = clock[0] + 2407
+        hetzner = self.run_fixture('soak-hetzner')
+        restarted = self.campaign(creator=False)
+        def slow_lookup():
+            clock[0] += 10
+            return TOKEN
+        restarted.token_source = slow_lookup
+        with patch.object(supervisor.time, 'time', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.time, 'sleep'), \
+             patch.object(restarted, 'invoke') as invoke, \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        invoke.assert_not_called()
+        outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+        self.assertEqual(outcome['settlementDeferred'], 'external-stop-close-preserve-authority')
+        self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+        self.assertTrue((hetzner / 'workspace').exists())
 
     def test_reserve_is_rechecked_after_a_late_backoff_wakeup(self):
         import errno

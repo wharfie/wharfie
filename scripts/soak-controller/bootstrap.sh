@@ -8,7 +8,7 @@ export LC_ALL=C.UTF-8
 # in the service user's home. A fresh receipt is published only after every
 # check below, in root-owned /etc/wharfie-soak.
 rm -f /var/lib/wharfie-soak/bootstrap-ready.json /etc/wharfie-soak/bootstrap-ready.json \
-  /etc/wharfie-soak/bootstrap-ready.json.tmp
+  /etc/wharfie-soak/bootstrap-ready.json.tmp /var/lib/wharfie-soak/creator-token-*
 # readiness: end
 # The acceptance harness is the candidate's own commit. The operations bundle,
 # identified by its hashes and the recorded controller commit, may be newer.
@@ -365,6 +365,20 @@ with open(directory + '/campaign.json') as source:
     spec = json.load(source)['specSha256']
 data = json.dumps({'ready': True, 'at': time.time(), 'specSha256': spec,
                    'node': '24.13.1', 'npm': '11.12.0'}).encode()
+# The one-shot creator token: the first supervisor start unlinks it, which
+# needs only write permission on the state directory and no free space.
+state = '/var/lib/wharfie-soak'
+token = os.open(state + '/creator-token-' + spec, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+try:
+    os.write(token, spec.encode())
+    os.fsync(token)
+finally:
+    os.close(token)
+descriptor = os.open(state, os.O_RDONLY)
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
 temporary = directory + '/bootstrap-ready.json.tmp'
 descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
 try:

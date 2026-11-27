@@ -108,11 +108,11 @@ Every run attempts to retain fsynced lifecycle metadata: child start/exit, termi
 
 A cleanup child terminated by its budget records `cleanupStopReason`.
 
-**Only the first supervisor process ever started for a campaign may create runs.** Before signal handling, network calls or anything else, `supervisor.py` claims two latches:
+**Only the first supervisor process ever started for a campaign may create runs.** At the end of a successful bootstrap, root publishes a one-shot creator token, `/var/lib/wharfie-soak/creator-token-<specSha256>`. Bootstrap deletes any stale token at entry, together with the readiness receipt. The supervisor's very first action, after reading `campaign.json` for the spec, is to unlink that token. An unlink needs only write permission on the state directory and no free space, so neither a full disk nor a reboot can give a later start another token; if the unlink fails for any reason, the process is cleanup-only and claims nothing more. Only one process can unlink it, so concurrent starts give at most one creator. The process that unlinked it then claims two latches, before signal handling, network calls or anything else:
 - **In-boot latch:** `/run/wharfie-soak/started`, created exclusively on tmpfs. The unit's `RuntimeDirectory=wharfie-soak` with `RuntimeDirectoryPreserve=yes` keeps it across service restarts until a reboot. It catches a start whose state disk was full.
 - **Durable marker:** `/var/lib/wharfie-soak/first-start.json`, created exclusively (`O_CREAT|O_EXCL`), bound to `specSha256`, with the file and its directory fsynced.
 
-A reboot clears only the first; the marker still applies. A process is the creator only if it freshly created both latches and, before creating the marker, the state directory held no supervisor artifact. Supervisor artifacts are:
+A reboot clears only the first; the marker still applies. A process is the creator only if it consumed the token, freshly created both latches and, before creating the marker, the state directory held no supervisor artifact. Supervisor artifacts are:
 - its summary and diagnostics (`supervisor*` other than the lock);
 - the marker;
 - stop records;
@@ -128,7 +128,7 @@ Inside the creator, the in-memory stop is the only thing that inhibits new work.
 Both kinds of process end the same way:
 - **Inventory:** every run directory on disk without a settled, exported outcome is collected, including one whose outcome was never saved because the process died (`failureReason: outcome-not-saved`).
 - **Round-robin cleanup:** each round gives every such run one cleanup attempt before any retry, and before any proof upload. A slow or failing run therefore cannot take another run's first cleanup.
-- **Separate limits:** cleanup is capped at three attempts per run across all activations, and an attempt counts only once a cleanup child has started. A credential lookup failure or a spawn failure happens before any child exists. Either is retried with capped backoff (5 to 40 s) within the reserve, and if it persists it spends no attempt, so a later activation retries. The reserve is rechecked after every wait, immediately before each dispatch. Proof exports are not capped by the cleanup limit and are retried on every activation.
+- **Separate limits:** cleanup is capped at three attempts per run across all activations, and an attempt counts only once a cleanup child has started. A credential lookup failure or a spawn failure happens before any child exists. Either is retried with capped backoff (5 to 40 s) within the reserve, and if it persists it spends no attempt, so a later activation retries. The reserve is rechecked after every wait and again after the credential lookup, immediately before each cleanup spawn. Proof exports are not capped by the cleanup limit and are retried on every activation.
 - **Exit status:** the exit stays non-zero while any existing run is not cleaned up and exported, so systemd restarts the supervisor and retries. A run with no run directory has nothing to clean up.
 - **Terminal summary:** it keeps its first `finishedAt`, `status`, settled outcomes and `stopReason`, even a null one, and counts each later activation in `replays`. A signal to such a process appears only in its process diagnostics.
 

@@ -130,12 +130,41 @@ def claim_runtime_latch():
         return False
 
 
-def startup_creator(spec):
-    """Both latches freshly created, and no prior activity: only then a creator.
+def creator_token_path(spec):
+    return ROOT / ('creator-token-' + spec)
 
-    The in-boot latch comes first, before anything else; the durable marker is
-    still claimed even if it fails, so this start always counts as one.
+
+def consume_creator_token(spec):
+    """Unlink the one-shot token bootstrap publishes; True only for the one that did.
+
+    An unlink needs no free space, so a full state disk cannot keep a start
+    from spending it, and a reboot cannot bring it back.
     """
+    try:
+        os.unlink(creator_token_path(spec))
+    except OSError:
+        return False
+    try:
+        directory = os.open(ROOT, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        pass
+    return True
+
+
+def startup_creator(spec):
+    """The token consumed, both latches freshly created, no prior activity.
+
+    The token is consumed first, before anything else; only one process can.
+    A process without it is cleanup-only and claims nothing more, so it can
+    never take a latch from the one that has it. The token holder still
+    claims the durable marker even if the in-boot latch fails.
+    """
+    if not consume_creator_token(spec):
+        return False
     runtime = claim_runtime_latch()
     durable = claim_first_start(spec)
     return runtime and durable
@@ -1018,6 +1047,11 @@ class Campaign:
                 outcome['credentialFailureType'] = type(error).__name__
                 outcome['credentialFailures'] = outcome.get('credentialFailures', 0) + 1
             else:
+                # A slow lookup may have used the reserve; recheck before spawning.
+                if self.config['stopAt'] - time.time() < 2400:
+                    outcome['settlementDeferred'] = 'external-stop-close-preserve-authority'
+                    self.put_outcome(label, outcome)
+                    return False
                 # A stale export flag never survives into a new cleanup.
                 outcome['proofExported'] = False
                 self.put_outcome(label, outcome)
