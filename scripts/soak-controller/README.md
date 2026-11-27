@@ -63,6 +63,20 @@ After setup, the supervisor deadline must still hold the full soak and its 45-mi
 
 Guest SSH ingress is limited to the controller EIP `/32` by the runner (`--allow-ssh-from`) and by the operator's gate check of the AWS preview (`allowedIpv4`). The guest IAM policy cannot enforce it. The EC2 service authorization reference lists no condition key for the CIDR, port, or protocol of `ec2:AuthorizeSecurityGroupIngress`; it offers only `ec2:Region`, resource tags, `ec2:SecurityGroupID`, and `ec2:Vpc`. The policy therefore limits ingress changes to the campaign's tagged guest security groups only. Code running with the controller role after guest authorization could add wider ingress to those groups. For Hetzner guests only the runner enforces the `/32`: there is no operator gate, and AWS IAM does not govern the Hetzner token.
 
+## OS maintenance on the controller
+
+Bootstrap turns off the controller's automatic OS maintenance for its whole life. It masks `apt-daily.timer`, `apt-daily-upgrade.timer` and their two services, and disables `unattended-upgrades.service`. It also installs `/etc/needrestart/conf.d/wharfie-soak.conf`, which contains exactly `$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;`. needrestart matches each `override_rc` regex against the unit name, so it never restarts the supervisor, even after a package installed by hand over SSM. On 2026-11-27 the stock `apt-daily-upgrade` run upgraded `libexpat1`, which `python3` maps. needrestart then restarted `wharfie-soak.service`, and the stop failed both full soaks 2 h 18 m in, while Wharfie stayed healthy.
+
+Leaving updates off is acceptable here. The controller is disposable: it lives at most the soak length plus six hours (54 or 78 h), boots the newest pinned Ubuntu image selected by the fresh preflight at `prepare`, and its security group has no inbound rules. A security update that lands during a campaign waits for the next campaign's image. Before writing `bootstrap-ready.json`, bootstrap verifies all of this and fails if any check does not hold:
+- each of the four units reports `masked` and `inactive`;
+- `unattended-upgrades.service` is neither enabled nor active;
+- the drop-in matches the expected bytes exactly;
+- when evaluated as needrestart does, the full needrestart configuration denies a restart for every `override_rc` regex that matches `wharfie-soak.service`.
+
+Neither the userdata nor cloud-init runs a package upgrade. Both only `apt-get install` fixed packages, before the service is started.
+
+The guests are unaffected and left unchanged. Their Wharfie resident is a systemd user service under a lingering `user@UID.service`, which needrestart reports as a user session and never restarts.
+
 ## Scheduling, diagnostics, and recovery
 
 The supervisor now sleeps until the next anchored observation instead of repeatedly invoking `--resume --step` and reuploading unchanged reports. The wait is monotonic-bounded and rejects backwards wall time. Each actual observation still starts a fresh controller process; no existing run directory is recreated.

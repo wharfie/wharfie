@@ -5,6 +5,67 @@ export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
 controller_commit=$(python3 -c 'import json,re; c=json.load(open("/etc/wharfie-soak/campaign.json"))["controllerCommit"]; assert re.fullmatch("[0-9a-f]{40}",c); print(c)')
 
+# os-maintenance: begin
+# OS maintenance must not restart the supervisor during a campaign. On
+# 2026-11-27 apt-daily-upgrade ran unattended-upgrade, and needrestart then
+# restarted wharfie-soak.service, which stopped both full soaks (see README).
+apt_maintenance_units='apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service'
+needrestart_conf=/etc/needrestart/needrestart.conf
+needrestart_dropin=/etc/needrestart/conf.d/wharfie-soak.conf
+# needrestart matches each override_rc regex against the unit name.
+needrestart_override='$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;'
+
+disable_os_maintenance() {
+  install -d -m 0755 "$(dirname "$needrestart_dropin")"
+  printf '%s\n' "$needrestart_override" > "$needrestart_dropin"
+  chmod 0644 "$needrestart_dropin"
+  # Stopping the services waits for an upgrade already in progress.
+  timeout 1200 systemctl stop $apt_maintenance_units
+  systemctl mask $apt_maintenance_units
+  if systemctl list-unit-files unattended-upgrades.service --no-legend 2>/dev/null | \
+      awk '{print $1}' | grep -qx unattended-upgrades.service; then
+    timeout 600 systemctl disable --now unattended-upgrades.service
+  fi
+}
+
+verify_os_maintenance() {
+  local unit
+  for unit in $apt_maintenance_units; do
+    if [ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" != masked ] || \
+        [ "$(systemctl is-active "$unit" 2>/dev/null || true)" != inactive ]; then
+      echo "OS maintenance unit is not masked and inactive: $unit" >&2
+      exit 1
+    fi
+  done
+  if [ "$(systemctl is-enabled unattended-upgrades.service 2>/dev/null || true)" = enabled ] || \
+      [ "$(systemctl is-active unattended-upgrades.service 2>/dev/null || true)" = active ]; then
+    echo 'unattended-upgrades.service is not disabled' >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$needrestart_override" | cmp -s - "$needrestart_dropin"; then
+    echo "needrestart override is not exact: $needrestart_dropin" >&2
+    exit 1
+  fi
+  # Evaluate the configuration as needrestart does: every override_rc regex
+  # that matches the unit must deny the restart.
+  if [ -e "$needrestart_conf" ] && ! perl - "$needrestart_conf" <<'PERL'
+our %nrconf = (override_rc => {});
+my $file = shift;
+my $config = do { local $/; open my $handle, '<', $file or die; <$handle> };
+eval $config;
+die $@ if $@;
+my @matches = grep { 'wharfie-soak.service' =~ /$_/ } keys %{$nrconf{override_rc}};
+exit((@matches && !grep { $nrconf{override_rc}{$_} } @matches) ? 0 : 1);
+PERL
+  then
+    echo 'needrestart may still restart wharfie-soak.service' >&2
+    exit 1
+  fi
+}
+# os-maintenance: end
+
+disable_os_maintenance
+
 for attempt in $(seq 1 60); do
   if timeout 10 curl --proto '=https' --tlsv1.2 -fsS --connect-timeout 5 --max-time 8 \
       https://nodejs.org/dist/v24.13.1/SHASUMS256.txt >/dev/null 2>&1; then
@@ -82,6 +143,7 @@ if systemctl list-unit-files amazon-ssm-agent.service --no-legend 2>/dev/null | 
 else
   snap start amazon-ssm-agent
 fi
+verify_os_maintenance
 python3 - <<'PY'
 import json, pathlib, time
 p = pathlib.Path('/var/lib/wharfie-soak/bootstrap-ready.json')
