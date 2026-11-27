@@ -139,6 +139,7 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
         self.addCleanup(root_patch.stop)
         supervisor.STOP.clear()
         supervisor.STOP_REASON = None
+        supervisor.STOP_RECORD = None
         self.addCleanup(supervisor.STOP.clear)
         self.config = {'campaignId': 'fixture-campaign', 'specSha256': 'a' * 64,
                        'sourceCommit': 'b' * 40, 'controllerIpv4': '192.0.2.15',
@@ -159,7 +160,7 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
                 handler.close()
 
     def campaign(self):
-        campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN)
+        campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN, creator=True)
         def settle_diagnostics():
             if campaign.diagnostic_thread is not None:
                 campaign.diagnostic_thread.join(2)
@@ -188,7 +189,8 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
         self.assertIs(result['neverCreated'], True)
         self.assertIs(result['cleanupVerifiedAbsent'], False)
         self.assertIs(result['proofExported'], True)
-        self.assertEqual(result['settlementAttempts'], 1)
+        # No cleanup child was needed, so no attempt was spent.
+        self.assertEqual(result.get('settlementAttempts', 0), 0)
         self.assertNotIn('fixture-campaign/runs/rehearsal-hetzner/recovery.tar.gz', self.client.puts)
         self.assertIn('fixture-campaign/runs/rehearsal-hetzner/retirement.json', self.client.puts)
         self.assertTrue(supervisor.never_created(run_dir))
@@ -405,7 +407,7 @@ class SoakLengthPreparationTests(unittest.TestCase):
     def setUp(self):
         # Reuse the candidate fixture that exercises the real `prepare` checks.
         from test_campaign_inputs import CampaignInputTests
-        self.inputs = CampaignInputTests('test_parameterizes_identical_harness_and_candidate_commit')
+        self.inputs = CampaignInputTests('test_harness_is_the_candidate_commit_and_controller_is_the_checkout')
         self.inputs.setUp()
         self.addCleanup(self.inputs.doCleanups)
 

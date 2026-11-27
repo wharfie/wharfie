@@ -25,6 +25,18 @@ CANDIDATE = '/opt/wharfie-soak/candidate'
 MAX_JSON = 262144
 STOP = threading.Event()
 STOP_REASON = None
+STOP_LOCK = threading.Lock()
+# The fixed cause recorded for each handled signal.
+SIGNAL_CAUSES = {signal.SIGTERM: 'signal-SIGTERM', signal.SIGINT: 'signal-SIGINT', signal.SIGHUP: 'signal-SIGHUP'}
+# Written only by the signal handler; read by the watcher thread.
+FIRST_SIGNAL = None
+SIGNAL_PIPE = None
+# (path, specSha256) of this spec's local stop record, bound at process start.
+STOP_RECORD = None
+# Set when that record could not be written; reported, never silently dropped.
+STOP_RECORD_FAILED = False
+# Cleanup attempts per run across all activations; proof exports are separate.
+CLEANUP_ATTEMPTS = 3
 REPORT_NAMES = (
     'run.json', 'report.json', 'cleanup-report.json', 'retirement.json',
     'failure.json', 'soak-progress.json', 'soak.json', 'preview.json',
@@ -32,6 +44,7 @@ REPORT_NAMES = (
     'gate-request.json', 'gate-approved.json',
 )
 SOAK_HOURS = (48, 72)
+LABELS = ('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner')
 # Observation exports retried after a failure, and the first backoff in seconds.
 # No retry starts once EXPORT_RETRY_ALLOWANCE has passed since the first attempt.
 EXPORT_ATTEMPTS = 4
@@ -62,11 +75,230 @@ NEVER_CREATED_PHASES = frozenset(PRE_APPLY_PHASES + ('prepare-removal', 'remove-
 
 
 def request_stop(cause, signum=None):
+    # Never called from a signal handler: it takes thread locks.
     global STOP_REASON
-    if STOP_REASON is None:
-        STOP_REASON = {'cause': cause, 'signal': signum, 'at': time.time(),
-                       'monotonicAt': time.monotonic()}
+    with STOP_LOCK:
+        first = STOP_REASON is None
+        if first:
+            STOP_REASON = {'cause': cause, 'signal': signum, 'at': time.time(),
+                           'monotonicAt': time.monotonic()}
+    # Launches are inhibited before the record's I/O, which may be slow.
     STOP.set()
+    if first:
+        write_stop_record(STOP_REASON)
+
+
+# The in-boot latch, on tmpfs (systemd RuntimeDirectory=, preserved across
+# service restarts), so a full state disk cannot hide an earlier start.
+RUNTIME_LATCH = Path('/run/wharfie-soak/started')
+
+
+def is_supervisor_artifact(name):
+    """A state-directory entry that only a supervisor process writes."""
+    return ((name.startswith('supervisor') and name != 'supervisor.lock')
+            or name.startswith(('first-start', 'stop-', 'stop.json')) or name.startswith(LABELS))
+
+
+def no_prior_activity():
+    """True unless the state directory holds a supervisor artifact.
+
+    Only supervisor artifacts count: its summary and diagnostics, the
+    marker, stop records, per-run logs and archives, and anything under
+    runs/. Everything else is ignored, such as bootstrap's homes/ and the npm
+    cache that `npm ci` leaves in this HOME. A read error counts as activity.
+    """
+    try:
+        with os.scandir(ROOT) as entries:
+            for entry in entries:
+                if entry.name == 'runs':
+                    with os.scandir(entry.path) as runs:
+                        if next(runs, None) is not None:
+                            return False
+                elif is_supervisor_artifact(entry.name):
+                    return False
+    except OSError:
+        return False
+    return True
+
+
+def claim_runtime_latch():
+    """True only if this is the first start of the service in this boot."""
+    try:
+        os.close(os.open(RUNTIME_LATCH, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+        return True
+    except OSError:
+        return False
+
+
+def creator_token_path(spec):
+    return ROOT / ('creator-token-' + spec)
+
+
+def consume_creator_token(spec):
+    """Unlink the one-shot token bootstrap publishes; True only for the one that did.
+
+    An unlink needs no free space, so a full state disk cannot keep a start
+    from spending it, and a reboot cannot bring it back.
+    """
+    try:
+        os.unlink(creator_token_path(spec))
+    except OSError:
+        return False
+    try:
+        directory = os.open(ROOT, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        pass
+    return True
+
+
+def startup_creator(spec):
+    """The in-boot latch, then the token, then the durable marker, all fresh.
+
+    The tmpfs latch comes first, so a same-boot retry after any later failure
+    (an unwritable state directory, say) finds it and is cleanup-only. Each
+    step that fails makes this process cleanup-only and stops the claim.
+    """
+    if not claim_runtime_latch():
+        return False
+    if not consume_creator_token(spec):
+        return False
+    return claim_first_start(spec)
+
+
+def claim_first_start(spec):
+    """True only for the first process ever to start this campaign.
+
+    It must find no prior campaign activity and then create the marker
+    exclusively and durably, before anything else happens. Otherwise this
+    process is cleanup-only for its whole life: a restart can never create a
+    run, and a process whose marker create failed still left its own state.
+    """
+    path = ROOT / 'first-start.json'
+    if not no_prior_activity():
+        return False
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return False
+    try:
+        os.write(descriptor, json.dumps({'specSha256': spec, 'pid': os.getpid(), 'at': time.time()}).encode())
+        os.fsync(descriptor)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    try:
+        directory = os.open(ROOT, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        return False
+    return True
+
+
+def stop_record_path(spec):
+    # Spec-specific, so a record left by another campaign can never block ours.
+    return ROOT / ('stop-' + spec + '.json')
+
+
+def bind_stop_record(spec):
+    """Bind the record before signal handling, network or credential work."""
+    global STOP_RECORD
+    STOP_RECORD = (stop_record_path(spec), spec)
+
+
+def write_stop_record(reason):
+    """Make the first stop durable at once: a local fsynced file, no network.
+
+    It is evidence for a later `stopReason`, never a dispatch decision: a
+    restarted process is cleanup-only regardless. A failed write is reported.
+    """
+    global STOP_RECORD_FAILED
+    record = STOP_RECORD
+    if record is None:
+        return
+    path, spec = record
+    try:
+        if not path.exists():
+            atomic_json(path, {'specSha256': spec, **reason})
+    except (OSError, RuntimeError):
+        STOP_RECORD_FAILED = True
+        print('Campaign stop record was not written: stop-record-write-failed', flush=True)
+
+
+def stop_observed():
+    """True from the moment the handler runs, before the watcher or any I/O."""
+    return FIRST_SIGNAL is not None or STOP.is_set()
+
+
+def stop_cause():
+    reason = STOP_REASON
+    if reason:
+        return reason['cause']
+    signum = FIRST_SIGNAL
+    return SIGNAL_CAUSES.get(signum, 'signal') if signum is not None else 'campaign-stop'
+
+
+def stop_for_signal(signum, _frame=None):
+    """Record the first signal and wake the watcher; take no thread lock.
+
+    The handler runs on the main thread between bytecodes, possibly while that
+    thread holds STOP's condition lock inside Event.wait or Event.set, so
+    calling STOP.set() here could deadlock. The watcher thread sets STOP.
+    """
+    global FIRST_SIGNAL
+    if FIRST_SIGNAL is None:
+        FIRST_SIGNAL = signum
+    pipe = SIGNAL_PIPE
+    if pipe is not None:
+        try:
+            os.write(pipe[1], b'\0')
+        except OSError:
+            pass
+
+
+def consume_signal():
+    """Turn the first handled signal into the stop; later signals never replace it."""
+    signum = FIRST_SIGNAL
+    # systemd and needrestart stop the service with SIGTERM, so the summary
+    # must say a signal ended the campaign.
+    request_stop(SIGNAL_CAUSES.get(signum, 'signal'), None if signum is None else int(signum))
+
+
+def install_signal_handlers():
+    """A self-pipe and one watcher thread turn signals into a fixed stop cause."""
+    global SIGNAL_PIPE
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(write_fd, False)
+    SIGNAL_PIPE = (read_fd, write_fd)
+
+    def watch():
+        while True:
+            try:
+                if not os.read(read_fd, 64):
+                    return
+            except OSError:
+                return
+            consume_signal()
+
+    watcher = threading.Thread(target=watch, daemon=True, name='signal-watch')
+    watcher.start()
+    for sig in SIGNAL_CAUSES:
+        signal.signal(sig, stop_for_signal)
+    return watcher
+
+
+class CampaignStopped(RuntimeError):
+    """A campaign stop or deadline ended a run; `cause` is a fixed string."""
+    def __init__(self, message, cause):
+        super().__init__(message)
+        self.cause = cause
 
 
 class CampaignTimeRefused(RuntimeError):
@@ -294,17 +526,35 @@ class Evidence:
 
 
 class Campaign:
-    def __init__(self, config, evidence, token):
-        self.config, self.evidence, self.token = config, evidence, token
+    def __init__(self, config, evidence, token, creator=False):
+        # `token` is the Hetzner token, or a callable that fetches it. It is
+        # fetched only for a Hetzner child, so its lookup cannot block AWS work.
+        # Only the creator, the first process ever started for this campaign,
+        # may start a run (see claim_first_start); every other is cleanup-only.
+        self.config, self.evidence, self.token_source = config, evidence, token
+        self.creator = creator
+        self.token = None
         self.state_path = ROOT / 'supervisor.json'
         if self.state_path.exists():
-            self.state = read_json(self.state_path)
+            try:
+                self.state = read_json(self.state_path)
+            except (ValueError, RuntimeError):
+                if creator:
+                    raise
+                # A cleanup-only process never stops for a damaged summary: it
+                # keeps the damaged bytes and inventories the run directories.
+                self.state_path.replace(self.state_path.with_name('supervisor.json.unreadable'))
+                self.state = {'format': 'wharfie.soak.supervisor.v1', 'specSha256': config['specSha256'],
+                              'campaignId': config['campaignId'], 'startedAt': time.time(), 'runs': {},
+                              'summaryUnreadable': True}
+                self.save()
             if self.state['specSha256'] != config['specSha256']:
                 raise RuntimeError('campaign-authority-changed')
         else:
             self.state = {'format': 'wharfie.soak.supervisor.v1', 'specSha256': config['specSha256'],
                           'campaignId': config['campaignId'], 'startedAt': time.time(), 'runs': {}}
             self.save()
+        bind_stop_record(config['specSha256'])
         self.soak_hours = soak_hours(config)
         self.deadline = supervisor_deadline(config, self.state['startedAt'])
         self.monotonic_deadline = time.monotonic() + max(0, self.deadline - time.time())
@@ -313,6 +563,52 @@ class Campaign:
         self.diagnostic_lock = threading.Lock()
         self.diagnostic_thread = None
         self.diagnostic_start_lock = threading.Lock()
+        # The fixed cause of the latest supervisor-terminated child, per label.
+        self.terminations = {}
+        # Per label, what to run once a cleanup child has started.
+        self.spawn_hooks = {}
+
+    def deadline_reached(self):
+        return time.time() >= self.deadline or time.monotonic() >= self.monotonic_deadline
+
+    def campaign_cause(self):
+        """Why the campaign can no longer continue a run: a stop, else its deadline."""
+        return stop_cause() if stop_observed() else 'campaign-deadline'
+
+    def token_for(self, provider):
+        if provider != 'hetzner':
+            return None
+        if self.token is None:
+            token = self.token_source() if callable(self.token_source) else self.token_source
+            if not isinstance(token, str) or not 20 <= len(token) <= 4096 or '\n' in token:
+                raise RuntimeError('invalid-token-format')
+            self.token = token
+        return self.token
+
+    def recorded_stop(self):
+        """Evidence for stopReason: this spec's complete stop record, or None."""
+        try:
+            record = read_json(stop_record_path(self.config['specSha256']))
+        except (OSError, ValueError, RuntimeError):
+            return None
+        if (isinstance(record, dict) and record.get('specSha256') == self.config['specSha256']
+                and record.get('cause') in (*SIGNAL_CAUSES.values(), 'full-build-start-deadline')):
+            return {key: value for key, value in record.items() if key != 'specSha256'}
+        return None
+
+    def record_stop(self):
+        """Persist the first campaign stop before any cleanup or network work.
+
+        A later process restores it as a latched stop, so the cause survives a
+        restart even when this process dies before `finish`.
+        """
+        reason = STOP_REASON
+        if reason is None or self.state.get('stopReason') or 'finishedAt' in self.state:
+            return
+        with self.lock:
+            if not self.state.get('stopReason'):
+                self.state['stopReason'] = reason
+                self.save()
 
     def event(self, label, kind, **fields):
         """Best-effort fixed diagnostics must never block lifecycle actions."""
@@ -369,7 +665,12 @@ class Campaign:
         usage = shutil.disk_usage(ROOT)
         value = {'campaignId': self.config['campaignId'], 'at': time.time(),
                  'monotonicAt': time.monotonic(), 'pid': os.getpid(),
-                 'stopRequested': STOP.is_set(), 'stopReason': STOP_REASON,
+                 # The campaign's persisted cause, then this process's own state.
+                 'status': self.state.get('status'),
+                 'stopReason': (self.state.get('stopReason') if 'finishedAt' in self.state
+                                else self.state.get('stopReason') or STOP_REASON),
+                 'processStopRequested': stop_observed(), 'processStopReason': STOP_REASON,
+                 'stopRecordFailed': STOP_RECORD_FAILED,
                  'deadline': self.deadline, 'monotonicDeadline': self.monotonic_deadline,
                  'memoryEvents': counters, 'diskAvailableBytes': usage.free}
         path = ROOT / 'supervisor-diagnostics.json'
@@ -415,8 +716,9 @@ class Campaign:
             if current < previous or time.monotonic() >= deadline:
                 raise RuntimeError('observer-wait-clock-failed')
             previous = current
-            if STOP.is_set() or current >= self.deadline or time.monotonic() >= self.monotonic_deadline:
-                raise RuntimeError('campaign-stop-during-wait')
+            if stop_observed() or self.deadline_reached():
+                self.record_stop()
+                raise CampaignStopped('campaign-stop-during-wait', self.campaign_cause())
             STOP.wait(min(5, next_at - current))
 
     def save(self):
@@ -467,12 +769,14 @@ class Campaign:
                 return self.export_run(label)
             except Exception as error:
                 backoff = EXPORT_BACKOFF * 2 ** attempt
-                if (attempt + 1 == EXPORT_ATTEMPTS or STOP.is_set()
+                if stop_observed():
+                    raise CampaignStopped('campaign-stop-during-export', stop_cause()) from None
+                if (attempt + 1 == EXPORT_ATTEMPTS
                         or time.monotonic() - started + backoff > EXPORT_RETRY_ALLOWANCE):
                     raise
                 self.event(label, 'export-retry', attempt=attempt + 1, failureType=type(error).__name__)
                 if STOP.wait(backoff):
-                    raise
+                    raise CampaignStopped('campaign-stop-during-export', stop_cause()) from None
 
     def transfer_gate(self, label):
         run_dir = safe_relative_run(label)
@@ -502,11 +806,19 @@ class Campaign:
                 logger.addHandler(handler)
         except Exception:
             logger = None
-        child = subprocess.Popen([NODE, RUNNER, *arguments], cwd=HARNESS,
-                                 env=provider_environment(provider, self.token),
+        environment = provider_environment(provider, self.token_for(provider))
+        # The only gate on new work, checked after any blocking lookup and
+        # immediately before the spawn: only the creator, with no stop seen.
+        if not cleanup and (not self.creator or stop_observed()):
+            raise CampaignStopped('run-launch-refused', stop_cause() if stop_observed() else 'supervisor-restarted')
+        child = subprocess.Popen([NODE, RUNNER, *arguments], cwd=HARNESS, env=environment,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, start_new_session=True)
         try:
+            # A cleanup attempt is counted here, once a child exists.
+            hook = self.spawn_hooks.pop(label, None)
+            if hook is not None:
+                hook()
             # Every post-spawn operation is protected by termination/reaping.
             self.event(label, 'child-started', pid=child.pid, cleanup=cleanup)
             # Keep draining even if optional log storage fails, so a full pipe
@@ -541,10 +853,21 @@ class Campaign:
                     self.schedule_diagnostics()
                     next_diagnostics = now + 60
                 expired = time.time() >= wall_limit or now >= mono_limit
-                if term_at is None and (expired or (STOP.is_set() and not cleanup)):
+                stopping = stop_observed() and not cleanup
+                if term_at is None and (expired or stopping):
                     term_at = now
+                    # Fixed and distinct: a campaign stop, the campaign
+                    # deadline, or this child operation's own budget.
+                    if stopping:
+                        cause = stop_cause()
+                    elif not cleanup and self.deadline_reached():
+                        cause = 'campaign-deadline'
+                    else:
+                        cause = 'child-operation-timeout'
+                    self.terminations[label] = cause
+                    self.record_stop()
                     self.event(label, 'child-term-requested', pid=child.pid,
-                               reason='operation-deadline' if expired else 'supervisor-stop',
+                               reason='supervisor-stop' if stopping else 'operation-deadline', cause=cause,
                                stopReason=STOP_REASON, wallLimit=wall_limit, monotonicLimit=mono_limit)
                     try:
                         os.killpg(child.pid, signal.SIGTERM)
@@ -558,6 +881,16 @@ class Campaign:
                         pass
                 time.sleep(1)
             pump.join(timeout=5)
+            if term_at is None and not cleanup:
+                # KillMode=control-group signals the child and the supervisor
+                # together, so the child can exit before the stop is seen.
+                # A child that handles TERM itself may exit 0; any exit is
+                # reconciled with the signal this process observed.
+                if not stop_observed():
+                    STOP.wait(2 if child.returncode < 0 else 0.5)
+                if stop_observed():
+                    self.terminations[label] = stop_cause()
+                    self.record_stop()
             self.event(label, 'child-exited', pid=child.pid, exitCode=child.returncode,
                        terminatedBySupervisor=term_at is not None)
             return 124 if term_at is not None else child.returncode
@@ -588,8 +921,8 @@ class Campaign:
             return previous
         outcome = {'provider': provider, 'label': label, 'status': 'failed'}
         try:
-            if STOP.is_set() or time.time() >= self.deadline:
-                raise RuntimeError('campaign-deadline')
+            if stop_observed() or time.time() >= self.deadline:
+                raise CampaignStopped('campaign-stop-before-run', self.campaign_cause())
             if not run_dir.exists():
                 if label.startswith('soak-') and time.time() + self.soak_hours * 3600 + FINAL_OBSERVATION_MARGIN > self.deadline:
                     raise CampaignTimeRefused('insufficient-campaign-time-for-full-soak-and-final-teardown')
@@ -599,6 +932,7 @@ class Campaign:
                     '--soak-hours', '0.25' if label.startswith('rehearsal-') else str(self.soak_hours),
                     '--artifact-dir', CANDIDATE, '--expected-commit', self.config['sourceCommit'],
                     '--output-dir', str(run_dir), '--step'])
+                self.note_termination(label, code, outcome)
             else:
                 # Never create a replacement when a response or process was lost.
                 progress = read_json(run_dir / 'soak-progress.json') if (run_dir / 'soak-progress.json').exists() else {}
@@ -617,6 +951,7 @@ class Campaign:
                 # A fresh packaged controller per observation; schedule remains
                 # anchored to the runner's immutable first-apply deadline.
                 code = self.invoke(label, ['--resume', str(run_dir), '--step'])
+                self.note_termination(label, code, outcome)
             progress = read_json(run_dir / 'soak-progress.json') if (run_dir / 'soak-progress.json').exists() else {}
             outcome.update(observerExitCode=code, complete=progress.get('complete', False),
                            completedRuns=progress.get('completedRuns', 0),
@@ -625,6 +960,9 @@ class Campaign:
                 outcome['status'] = 'passed'
         except Exception as error:
             outcome['failureType'] = type(error).__name__
+            if isinstance(error, CampaignStopped):
+                # The fixed cause that stopped this run, never a raw exception string.
+                outcome['stopReason'] = error.cause
             if isinstance(error, CampaignTimeRefused):
                 # A fixed reason, never a raw exception string.
                 outcome['failureReason'] = str(error)
@@ -633,32 +971,154 @@ class Campaign:
             outcome = self.settle(label, outcome)
         return outcome
 
-    def settle(self, label, outcome):
-        """Only cleanup/export on restart; never resume or recreate failed work."""
+    def note_termination(self, label, code, outcome):
+        """Keep the fixed cause of a child ended by a stop, deadline or budget."""
+        cause = self.terminations.pop(label, None)
+        if cause is not None:
+            outcome['stopReason'] = cause
+
+    def put_outcome(self, label, outcome):
+        with self.lock:
+            self.state['runs'][label] = dict(outcome)
+            self.save()
+
+    def unsettled(self, label):
+        # The runner creates the run directory before any provider work, so a
+        # run without one has nothing to clean up or export.
+        if not safe_relative_run(label).exists():
+            return False
+        outcome = self.state['runs'][label]
+        return not (cleanup_settled(outcome) and outcome.get('proofExported'))
+
+    def cleanup_attempt(self, label):
+        """One cleanup attempt, counted against the cap and saved locally first."""
+        outcome = dict(self.state['runs'][label])
         run_dir = safe_relative_run(label)
-        while outcome.get('settlementAttempts', 0) < 3:
+        if (not run_dir.exists() or cleanup_settled(outcome)
+                or outcome.get('settlementAttempts', 0) >= CLEANUP_ATTEMPTS):
+            return
+        if self.config['stopAt'] - time.time() < 2400:
+            outcome['settlementDeferred'] = 'external-stop-close-preserve-authority'
+            self.put_outcome(label, outcome)
+            return
+        try:
+            if (run_dir / 'run.json').exists():
+                if not cleanup_verified(run_dir) and not never_created(run_dir):
+                    # Only a started cleanup child counts against the cap, so
+                    # a credential outage leaves every attempt for later.
+                    if not self.start_cleanup(label, outcome):
+                        return
+                    cause = self.terminations.pop(label, None)
+                    if outcome['cleanupExitCode'] == 124 and cause is not None:
+                        outcome['cleanupStopReason'] = cause
+                outcome['cleanupVerifiedAbsent'] = cleanup_verified(run_dir)
+                outcome['neverCreated'] = never_created(run_dir)
+        except Exception as error:
+            outcome['cleanupFailureType'] = type(error).__name__
+        self.put_outcome(label, outcome)
+
+    def start_cleanup(self, label, outcome):
+        """Run one cleanup child; count the attempt only once it has started.
+
+        A credential lookup or spawn failure happens before any child exists.
+        It is retried with capped backoff within the reserve and, if it
+        persists, spends no attempt, so a later activation retries.
+        """
+        run_dir = safe_relative_run(label)
+        backoff = 5
+        while True:
+            # Rechecked after every wait, immediately before any dispatch.
             if self.config['stopAt'] - time.time() < 2400:
                 outcome['settlementDeferred'] = 'external-stop-close-preserve-authority'
-                break
-            outcome['settlementAttempts'] = outcome.get('settlementAttempts', 0) + 1
-            outcome['proofExported'] = False
-            with self.lock:
-                self.state['runs'][label] = dict(outcome)
-                self.save()
+                self.put_outcome(label, outcome)
+                return False
+            started = []
+
+            def counted():
+                started.append(True)
+                outcome['settlementAttempts'] = outcome.get('settlementAttempts', 0) + 1
+                self.put_outcome(label, outcome)
+
             try:
-                if (run_dir / 'run.json').exists():
-                    if not cleanup_verified(run_dir) and not never_created(run_dir):
-                        outcome['cleanupExitCode'] = self.invoke(label, ['--cleanup', str(run_dir)], cleanup=True)
-                    outcome['cleanupVerifiedAbsent'] = cleanup_verified(run_dir)
-                    outcome['neverCreated'] = never_created(run_dir)
-                    self.export_run(label, recovery=not cleanup_settled(outcome))
-                    outcome['proofExported'] = True
-                if cleanup_settled(outcome) and outcome.get('proofExported'):
-                    break
+                self.token_for(label.split('-')[-1])
+                outcome.pop('credentialFailureType', None)
             except Exception as error:
-                outcome['exportOrCleanupFailureType'] = type(error).__name__
-            time.sleep(5)
-        if not (cleanup_settled(outcome) and outcome.get('proofExported')):
+                outcome['credentialFailureType'] = type(error).__name__
+                outcome['credentialFailures'] = outcome.get('credentialFailures', 0) + 1
+            else:
+                # A slow lookup may have used the reserve; recheck before spawning.
+                if self.config['stopAt'] - time.time() < 2400:
+                    outcome['settlementDeferred'] = 'external-stop-close-preserve-authority'
+                    self.put_outcome(label, outcome)
+                    return False
+                # A stale export flag never survives into a new cleanup.
+                outcome['proofExported'] = False
+                self.put_outcome(label, outcome)
+                self.spawn_hooks[label] = counted
+                try:
+                    outcome['cleanupExitCode'] = self.invoke(label, ['--cleanup', str(run_dir)], cleanup=True)
+                except Exception as error:
+                    if started:
+                        raise
+                    outcome['spawnFailureType'] = type(error).__name__
+                    outcome['spawnFailures'] = outcome.get('spawnFailures', 0) + 1
+                else:
+                    if not started:
+                        # A child ran and returned.
+                        counted()
+                    outcome.pop('spawnFailureType', None)
+                    return True
+                finally:
+                    self.spawn_hooks.pop(label, None)
+            if self.config['stopAt'] - time.time() - backoff < 2400 or backoff > 60:
+                self.put_outcome(label, outcome)
+                return False
+            time.sleep(backoff)
+            backoff *= 2
+
+    def export_attempt(self, label):
+        """One proof export; not limited by the cleanup cap, so every activation retries."""
+        outcome = dict(self.state['runs'][label])
+        run_dir = safe_relative_run(label)
+        if outcome.get('proofExported') or not (run_dir / 'run.json').exists():
+            return
+        if self.config['stopAt'] - time.time() < 2400:
+            return
+        outcome['exportAttempts'] = outcome.get('exportAttempts', 0) + 1
+        try:
+            self.export_run(label, recovery=not cleanup_settled(outcome))
+            outcome['proofExported'] = True
+            outcome.pop('exportFailureType', None)
+        except Exception as error:
+            outcome['exportFailureType'] = type(error).__name__
+        self.put_outcome(label, outcome)
+
+    def settle_labels(self, labels):
+        """Clean up and export runs, round-robin across labels.
+
+        In each round every label's cleanup attempt comes before any label's
+        retry and before any proof upload, so one slow or failing label can
+        never take another label's first cleanup.
+        """
+        pending = list(labels)
+        for round_index in range(CLEANUP_ATTEMPTS):
+            for label in pending:
+                self.cleanup_attempt(label)
+            for label in pending:
+                self.export_attempt(label)
+            pending = [label for label in pending if self.unsettled(label)]
+            if not pending:
+                return
+            if round_index + 1 < CLEANUP_ATTEMPTS:
+                time.sleep(5)
+
+    def settle(self, label, outcome):
+        """Only cleanup/export on restart; never resume or recreate failed work."""
+        self.record_stop()
+        self.put_outcome(label, outcome)
+        self.settle_labels([label])
+        outcome = dict(self.state['runs'][label])
+        if self.unsettled(label):
             outcome['status'] = 'failed'
         with self.lock:
             self.state['runs'][label] = dict(outcome)
@@ -667,33 +1127,85 @@ class Campaign:
         return outcome
 
     def run(self):
+        if not self.creator:
+            return self.conclude()
         # Native rehearsal builds and short runs are sequential on the 4GiB host.
         for provider in ('aws', 'hetzner'):
             result = self.run_one('rehearsal-' + provider)
             if result['status'] != 'passed':
-                return self.finish()
+                return self.conclude()
         # Offset the two native builds until AWS has its first observation.
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             first = pool.submit(self.run_one, 'soak-aws')
             until = time.monotonic() + 3600
             while not first.done() and not (safe_relative_run('soak-aws') / 'soak-progress.json').exists():
-                if STOP.is_set() or time.monotonic() >= until:
+                if stop_observed() or time.monotonic() >= until:
                     request_stop('full-build-start-deadline')
+                    self.record_stop()
                     break
                 time.sleep(2)
-            if not STOP.is_set() and (not first.done() or first.result()['status'] == 'passed'):
+            if not stop_observed() and (not first.done() or first.result()['status'] == 'passed'):
                 second = pool.submit(self.run_one, 'soak-hetzner')
                 second.result()
             first.result()
-        return self.finish()
+        return self.conclude()
+
+    def conclude(self):
+        """Settle every run that exists on disk, then finish; never create a run.
+
+        Every path ends here. A run directory without a settled, exported
+        outcome, including one whose outcome was never saved because the
+        process died, gets cleanup and export attempts first. The exit stays
+        non-zero while any remains outstanding, so systemd restarts the
+        supervisor and retries. `finish` keeps the first finish time and status.
+        """
+        if not self.creator and 'finishedAt' not in self.state:
+            # A restart ends the campaign: keep the first recorded cause, or
+            # record the restart itself.
+            with self.lock:
+                self.state['stopReason'] = (self.state.get('stopReason') or self.recorded_stop()
+                                            or {'cause': 'supervisor-restarted', 'signal': None, 'at': time.time()})
+                self.state['restarted'] = True
+                self.save()
+        saved = self.state.get('stopReason')
+        pending = []
+        for label in LABELS:
+            if label not in self.state['runs']:
+                if not safe_relative_run(label).exists():
+                    continue
+                outcome = {'provider': label.split('-')[-1], 'label': label, 'status': 'failed',
+                           'failureReason': 'outcome-not-saved'}
+                if saved:
+                    outcome['stopReason'] = saved['cause']
+                self.put_outcome(label, outcome)
+            if self.unsettled(label):
+                pending.append(label)
+        self.record_stop()
+        self.settle_labels(pending)
+        for label in pending:
+            if self.unsettled(label):
+                outcome = dict(self.state['runs'][label])
+                outcome['status'] = 'failed'
+                self.put_outcome(label, outcome)
+        self.finish()
+        if [label for label in self.state['runs'] if self.unsettled(label)]:
+            raise RuntimeError('settlement-incomplete')
+        return 0
 
     def finish(self):
-        required = {'rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner'}
+        required = set(LABELS)
         passed = set(self.state['runs']) == required and all(
             x.get('status') == 'passed' and x.get('complete') and x.get('cleanupVerifiedAbsent')
             and x.get('proofExported') for x in self.state['runs'].values())
-        self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
-        self.state['stopReason'] = STOP_REASON
+        if 'finishedAt' in self.state:
+            # A restarted supervisor keeps the first terminal time, status and
+            # stopReason, even a null one; its own signals go to diagnostics.
+            self.state['replays'] = self.state.get('replays', 0) + 1
+        else:
+            # A campaign a restarted process finishes is failed, whatever its runs show.
+            passed = passed and not self.state.get('restarted')
+            self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
+            self.state['stopReason'] = self.state.get('stopReason') or STOP_REASON
         self.save()
         self.schedule_diagnostics()
         self.evidence.put_file('supervisor.json', self.state_path)
@@ -742,19 +1254,27 @@ def main():
         'rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner'])
     options = parser.parse_args()
     ROOT.mkdir(mode=0o700, exist_ok=True)
+    config = read_json(Path('/etc/wharfie-soak/campaign.json'))
+    # Before anything else: is this the first process ever started for this
+    # campaign? Only that process may create runs. A manual cleanup repair
+    # never claims either latch.
+    creator = not options.repair_cleanup and startup_creator(config['specSha256'])
+    # The stop record is bound, then signals are handled, before any lock,
+    # network or credential work, so a stop during startup is never lost.
+    bind_stop_record(config['specSha256'])
+    install_signal_handlers()
     lock = open(ROOT / 'supervisor.lock', 'a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    config = read_json(Path('/etc/wharfie-soak/campaign.json'))
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, lambda signum, _frame: request_stop('signal', signum))
     sdk_config = Config(connect_timeout=10, read_timeout=30, retries={'max_attempts': 2})
     ssm = boto3.client('ssm', region_name=config['region'], config=sdk_config)
-    # No token in userdata, command payload, environment file, logs, or receipts.
-    token = ssm.get_parameter(Name=config['tokenParameter'], WithDecryption=True)['Parameter']['Value']
-    if not isinstance(token, str) or not 20 <= len(token) <= 4096 or '\n' in token:
-        raise RuntimeError('invalid-token-format')
+
+    def fetch_token():
+        # Only a Hetzner child asks for it. No token in userdata, command
+        # payload, environment file, logs, or receipts.
+        return ssm.get_parameter(Name=config['tokenParameter'], WithDecryption=True)['Parameter']['Value']
+
     client = boto3.client('s3', region_name=config['region'], config=sdk_config)
-    campaign = Campaign(config, Evidence(config, client), token)
+    campaign = Campaign(config, Evidence(config, client), fetch_token, creator=creator)
     if options.repair_cleanup:
         return campaign.repair_cleanup(options.repair_cleanup)
     return campaign.run()

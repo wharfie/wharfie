@@ -614,6 +614,7 @@ class SupervisorScheduleTests(unittest.TestCase):
         self.addCleanup(patch.stop)
         supervisor.STOP.clear()
         supervisor.STOP_REASON = None
+        supervisor.STOP_RECORD = None
         self.addCleanup(supervisor.STOP.clear)
         self.config = {'campaignId': 'fixture-campaign', 'specSha256': 'a' * 64,
                        'sourceCommit': 'b' * 40, 'stopAt': time.time() + 80 * 3600, 'soakHours': 72,
@@ -623,7 +624,7 @@ class SupervisorScheduleTests(unittest.TestCase):
                                     side_effect=AssertionError('unexpected subprocess'))
         process.start()
         self.addCleanup(process.stop)
-        self.campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN)
+        self.campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN, creator=True)
         # Settlement has its own tests; these assert only the scheduling decision.
         self.campaign.settle = lambda _label, outcome: outcome
 
@@ -754,11 +755,12 @@ class SupervisorScheduleTests(unittest.TestCase):
         wait.assert_not_called()
 
     def test_stop_requested_before_a_failed_export_is_not_retried(self):
-        supervisor.STOP.set()
+        supervisor.request_stop('signal-SIGTERM', 15)
         with mock.patch.object(self.campaign, 'export_run', side_effect=RuntimeError('down')) as export, \
              mock.patch.object(supervisor.STOP, 'wait', return_value=False) as wait:
-            with self.assertRaisesRegex(RuntimeError, 'down'):
+            with self.assertRaisesRegex(supervisor.CampaignStopped, 'campaign-stop-during-export') as raised:
                 self.campaign.export_observation('soak-aws')
+        self.assertEqual(raised.exception.cause, 'signal-SIGTERM')
         self.assertEqual(export.call_count, 1)
         wait.assert_not_called()
 
@@ -766,9 +768,11 @@ class SupervisorScheduleTests(unittest.TestCase):
         self.running_soak()
         with mock.patch.object(self.campaign, 'export_run', side_effect=RuntimeError('down')) as export, \
              mock.patch.object(supervisor.STOP, 'wait', return_value=True):
+            supervisor.STOP_REASON = {'cause': 'signal-SIGTERM'}
             result = self.campaign.run_one('soak-aws')
         self.assertEqual(export.call_count, 1)
         self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['stopReason'], 'signal-SIGTERM')
 
 
 if __name__ == '__main__':

@@ -35,6 +35,7 @@ PROVISION_BUDGET = 3600
 # `start` can still follow. Measured apply to start: 10 m 55 s on 2026-11-19.
 APPLY_START_MARGIN = 1200
 DEFAULT_SSM_KEY = 'alias/aws/ssm'
+OPERATIONS_FILES = (*RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py')
 
 
 def asset_names(version):
@@ -62,7 +63,66 @@ def canonical_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+READINESS_RECEIPT = '/etc/wharfie-soak/bootstrap-ready.json'
+
+
+def readiness_check(spec):
+    """A shell command: the root-owned receipt of this exact campaign spec exists."""
+    assert re.fullmatch(r'[0-9a-f]{64}', spec)
+    return ("python3 -c 'import json, os, stat, sys; path = sys.argv[1]; info = os.lstat(path); "
+            "receipt = json.load(open(path)); sys.exit(0 if stat.S_ISREG(info.st_mode) and info.st_uid == 0 "
+            "and receipt.get(\"ready\") is True and receipt.get(\"specSha256\") == sys.argv[2] else 1)' "
+            + READINESS_RECEIPT + ' ' + spec)
+
+
+def git(*arguments):
+    return subprocess.run(['git', '-C', str(HERE), *arguments], stdin=subprocess.DEVNULL,
+                          capture_output=True, timeout=30, check=True).stdout
+
+
+def frozen_operations(head):
+    """Read every operations file once and require the bytes committed at `head`.
+
+    git status compares stat data and index flags, not bytes, and a file can
+    change after it ran. These exact bytes supply both the recorded hashes and
+    the bundle, so `controllerCommit` contains what the controller runs.
+    """
+    contents = {}
+    for name in OPERATIONS_FILES:
+        data = (HERE / name).read_bytes()
+        try:
+            committed = git('cat-file', 'blob', head + ':./' + name)
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError('controller-checkout-commit-unavailable') from None
+        if data != committed:
+            raise RuntimeError('controller-operations-differ-from-commit')
+        contents[name] = data
+    return contents
+
+
+def controller_commit():
+    """The commit of the checkout these operations files come from.
+
+    The operations bundle is built from this checkout, so a tracked change, or
+    an operations file git does not track, would make the commit untrue.
+    """
+    try:
+        head = git('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
+        git('ls-files', '--error-unmatch', '--', *OPERATIONS_FILES)
+        changes = git('status', '--porcelain', '--untracked-files=no')
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        raise RuntimeError('controller-checkout-commit-unavailable') from None
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('controller-checkout-commit-unavailable')
+    if changes:
+        raise RuntimeError('controller-checkout-has-uncommitted-changes')
+    return head
+
+
 def prepare(options):
+    # Refuse before writing anything when the operations provenance is unknown.
+    controller = controller_commit()
+    operations = frozen_operations(controller)
     root = options.state.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     preview = read_json(options.preview)
@@ -96,7 +156,9 @@ def prepare(options):
         'guestRootGiB': spec['image']['rootBlockDevice']['sizeGiB'],
         'vpcId': spec['network']['vpcId'], 'subnetId': spec['network']['subnet']['id'],
         'guestSubnetIds': [spec['network']['subnet']['id']],
-        'controllerCommit': options.commit, 'sourceCommit': options.commit,
+        # The candidate and its acceptance harness come from sourceCommit; the
+        # operations files hashed below come from the controller checkout.
+        'controllerCommit': controller, 'sourceCommit': options.commit,
         'version': options.version, 'soakHours': hours,
         # The controller window is the full soak plus six hours for setup,
         # rehearsals, the final observation, and settlement.
@@ -105,8 +167,7 @@ def prepare(options):
         'tokenParameter': '/wharfie-soak/' + options.campaign + '/hetzner-token',
         'assets': {name: {'size': (assets / name).stat().st_size, 'sha256': sha256(assets / name)}
                    for name in sorted(names)},
-        'operationsFiles': {name: sha256(HERE / name) for name in [
-            *RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py']},
+        'operationsFiles': {name: hashlib.sha256(data).hexdigest() for name, data in operations.items()},
     }
     config['specSha256'] = canonical_digest(config)
     # The same rule `apply` and `start` enforce, applied before anything is written.
@@ -115,8 +176,12 @@ def prepare(options):
     if latest_start(config) - created < PROVISION_BUDGET:
         raise RuntimeError('campaign-window-cannot-hold-setup-and-full-soak')
     atomic_json(root / 'campaign.json', config)
-    template = render(config)
+    template = render(config, contents=operations)
     atomic_json(root / 'cloudformation.json', template)
+    # The exact bundle the userdata pins; `stage-inputs` uploads these bytes.
+    bundle = root / 'operations.json.xz'
+    bundle.write_bytes(runtime_bundle(config, contents=operations))
+    bundle.chmod(0o600)
     atomic_json(root / 'ownership.json', {
         'campaignId': config['campaignId'], 'specSha256': config['specSha256'],
         'templateSha256': sha256(root / 'cloudformation.json'), 'stackId': None,
@@ -325,9 +390,14 @@ class Operator:
         """Upload and read back the exact frozen inputs while bootstrap waits."""
         self.verify_local_bundle()
         self.identity()
+        # Upload the bundle `prepare` froze, never one rebuilt from the
+        # checkout, and only if the reviewed userdata pins exactly these bytes.
         bundle = self.root / 'operations.json.xz'
-        bundle.write_bytes(runtime_bundle(self.config))
-        bundle.chmod(0o600)
+        data = bundle.read_bytes()
+        template = read_json(self.root / 'cloudformation.json')
+        userdata = template['Resources']['Controller']['Properties']['UserData']['Fn::Base64']['Fn::Sub']
+        if "'size': %d, 'sha256': '%s'" % (len(data), hashlib.sha256(data).hexdigest()) not in userdata:
+            raise RuntimeError('frozen-operations-bundle-changed')
         assets = Path(self.ownership['assetsDirectory'])
         entries = []
         for name, expected in self.config['assets'].items():
@@ -336,7 +406,8 @@ class Operator:
                 raise RuntimeError('frozen-candidate-input-changed')
             entries.append(('assets/' + name, source, expected['sha256'], expected['size']))
         # Publishing the bundle last releases bootstrap only after all assets exist.
-        entries.append(('operations.json.xz', bundle, sha256(bundle), bundle.stat().st_size))
+        # The readback must match the checked digest, so a later change to the file refuses.
+        entries.append(('operations.json.xz', bundle, hashlib.sha256(data).hexdigest(), len(data)))
         for suffix, source, digest, size in entries:
             key = self.config['campaignId'] + '/inputs/' + suffix
             self.aws('s3api', 'put-object', {'Bucket': self.config['bucket'], 'Key': key,
@@ -482,7 +553,7 @@ class Operator:
         if not self.ownership.get('tokenStored'):
             raise RuntimeError('private-token-not-stored')
         instance = self.ownership['outputs']['ControllerId']
-        commands = ['test -f /var/lib/wharfie-soak/bootstrap-ready.json',
+        commands = [readiness_check(self.config['specSha256']),
                     'timeout 10 systemctl daemon-reload',
                     'active_state=$(timeout 5 systemctl show wharfie-soak.service --property=ActiveState --value)',
                     'case "$active_state" in failed) timeout 5 systemctl reset-failed wharfie-soak.service ;; active|inactive) ;; *) exit 1 ;; esac',

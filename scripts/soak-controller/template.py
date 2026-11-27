@@ -10,20 +10,24 @@ from policy import document, allow, infrastructure_policy, guest_policy
 RUNTIME_FILES = ('supervisor.py', 'gate.mjs', 'gate_probe.py', 'download_candidate.py', 'bootstrap.sh', 'check_bootstrap.py')
 
 
-def runtime_bundle(config, root=None):
+def runtime_bundle(config, root=None, contents=None):
+    """`contents` holds the operations bytes `prepare` froze; otherwise read `root`."""
     root = root or Path(__file__).resolve().parent
-    contents = {name: (root / name).read_text() for name in RUNTIME_FILES}
+    frozen = contents
+    def text(name):
+        return frozen[name].decode() if frozen is not None else (root / name).read_text()
+    contents = {name: text(name) for name in RUNTIME_FILES}
     # Local source-file hashes validate the operator bundle before launch. They
     # are not runtime inputs; omitting that duplicate high-entropy map keeps the
     # EC2 userdata below its hard16KiB limit without changing executable bytes.
     contents['campaign.json'] = json.dumps({key: value for key, value in config.items()
                                          if key != 'operationsFiles'}, sort_keys=True)
-    contents['wharfie-soak.service'] = (root / 'wharfie-soak.service').read_text()
+    contents['wharfie-soak.service'] = text('wharfie-soak.service')
     return lzma.compress(json.dumps(contents, sort_keys=True).encode(), preset=9)
 
 
-def render(config, root=None):
-    bundle = runtime_bundle(config, root)
+def render(config, root=None, contents=None):
+    bundle = runtime_bundle(config, root, contents)
     expected = {'bucket': config['bucket'], 'key': config['campaignId'] + '/inputs/operations.json.xz',
                 'size': len(bundle), 'sha256': hashlib.sha256(bundle).hexdigest()}
     userdata = '''#!/bin/bash
@@ -35,8 +39,39 @@ for attempt in $(seq 1 60); do
   if [ "$attempt" = 60 ]; then exit 1; fi
   sleep 5
 done
-timeout 900 apt-get update -q
-timeout 900 apt-get install -y --no-install-recommends python3-boto3
+# apt-drain: begin
+# Suppress new apt timer runs at once, then wait, at most 25 minutes of wall
+# time, for one already running; its dpkg is never killed. Every manager call
+# is limited to the time that remains. Bootstrap masks the units later.
+drain_deadline=$((SECONDS + 1500))
+timeout -k 5 120 systemctl stop apt-daily.timer apt-daily-upgrade.timer
+while :; do
+  left=$((drain_deadline - SECONDS))
+  if [ "$left" -le 0 ]; then exit 1; fi
+  # Both must report idle; a oneshot upgrade is "activating" while it runs.
+  states=$(timeout -k 5 "$left" systemctl show -p ActiveState --value apt-daily.service apt-daily-upgrade.service) || states=unknown
+  idle=0
+  for state in $states; do case $state in inactive|failed) idle=$((idle + 1)) ;; esac; done
+  if [ "$idle" = 2 ]; then break; fi
+  left=$((drain_deadline - SECONDS))
+  if [ "$left" -le 0 ]; then exit 1; fi
+  sleep $((left < 10 ? left : 10))
+done
+# apt-drain: end
+# apt-update: begin
+# `apt-get update` does not wait for the lists lock; retry only that, within 15 minutes.
+update_deadline=$((SECONDS + 900))
+while :; do
+  left=$((update_deadline - SECONDS))
+  if [ "$left" -le 0 ]; then exit 1; fi
+  if output=$(timeout "$left" apt-get -o DPkg::Lock::Timeout=600 update -q 2>&1); then break; fi
+  printf '%s\n' "$output" >&2
+  case $output in *'Could not get lock'*) ;; *) exit 1 ;; esac
+  left=$((update_deadline - SECONDS))
+  if [ "$left" -gt 0 ]; then sleep $((left < 15 ? left : 15)); fi
+done
+# apt-update: end
+timeout 1500 apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends python3-boto3
 timeout 1800 python3 - <<'WHARFIE_BUNDLE'
 import hashlib, lzma, json, pathlib, time
 import boto3

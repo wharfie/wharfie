@@ -1,11 +1,15 @@
 """Local-only supervisor regressions: no SDK, network, or real credentials."""
+import contextlib
 import hashlib
+import inspect
 import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import shutil
+import signal
+import subprocess
 import tarfile
 import tempfile
 import threading
@@ -16,10 +20,17 @@ from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / 'supervisor.py'
+ROOT_DIR = MODULE_PATH.parent
+
+
+def ops_latch_parent():
+    return REAL_RUNTIME_LATCH.parent
 SPEC = importlib.util.spec_from_file_location('supervisor_under_test', MODULE_PATH)
 supervisor = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(supervisor)
+REAL_RUNTIME_LATCH = supervisor.RUNTIME_LATCH
 TOKEN = 'fixture-hetzner-token-not-a-real-credential'
+LABELS_FOR_TEST = ('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner')
 
 
 class MemoryBody(io.BytesIO):
@@ -69,6 +80,7 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(self.root_patch.stop)
         supervisor.STOP.clear()
         supervisor.STOP_REASON = None
+        supervisor.STOP_RECORD = None
         self.addCleanup(supervisor.STOP.clear)
         self.config = {
             'campaignId': 'fixture-campaign',
@@ -86,8 +98,9 @@ class SupervisorTests(unittest.TestCase):
         self.process_patch.start()
         self.addCleanup(self.process_patch.stop)
 
-    def campaign(self):
-        campaign = supervisor.Campaign(self.config, self.evidence, TOKEN)
+    def campaign(self, creator=True):
+        # The first process for this state directory; restarts pass creator=False.
+        campaign = supervisor.Campaign(self.config, self.evidence, TOKEN, creator=creator)
         def settle_diagnostics():
             if campaign.diagnostic_thread is not None:
                 campaign.diagnostic_thread.join(2)
@@ -135,6 +148,1164 @@ class SupervisorTests(unittest.TestCase):
                 campaign.wait_for_tick(label)
         self.assertEqual(supervisor.STOP_REASON['cause'], 'signal')
         self.assertEqual(supervisor.STOP_REASON['signal'], 15)
+
+    @contextlib.contextmanager
+    def signal_handlers(self):
+        """Install the service's real handlers, self-pipe and watcher; restore after."""
+        previous = {sig: signal.getsignal(sig) for sig in supervisor.SIGNAL_CAUSES}
+        watcher = supervisor.install_signal_handlers()
+        try:
+            yield watcher
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+            read_fd, write_fd = supervisor.SIGNAL_PIPE
+            supervisor.SIGNAL_PIPE = None
+            supervisor.FIRST_SIGNAL = None
+            os.close(write_fd)
+            watcher.join(5)
+            os.close(read_fd)
+
+    def test_signal_handler_records_a_fixed_signal_reason(self):
+        for signum, cause in ((signal.SIGTERM, 'signal-SIGTERM'), (signal.SIGINT, 'signal-SIGINT'),
+                              (signal.SIGHUP, 'signal-SIGHUP')):
+            with self.subTest(cause=cause), self.signal_handlers():
+                supervisor.STOP.clear()
+                supervisor.STOP_REASON = None
+                supervisor.stop_for_signal(signum, None)
+                self.assertTrue(supervisor.STOP.wait(5))
+                self.assertEqual(supervisor.STOP_REASON['cause'], cause)
+                self.assertEqual(supervisor.STOP_REASON['signal'], int(signum))
+                # Only the first signal is the cause.
+                supervisor.stop_for_signal(signal.SIGINT if signum != signal.SIGINT else signal.SIGTERM, None)
+                self.assertEqual(supervisor.STOP_REASON['cause'], cause)
+        self.assertIn('install_signal_handlers()', inspect.getsource(supervisor.main))
+
+    def test_first_of_two_signals_before_consumption_is_the_cause(self):
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        # Non-blocking, so a handler that never wrote fails here instead of hanging.
+        os.set_blocking(read_fd, False)
+        with patch.object(supervisor, 'SIGNAL_PIPE', (read_fd, write_fd)):
+            try:
+                supervisor.stop_for_signal(signal.SIGINT, None)
+                supervisor.stop_for_signal(signal.SIGTERM, None)
+                # The watcher consumes only after both arrived.
+                supervisor.consume_signal()
+            finally:
+                supervisor.FIRST_SIGNAL = None
+        self.assertEqual(supervisor.STOP_REASON['cause'], 'signal-SIGINT')
+        self.assertEqual(os.read(read_fd, 64), b'\0\0')
+
+    def test_stop_is_set_before_its_record_is_written(self):
+        # Writing may be slow (fsync); launches must already be inhibited.
+        seen = []
+        with patch.object(supervisor, 'write_stop_record', side_effect=lambda _reason: seen.append(supervisor.STOP.is_set())):
+            supervisor.request_stop('full-build-start-deadline')
+        self.assertEqual(seen, [True])
+
+    def test_signal_handler_never_takes_the_stop_event_lock(self):
+        # The handler can run while the main thread holds STOP's condition lock
+        # inside Event.wait or Event.set; it must still return.
+        script = (
+            'import importlib.util, signal, sys\n'
+            'spec = importlib.util.spec_from_file_location("s", sys.argv[1])\n'
+            's = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)\n'
+            's.install_signal_handlers()\n'
+            'with s.STOP._cond:\n'
+            '    s.stop_for_signal(signal.SIGTERM, None)\n'
+            'print("handler-returned", flush=True)\n'
+            'print(s.STOP.wait(5), s.STOP_REASON["cause"])\n')
+        self.process_patch.stop()
+        result = subprocess.run([sys.executable, '-c', script, str(MODULE_PATH)], capture_output=True,
+                                text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ['handler-returned', 'True', 'signal-SIGTERM'])
+
+    def test_real_signal_during_a_main_thread_wait_stops_with_its_cause(self):
+        campaign = self.campaign()
+        label = 'rehearsal-aws'
+        # The next tick is 5 s away, so a stop that never wakes the wait fails
+        # this test quickly instead of hanging it.
+        started = int(time.time() * 1000) - 900000 + 5000
+        self.write(supervisor.safe_relative_run(label) / 'soak.json', {
+            'startedAt': started, 'endAt': started + 2 * 900000 + 300000, 'intervalMs': 900000,
+            'completed': [{}], 'pending': None, 'complete': False,
+        })
+        with self.signal_handlers():
+            timer = threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGTERM))
+            timer.start()
+            began = time.monotonic()
+            try:
+                with self.assertRaises(supervisor.CampaignStopped) as raised:
+                    campaign.wait_for_tick(label)
+            finally:
+                timer.cancel()
+        self.assertLess(time.monotonic() - began, 4)
+        self.assertEqual(raised.exception.cause, 'signal-SIGTERM')
+        # Persisted when observed, before any settlement.
+        self.assertEqual(supervisor.read_json(campaign.state_path)['stopReason']['cause'], 'signal-SIGTERM')
+
+    def running_rehearsal(self, label='rehearsal-aws'):
+        run_dir = self.run_fixture(label)
+        self.write(run_dir / 'report.json', {'status': 'running', 'workspaceRemoved': False,
+                                             'cleanup': {'status': 'unknown'}})
+        started = int(time.time() * 1000)
+        self.write(run_dir / 'soak.json', {'startedAt': started, 'endAt': started + 3600000,
+                                           'intervalMs': 900000, 'completed': [{}], 'pending': None,
+                                           'complete': False})
+        return run_dir
+
+    def reset_process(self):
+        """A fresh supervisor process: no stop requested in memory."""
+        supervisor.STOP.clear()
+        supervisor.STOP_REASON = None
+
+    def test_signal_stop_reason_reaches_the_outcome_and_survives_a_restarted_run(self):
+        # 2026-11-27: needrestart restarted the service during a soak wait. The
+        # restarted supervisor finished again and erased the recorded reason.
+        label = 'soak-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        saved_at_cleanup = []
+
+        def clean(_label, _arguments, cleanup=False):
+            self.assertTrue(cleanup)
+            # The campaign cause is on disk before any cleanup or export.
+            saved_at_cleanup.append(supervisor.read_json(campaign.state_path).get('stopReason'))
+            self.cleanup_success(run_dir)
+            return 0
+
+        def signalled(_seconds):
+            supervisor.request_stop('signal-SIGTERM', 15)
+
+        with patch.object(campaign, 'export_observation'), \
+             patch.object(campaign, 'invoke', side_effect=clean), \
+             patch.object(supervisor.STOP, 'wait', side_effect=signalled):
+            outcome = campaign.run_one(label)
+        self.assertEqual(saved_at_cleanup[0]['cause'], 'signal-SIGTERM')
+        self.assertEqual(outcome['status'], 'failed')
+        self.assertEqual(outcome['failureType'], 'CampaignStopped')
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertTrue(outcome['cleanupVerifiedAbsent'])
+        self.assertEqual(campaign.finish(), 0)
+        first = supervisor.read_json(campaign.state_path)
+        self.assertEqual(first['stopReason']['cause'], 'signal-SIGTERM')
+        self.assertEqual(first['stopReason']['signal'], 15)
+
+        # The restarted process was never asked to stop. It enters through run().
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        with patch.object(restarted, 'invoke') as invoke:
+            self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        restarted.diagnostic_thread.join(5)
+        for summary in (supervisor.read_json(restarted.state_path),
+                        json.loads(self.client.objects['fixture-campaign/supervisor.json'])):
+            self.assertEqual(summary['stopReason'], first['stopReason'])
+            self.assertEqual((summary['finishedAt'], summary['status']), (first['finishedAt'], 'failed'))
+            self.assertEqual(summary['runs'], first['runs'])
+            self.assertEqual(summary['replays'], 1)
+        # The post-restart diagnostics keep the campaign cause.
+        diagnostics = json.loads(self.client.objects['fixture-campaign/supervisor-diagnostics.json'])
+        self.assertEqual(diagnostics['pid'], os.getpid())
+        self.assertEqual(diagnostics['stopReason'], first['stopReason'])
+        self.assertEqual(diagnostics['status'], 'failed')
+        # The restarted process itself saw no stop; the campaign's cause is kept.
+        self.assertFalse(diagnostics['processStopRequested'])
+        self.assertNotIn('stopRequested', diagnostics)
+
+    def test_terminal_campaign_restart_never_launches_a_missing_run(self):
+        # Finished failed: rehearsals passed, the AWS soak failed with progress
+        # and an unexported proof, and the Hetzner soak never started.
+        campaign = self.campaign()
+        for label in ('rehearsal-aws', 'rehearsal-hetzner'):
+            self.saved_outcome(campaign, label, passed=True, settled=True)
+        run_dir = self.run_fixture('soak-aws')
+        self.cleanup_success(run_dir)
+        campaign.state['runs']['soak-aws'] = {
+            'provider': 'aws', 'label': 'soak-aws', 'status': 'failed', 'cleanupVerifiedAbsent': True,
+            'proofExported': False, 'settlementAttempts': 1}
+        campaign.state.update(status='failed', finishedAt=1795760500.0)
+        campaign.save()
+        restarted = self.campaign(creator=False)
+        exports = []
+
+        def slow_export(label, recovery=False):
+            exports.append(label)
+            time.sleep(0.5)
+
+        with patch.object(restarted, 'invoke') as invoke, \
+             patch.object(restarted, 'export_run', side_effect=slow_export):
+            self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        self.assertEqual(exports, ['soak-aws'])
+        state = supervisor.read_json(restarted.state_path)
+        self.assertNotIn('soak-hetzner', state['runs'])
+        self.assertFalse(supervisor.safe_relative_run('soak-hetzner').exists())
+        self.assertEqual((state['status'], state['finishedAt']), ('failed', 1795760500.0))
+        self.assertTrue(state['runs']['soak-aws']['proofExported'])
+
+    def test_stop_latched_before_finish_survives_restart_and_allows_only_settlement(self):
+        label = 'rehearsal-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+
+        def dies_during_cleanup(_label, _arguments, cleanup=False):
+            raise SystemExit(143)
+
+        def interrupted(_seconds):
+            supervisor.request_stop('signal-SIGINT', 2)
+
+        # Restart before settlement completes: the process dies in cleanup.
+        with patch.object(campaign, 'export_observation'), \
+             patch.object(campaign, 'invoke', side_effect=dies_during_cleanup), \
+             patch.object(supervisor.STOP, 'wait', side_effect=interrupted), \
+             self.assertRaises(SystemExit):
+            campaign.run_one(label)
+        saved = supervisor.read_json(campaign.state_path)
+        self.assertEqual(saved['stopReason']['cause'], 'signal-SIGINT')
+        self.assertNotIn('finishedAt', saved)
+        original = saved['stopReason']
+
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        calls = []
+
+        def clean(request_label, arguments, cleanup=False):
+            calls.append((request_label, arguments, cleanup))
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(restarted, 'invoke', side_effect=clean):
+            self.assertEqual(restarted.run(), 0)
+        self.assertEqual(calls, [(label, ['--cleanup', str(run_dir)], True)])
+        state = supervisor.read_json(restarted.state_path)
+        # The first process's stop, not the restart's latched copy of it.
+        self.assertEqual(state['stopReason'], original)
+        self.assertEqual(state['status'], 'failed')
+        self.assertEqual(set(state['runs']), {label})
+        self.assertTrue(state['runs'][label]['cleanupVerifiedAbsent'])
+        self.assertTrue(state['runs'][label]['proofExported'])
+
+        # Restart after settlement is saved but before finish: nothing to do.
+        del state['finishedAt'], state['status']
+        supervisor.atomic_json(restarted.state_path, state)
+        self.reset_process()
+        again = self.campaign(creator=False)
+        with patch.object(again, 'invoke') as invoke:
+            self.assertEqual(again.run(), 0)
+        invoke.assert_not_called()
+        final = supervisor.read_json(again.state_path)
+        self.assertEqual(final['stopReason']['cause'], 'signal-SIGINT')
+        self.assertEqual(final['status'], 'failed')
+        self.assertEqual(final['runs'], state['runs'])
+
+    def test_stop_seen_only_by_an_export_retry_is_saved_before_cleanup(self):
+        label = 'soak-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        saved_at_cleanup = []
+        exports = []
+
+        def export(_label, recovery=False):
+            exports.append(recovery)
+            if len(exports) == 1:
+                raise RuntimeError('injected-export-failure')
+
+        def stopped_during_backoff(_seconds):
+            supervisor.request_stop('signal-SIGTERM', 15)
+            return True
+
+        def clean(_label, _arguments, cleanup=False):
+            saved_at_cleanup.append(supervisor.read_json(campaign.state_path).get('stopReason'))
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(campaign, 'export_run', side_effect=export), \
+             patch.object(campaign, 'invoke', side_effect=clean), \
+             patch.object(campaign, 'wait_for_tick', side_effect=AssertionError('no wait after a stop')), \
+             patch.object(supervisor.STOP, 'wait', side_effect=stopped_during_backoff):
+            outcome = campaign.run_one(label)
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertEqual(saved_at_cleanup[0]['cause'], 'signal-SIGTERM')
+        self.assertTrue(outcome['proofExported'])
+
+    def test_stop_during_the_final_export_survives_a_failed_summary_upload(self):
+        # A passed rehearsal; the stop arrives during its final export, after
+        # settlement began, and the summary upload then fails.
+        label = 'rehearsal-aws'
+        self.run_fixture(label, passed=True, workspace=False)
+        campaign = self.campaign()
+        real_put = self.evidence.put_file
+
+        def summary_fails(name, *args, **kwargs):
+            if name == 'supervisor.json':
+                raise RuntimeError('injected-summary-failure')
+            return real_put(name, *args, **kwargs)
+
+        def stopped_during_export(_label, recovery=False):
+            supervisor.request_stop('signal-SIGINT', 2)
+
+        with patch.object(campaign, 'export_run', side_effect=stopped_during_export), \
+             patch.object(self.evidence, 'put_file', side_effect=summary_fails), \
+             patch.object(campaign, 'invoke') as invoke, self.assertRaises(RuntimeError):
+            campaign.run()
+        invoke.assert_not_called()
+        self.assertNotIn('stopReason', supervisor.read_json(campaign.state_path))
+        record = supervisor.read_json(supervisor.stop_record_path(self.config['specSha256']))
+        self.assertEqual((record['cause'], record['specSha256']), ('signal-SIGINT', self.config['specSha256']))
+
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        with patch.object(restarted, 'invoke') as invoke:
+            self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        state = supervisor.read_json(restarted.state_path)
+        self.assertEqual(state['stopReason']['cause'], 'signal-SIGINT')
+        self.assertEqual(set(state['runs']), {label})
+        self.assertEqual(state['status'], 'failed')
+
+    def test_failed_export_of_one_label_never_starves_cleanup_of_another(self):
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        aws = self.run_fixture('soak-aws')
+        self.cleanup_success(aws)
+        campaign.state['runs']['soak-aws'] = {'provider': 'aws', 'label': 'soak-aws', 'status': 'failed',
+                                               'cleanupVerifiedAbsent': True, 'proofExported': False,
+                                               'settlementAttempts': 3}
+        hetzner = self.run_fixture('soak-hetzner')
+        campaign.state['runs']['soak-hetzner'] = {'provider': 'hetzner', 'label': 'soak-hetzner',
+                                                   'status': 'failed', 'settlementAttempts': 0}
+        campaign.save()
+        real_put = self.evidence.put_file
+
+        def summary_fails(name, *args, **kwargs):
+            if name == 'supervisor.json':
+                raise RuntimeError('injected-summary-failure')
+            return real_put(name, *args, **kwargs)
+
+        cleanups = []
+
+        def clean(label, arguments, cleanup=False):
+            cleanups.append(label)
+            self.cleanup_success(hetzner)
+            return 0
+
+        for restart in range(3):
+            with self.subTest(restart=restart):
+                self.reset_process()
+                restarted = self.campaign(creator=False)
+                with patch.object(restarted, 'invoke', side_effect=clean), \
+                     patch.object(self.evidence, 'put_file', side_effect=summary_fails), \
+                     self.assertRaises(RuntimeError):
+                    restarted.run()
+                # The first restart already cleaned the Hetzner guest.
+                self.assertEqual(cleanups, ['soak-hetzner'])
+                self.assertFalse((hetzner / 'workspace').exists())
+                state = supervisor.read_json(restarted.state_path)
+                self.assertTrue(state['runs']['soak-hetzner']['cleanupVerifiedAbsent'])
+                self.assertNotIn('rehearsal-aws', state['runs'])
+
+    def test_replay_with_an_outstanding_run_export_exits_non_zero(self):
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        run_dir = self.run_fixture('soak-aws')
+        self.cleanup_success(run_dir)
+        campaign.state['runs']['soak-aws'] = {'provider': 'aws', 'label': 'soak-aws', 'status': 'failed',
+                                               'cleanupVerifiedAbsent': True, 'proofExported': False,
+                                               'settlementAttempts': 0}
+        campaign.save()
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        # The run export keeps failing; the summary upload succeeds.
+        with patch.object(restarted, 'export_run', side_effect=RuntimeError('injected-export-failure')), \
+             patch.object(supervisor.time, 'sleep'), \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        self.assertIn('fixture-campaign/supervisor.json', self.client.objects)
+
+    def test_terminal_null_stop_reason_is_kept_when_the_replay_is_signalled(self):
+        campaign = self.campaign()
+        for label in LABELS_FOR_TEST:
+            self.saved_outcome(campaign, label, passed=True, settled=True)
+        self.assertEqual(campaign.finish(), 0)
+        campaign.diagnostic_thread.join(5)
+        first = supervisor.read_json(campaign.state_path)
+        self.assertIsNone(first['stopReason'])
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        supervisor.request_stop('signal-SIGHUP', 1)
+        self.assertEqual(restarted.run(), 0)
+        restarted.diagnostic_thread.join(5)
+        restarted.record_stop()
+        final = supervisor.read_json(restarted.state_path)
+        self.assertIsNone(final['stopReason'])
+        self.assertEqual((final['status'], final['finishedAt']), ('passed', first['finishedAt']))
+        diagnostics = json.loads(self.client.objects['fixture-campaign/supervisor-diagnostics.json'])
+        self.assertIsNone(diagnostics['stopReason'])
+        self.assertEqual(diagnostics['processStopReason']['cause'], 'signal-SIGHUP')
+        # Nor does a later restart adopt the replay's own stop record.
+        self.reset_process()
+        again = self.campaign(creator=False)
+        self.assertEqual(again.run(), 0)
+        self.assertIsNone(supervisor.read_json(again.state_path)['stopReason'])
+
+    def settled_rehearsals_and_aws_soak(self, campaign):
+        for label in ('rehearsal-aws', 'rehearsal-hetzner'):
+            self.saved_outcome(campaign, label, passed=True, settled=True)
+        aws = self.run_fixture('soak-aws')
+        self.cleanup_success(aws)
+        campaign.state['runs']['soak-aws'] = {'provider': 'aws', 'label': 'soak-aws', 'status': 'failed',
+                                               'cleanupVerifiedAbsent': True, 'proofExported': True,
+                                               'settlementAttempts': 1}
+        campaign.save()
+
+    def cleanup_recorder(self, calls, succeed=True):
+        def clean(label, arguments, cleanup=False):
+            calls.append((label, arguments[0], cleanup))
+            if succeed and arguments[0] == '--cleanup':
+                self.cleanup_success(supervisor.safe_relative_run(label))
+            return 0 if succeed else 1
+        return clean
+
+    def clear_root(self):
+        for path in self.root.iterdir():
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+
+    def test_crash_between_settlements_cleans_the_surviving_guest_on_first_start(self):
+        # The process died while the Hetzner soak ran: its workspace exists
+        # without a saved outcome. No stop, no terminal summary.
+        for succeed in (False, True):
+            with self.subTest(cleanup_succeeds=succeed):
+                self.clear_root()
+                campaign = self.campaign()
+                self.settled_rehearsals_and_aws_soak(campaign)
+                hetzner = self.run_fixture('soak-hetzner')
+                self.reset_process()
+                restarted = self.campaign(creator=False)
+                calls = []
+                with patch.object(restarted, 'invoke', side_effect=self.cleanup_recorder(calls, succeed)), \
+                     patch.object(supervisor.time, 'sleep'):
+                    if succeed:
+                        self.assertEqual(restarted.run(), 0)
+                    else:
+                        # An unsettled existing workspace keeps the exit non-zero.
+                        with self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+                            restarted.run()
+                if restarted.diagnostic_thread is not None:
+                    restarted.diagnostic_thread.join(5)
+                self.assertTrue(calls)
+                self.assertTrue(all(call == ('soak-hetzner', '--cleanup', True) for call in calls))
+        self.assertFalse((hetzner / 'workspace').exists())
+        state = supervisor.read_json(restarted.state_path)
+        self.assertEqual(state['runs']['soak-hetzner']['failureReason'], 'outcome-not-saved')
+        self.assertTrue(state['runs']['soak-hetzner']['cleanupVerifiedAbsent'])
+
+    def test_observed_signal_inhibits_dispatch_before_the_stop_is_persisted(self):
+        # The stop arrives during the AWS rehearsal's export; the record's
+        # directory fsync is slow. The Hetzner rehearsal must not start.
+        label = 'rehearsal-aws'
+        self.run_fixture(label, passed=True, workspace=False)
+        campaign = self.campaign()
+        release = threading.Event()
+        real_write = supervisor.write_stop_record
+        def slow_write(reason):
+            release.wait(10)
+            real_write(reason)
+        calls = []
+        with self.signal_handlers(), \
+             patch.object(supervisor, 'write_stop_record', side_effect=slow_write), \
+             patch.object(campaign, 'export_run', side_effect=lambda *_a, **_k: supervisor.stop_for_signal(signal.SIGINT)), \
+             patch.object(campaign, 'invoke', side_effect=self.cleanup_recorder(calls)):
+            try:
+                self.assertEqual(campaign.run(), 0)
+            finally:
+                release.set()
+        self.assertFalse([call for call in calls if call[1] != '--cleanup'])
+        self.assertFalse(supervisor.safe_relative_run('rehearsal-hetzner').exists())
+        hetzner = supervisor.read_json(campaign.state_path)['runs']['rehearsal-hetzner']
+        self.assertEqual((hetzner['failureType'], hetzner['stopReason']), ('CampaignStopped', 'signal-SIGINT'))
+
+    def test_signal_before_the_campaign_exists_still_prevents_a_launch(self):
+        # SIGTERM arrived during startup, before Campaign existed. The stop
+        # record is bound first, so it is still written for the next start.
+        self.assertLess(inspect.getsource(supervisor.main).index('bind_stop_record'),
+                        inspect.getsource(supervisor.main).index('install_signal_handlers()'))
+        self.assertNotIn('get_parameter', inspect.getsource(supervisor.main).split('def fetch_token')[0])
+        campaign = self.campaign()
+        self.saved_outcome(campaign, 'rehearsal-aws', passed=True, settled=True)
+        self.reset_process()
+        supervisor.bind_stop_record(self.config['specSha256'])
+        with self.signal_handlers():
+            os.kill(os.getpid(), signal.SIGTERM)
+            self.assertTrue(supervisor.STOP.wait(5))
+            restarted = self.campaign(creator=False)
+            with patch.object(restarted, 'invoke') as invoke:
+                self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        self.assertTrue(supervisor.stop_record_path(self.config['specSha256']).exists())
+
+    def create_calls(self, calls):
+        return [call for call in calls if call[1] != '--cleanup']
+
+    def test_first_process_on_a_fresh_state_directory_creates_normally(self):
+        self.assertTrue(supervisor.claim_first_start(self.config['specSha256']))
+        campaign = self.campaign(creator=True)
+        calls = []
+        def runner(label, arguments, cleanup=False):
+            calls.append((label, arguments[0], cleanup, '--output-dir' in arguments))
+            return 1
+        with patch.object(campaign, 'invoke', side_effect=runner), patch.object(supervisor.time, 'sleep'):
+            campaign.run()
+        self.assertEqual(calls[0], ('rehearsal-aws', '--provider', False, True))
+
+    def test_only_the_first_start_claims_the_campaign(self):
+        spec = self.config['specSha256']
+        self.assertTrue(supervisor.claim_first_start(spec))
+        marker = json.loads((self.root / 'first-start.json').read_text())
+        self.assertEqual((marker['specSha256'], marker['pid']), (spec, os.getpid()))
+        self.assertFalse(supervisor.claim_first_start(spec))
+        self.assertFalse(supervisor.claim_first_start('b' * 64))
+        # Any failure to create or make it durable is cleanup-only too.
+        (self.root / 'first-start.json').unlink()
+        for target, error in (('open', OSError('injected-open')), ('fsync', OSError('injected-fsync'))):
+            with self.subTest(failure=target):
+                with patch.object(supervisor.os, target, side_effect=error):
+                    self.assertFalse(supervisor.claim_first_start(spec))
+                (self.root / 'first-start.json').unlink(missing_ok=True)
+        source = inspect.getsource(supervisor.main)
+        self.assertLess(source.index('startup_creator('), source.index('bind_stop_record('))
+        self.assertLess(source.index('startup_creator('), source.index('install_signal_handlers()'))
+        self.assertIn('creator=creator', source)
+        self.assertIn('not options.repair_cleanup and startup_creator', source)
+        latches = inspect.getsource(supervisor.startup_creator)
+        self.assertLess(latches.index('claim_runtime_latch()'), latches.index('claim_first_start('))
+
+    def test_a_failed_marker_create_still_leaves_the_campaign_claimed(self):
+        import errno
+        spec = self.config['specSha256']
+        real_open = os.open
+        def no_space(path, *args, **kwargs):
+            if str(path).endswith('first-start.json'):
+                raise OSError(errno.ENOSPC, 'injected-no-space')
+            return real_open(path, *args, **kwargs)
+        # The reviewer's case: the marker create fails, and that process runs
+        # cleanup-only and records a terminal summary without any marker.
+        with patch.object(supervisor.os, 'open', side_effect=no_space):
+            self.assertFalse(supervisor.claim_first_start(spec))
+        self.assertFalse((self.root / 'first-start.json').exists())
+        first = self.campaign(creator=False)
+        self.assertEqual(first.run(), 0)
+        first.diagnostic_thread.join(5)
+        self.assertEqual(supervisor.read_json(first.state_path)['status'], 'failed')
+        # Its own summary is prior activity: the next start is not a creator.
+        self.assertFalse(supervisor.claim_first_start(spec))
+        self.assertFalse((self.root / 'first-start.json').exists())
+
+    def test_a_first_process_that_wrote_nothing_leaves_the_campaign_unclaimed(self):
+        import errno
+        spec = self.config['specSha256']
+        # Bootstrap's layout: empty run and home directories, and the lock.
+        (self.root / 'runs').mkdir()
+        (self.root / 'homes/aws').mkdir(parents=True)
+        (self.root / 'supervisor.lock').touch()
+        with patch.object(supervisor.os, 'open', side_effect=OSError(errno.ENOSPC, 'injected-no-space')):
+            self.assertFalse(supervisor.claim_first_start(spec))
+        # Nothing happened, so the next process legitimately creates.
+        self.assertTrue(supervisor.claim_first_start(spec))
+
+    def test_any_prior_activity_or_read_error_prevents_a_claim(self):
+        spec = self.config['specSha256']
+        self.assertTrue(supervisor.no_prior_activity())
+        for name, make in (('run directory', lambda: (self.root / 'runs/rehearsal-aws').mkdir(parents=True)),
+                           ('unexpected run entry', lambda: (self.root / 'runs/stray').mkdir(parents=True)),
+                           ('summary', lambda: (self.root / 'supervisor.json').write_text('{}')),
+                           ('stop record', lambda: supervisor.stop_record_path(spec).write_text('{}')),
+                           ('unreadable summary', lambda: (self.root / 'supervisor.json.unreadable').write_text('x')),
+                           ('diagnostics', lambda: (self.root / 'soak-aws.log').write_text('x'))):
+            with self.subTest(name=name):
+                self.clear_root()
+                make()
+                self.assertFalse(supervisor.claim_first_start(spec))
+                self.assertFalse((self.root / 'first-start.json').exists())
+        self.clear_root()
+        with patch.object(supervisor.os, 'scandir', side_effect=PermissionError('injected')):
+            self.assertFalse(supervisor.claim_first_start(spec))
+
+    def test_spawn_failures_spend_no_cleanup_attempt_and_a_later_start_cleans(self):
+        import errno
+        hetzner = self.run_fixture('soak-hetzner')
+        self.campaign()
+        spawns = []
+        def no_process(*_args, **_kwargs):
+            spawns.append(1)
+            raise OSError(errno.EAGAIN, 'injected-resource-unavailable')
+        self.process_patch.stop()
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        with patch.object(supervisor.subprocess, 'Popen', side_effect=no_process), \
+             patch.object(supervisor.time, 'sleep'), \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+        self.assertGreaterEqual(len(spawns), 3)
+        self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+        self.assertEqual(outcome['spawnFailureType'], 'BlockingIOError')
+        self.assertTrue((hetzner / 'workspace').exists())
+        # A healthy activation still has every attempt.
+        self.reset_process()
+        healthy = self.campaign(creator=False)
+        calls = []
+        with patch.object(healthy, 'invoke', side_effect=self.cleanup_recorder(calls)):
+            self.assertEqual(healthy.run(), 0)
+        self.assertEqual(calls, [('soak-hetzner', '--cleanup', True)])
+        outcome = supervisor.read_json(healthy.state_path)['runs']['soak-hetzner']
+        self.assertEqual(outcome['settlementAttempts'], 1)
+        self.assertFalse((hetzner / 'workspace').exists())
+
+    def runtime_latch(self):
+        """A stand-in for /run/wharfie-soak on another directory."""
+        runtime = self.parent / 'run-wharfie-soak'
+        runtime.mkdir(exist_ok=True)
+        latch = patch.object(supervisor, 'RUNTIME_LATCH', runtime / 'started')
+        latch.start()
+        self.addCleanup(latch.stop)
+        return runtime / 'started'
+
+    def creator_token(self):
+        supervisor.creator_token_path(self.config['specSha256']).write_text(self.config['specSha256'])
+
+    def bootstrap_state_layout(self):
+        # Exactly what bootstrap and its `npm ci` (HOME is this directory)
+        # leave before the first supervisor start.
+        for path in ('runs', 'homes/aws', 'homes/hetzner', '.npm/_cacache/index-v5/00', '.npm/_logs', '.cache'):
+            (self.root / path).mkdir(parents=True, exist_ok=True)
+        (self.root / '.npm/_logs/2026-11-27T05_00_00_000Z-debug-0.log').write_text('npm log')
+        (self.root / '.npm/_update-notifier-last-checked').write_text('')
+        (self.root / 'supervisor.lock').touch()
+        self.creator_token()
+
+    def test_first_start_after_a_real_bootstrap_is_the_creator(self):
+        self.runtime_latch()
+        self.bootstrap_state_layout()
+        self.assertTrue(supervisor.startup_creator(self.config['specSha256']))
+        # Bootstrap creates only these entries in the state directory, and
+        # none of them is a supervisor artifact.
+        bootstrap = (ROOT_DIR / 'bootstrap.sh').read_text()
+        created = bootstrap[bootstrap.index('install -d -m 0700 -o wharfie-soak'):].split('\n', 3)[:3]
+        created = ' '.join(created).split()
+        state = sorted(path[len('/var/lib/wharfie-soak/'):] for path in created
+                       if path.startswith('/var/lib/wharfie-soak/'))
+        self.assertEqual(state, ['homes', 'homes/aws', 'homes/hetzner', 'runs'])
+        self.assertFalse(any(supervisor.is_supervisor_artifact(name.split('/')[0]) for name in state))
+        for npm_name in ('.npm', '.cache', '.config', 'homes', 'supervisor.lock'):
+            self.assertFalse(supervisor.is_supervisor_artifact(npm_name))
+
+    def test_a_start_while_the_state_disk_is_full_still_latches_the_boot(self):
+        import errno
+        latch = self.runtime_latch()
+        spec = self.config['specSha256']
+        self.creator_token()
+        real_open = os.open
+        def state_disk_full(path, *args, **kwargs):
+            if str(path).startswith(str(self.root)):
+                raise OSError(errno.ENOSPC, 'injected-no-space')
+            return real_open(path, *args, **kwargs)
+        # The reviewer's case: SIGTERM arrives while the state disk is full;
+        # neither the marker nor the stop record can be written.
+        def full_atomic_write(path, value):
+            raise OSError(errno.ENOSPC, 'injected-no-space')
+        with patch.object(supervisor.os, 'open', side_effect=state_disk_full), \
+             patch.object(supervisor, 'atomic_json', side_effect=full_atomic_write):
+            self.assertFalse(supervisor.startup_creator(spec))
+            supervisor.bind_stop_record(spec)
+            with patch('sys.stdout', new_callable=io.StringIO):
+                supervisor.request_stop('signal-SIGTERM', 15)
+        # The token was spent all the same: an unlink needs no free space.
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertTrue(latch.exists())
+        # Capacity returns; the next start in this boot is still cleanup-only.
+        self.reset_process()
+        self.assertFalse(supervisor.startup_creator(spec))
+        # The reviewer's reboot case: a reboot clears /run, capacity is back,
+        # and nothing is written in the state directory. Still no creator.
+        self.clear_root()
+        latch.unlink()
+        self.assertFalse(supervisor.startup_creator(spec))
+
+    def test_each_latch_alone_prevents_a_creator(self):
+        spec = self.config['specSha256']
+        latch = self.runtime_latch()
+        # No token: cleanup-only, even on an empty state directory.
+        self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue(latch.exists())
+        self.clear_root()
+        latch.unlink()
+        self.creator_token()
+        self.assertTrue(supervisor.startup_creator(spec))
+        # A reboot clears /run; the durable marker still applies.
+        latch.unlink()
+        self.creator_token()
+        self.assertFalse(supervisor.startup_creator(spec))
+        # The in-boot latch cannot be created: cleanup-only, but the durable
+        # marker is still claimed.
+        self.clear_root()
+        latch.unlink()
+        latch.parent.rmdir()
+        self.creator_token()
+        # The in-boot latch cannot be created: cleanup-only, and the claim
+        # stops there, leaving the token and the marker untouched.
+        self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue(supervisor.creator_token_path(spec).exists())
+        self.assertFalse((self.root / 'first-start.json').exists())
+        unit = (ROOT_DIR / 'wharfie-soak.service').read_text()
+        for line in ('RuntimeDirectory=wharfie-soak\n', 'RuntimeDirectoryPreserve=yes\n'):
+            self.assertIn(line, unit)
+        self.assertEqual(str(ops_latch_parent()), '/run/wharfie-soak')
+
+    def test_a_failed_token_unlink_leaves_the_boot_latched(self):
+        # The reviewer's case: the state directory is briefly unwritable, so
+        # the unlink fails; a same-boot retry once it is writable again finds
+        # the latch and creates nothing, though the token is still there.
+        import errno
+        latch = self.runtime_latch()
+        spec = self.config['specSha256']
+        self.creator_token()
+        with patch.object(supervisor.os, 'unlink', side_effect=PermissionError(errno.EACCES, 'injected')):
+            self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue(latch.exists())
+        self.assertTrue(supervisor.creator_token_path(spec).exists())
+        self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue(supervisor.creator_token_path(spec).exists())
+        self.assertFalse((self.root / 'first-start.json').exists())
+        latches = inspect.getsource(supervisor.startup_creator)
+        self.assertLess(latches.index('claim_runtime_latch()'), latches.index('consume_creator_token('))
+
+    def test_concurrent_first_starts_give_exactly_one_creator(self):
+        # Each competing process unlinks the same token; separate processes,
+        # so the latches and marker race for real.
+        self.runtime_latch()
+        self.creator_token()
+        script = (
+            'import importlib.util, sys\n'
+            'from pathlib import Path\n'
+            'spec = importlib.util.spec_from_file_location("s", sys.argv[1])\n'
+            's = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)\n'
+            's.ROOT = Path(sys.argv[2]); s.RUNTIME_LATCH = Path(sys.argv[3])\n'
+            'print(s.startup_creator(sys.argv[4]))\n')
+        self.process_patch.stop()
+        processes = [subprocess.Popen([sys.executable, '-c', script, str(MODULE_PATH), str(self.root),
+                                       str(supervisor.RUNTIME_LATCH), self.config['specSha256']],
+                                      stdout=subprocess.PIPE, text=True) for _ in range(8)]
+        results = [process.communicate(timeout=60)[0].strip() for process in processes]
+        self.assertEqual(sorted(results), ['False'] * 7 + ['True'])
+
+    def test_reserve_is_rechecked_after_a_slow_credential_lookup(self):
+        clock = [1900000000.0]
+        self.config['stopAt'] = clock[0] + 2407
+        hetzner = self.run_fixture('soak-hetzner')
+        restarted = self.campaign(creator=False)
+        def slow_lookup():
+            clock[0] += 10
+            return TOKEN
+        restarted.token_source = slow_lookup
+        with patch.object(supervisor.time, 'time', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.time, 'sleep'), \
+             patch.object(restarted, 'invoke') as invoke, \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        invoke.assert_not_called()
+        outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+        self.assertEqual(outcome['settlementDeferred'], 'external-stop-close-preserve-authority')
+        self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+        self.assertTrue((hetzner / 'workspace').exists())
+
+    def test_reserve_is_rechecked_after_a_late_backoff_wakeup(self):
+        import errno
+        clock = [1900000000.0]
+        self.config['stopAt'] = clock[0] + 2407
+        hetzner = self.run_fixture('soak-hetzner')
+        self.process_patch.stop()
+        restarted = self.campaign(creator=False)
+        spawns = []
+        def no_process(*_args, **_kwargs):
+            spawns.append(self.config['stopAt'] - clock[0])
+            raise OSError(errno.EAGAIN, 'injected')
+        def late_sleep(seconds):
+            clock[0] += seconds + 4
+        with patch.object(supervisor.time, 'time', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.time, 'sleep', side_effect=late_sleep), \
+             patch.object(supervisor.subprocess, 'Popen', side_effect=no_process), \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        self.assertTrue(spawns)
+        self.assertTrue(all(remaining >= 2400 for remaining in spawns), spawns)
+        outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+        self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+        self.assertTrue((hetzner / 'workspace').exists())
+
+    def test_launch_gate_is_checked_after_the_credential_lookup(self):
+        # A stop observed during the lazy Hetzner lookup refuses the spawn;
+        # a non-creator never spawns new work at all.
+        for creator in (True, False):
+            with self.subTest(creator=creator):
+                self.reset_process()
+                campaign = self.campaign(creator=creator)
+                def lookup():
+                    if creator:
+                        supervisor.request_stop('signal-SIGINT', 2)
+                    return TOKEN
+                campaign.token_source = lookup
+                with self.assertRaisesRegex(supervisor.CampaignStopped, 'run-launch-refused'):
+                    campaign.invoke('rehearsal-hetzner', ['--provider', 'hetzner', '--output-dir', 'x'])
+
+    def restart_must_not_create(self, prepare):
+        """Run `prepare` as the first process, then any second start: never a create."""
+        prepare()
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        calls = []
+        with patch.object(restarted, 'invoke', side_effect=self.cleanup_recorder(calls)), \
+             patch.object(supervisor.time, 'sleep'):
+            try:
+                restarted.run()
+            except RuntimeError as error:
+                self.assertEqual(str(error), 'settlement-incomplete')
+        if restarted.diagnostic_thread is not None:
+            restarted.diagnostic_thread.join(5)
+        self.assertEqual(self.create_calls(calls), [])
+        state = supervisor.read_json(restarted.state_path)
+        self.assertEqual(state['status'], 'failed') if not state.get('replays') else None
+        return state, calls
+
+    def test_restart_after_a_failed_aws_soak_with_a_slow_export_never_creates(self):
+        # The reviewer's fixture: passed rehearsals, AWS failed and cleaned
+        # with progress but unexported, its export 200 ms slow, no Hetzner run.
+        def prepare():
+            campaign = self.campaign()
+            for label in ('rehearsal-aws', 'rehearsal-hetzner'):
+                self.saved_outcome(campaign, label, passed=True, settled=True)
+            aws = self.run_fixture('soak-aws')
+            self.cleanup_success(aws)
+            campaign.state['runs']['soak-aws'] = {'provider': 'aws', 'label': 'soak-aws', 'status': 'failed',
+                                                   'cleanupVerifiedAbsent': True, 'proofExported': False,
+                                                   'settlementAttempts': 1}
+            campaign.save()
+        real_export = supervisor.Campaign.export_run
+        def slow_export(campaign, label, recovery=False):
+            time.sleep(0.2)
+            return real_export(campaign, label, recovery)
+        with patch.object(supervisor.Campaign, 'export_run', slow_export):
+            state, _calls = self.restart_must_not_create(prepare)
+        self.assertNotIn('soak-hetzner', state['runs'])
+        self.assertEqual(state['stopReason']['cause'], 'supervisor-restarted')
+        self.assertTrue(state['runs']['soak-aws']['proofExported'])
+
+    def test_restart_after_a_stop_that_was_never_persisted_never_creates(self):
+        # SIGINT during the final export; the stop file's open is delayed
+        # past the exit, and the summary upload fails.
+        def prepare():
+            label = 'rehearsal-aws'
+            self.run_fixture(label, passed=True, workspace=False)
+            campaign = self.campaign()
+            real_put = self.evidence.put_file
+            def summary_fails(name, *args, **kwargs):
+                if name == 'supervisor.json':
+                    raise RuntimeError('injected-summary-failure')
+                return real_put(name, *args, **kwargs)
+            with patch.object(supervisor, 'write_stop_record'), \
+                 patch.object(campaign, 'export_run', side_effect=lambda *_a, **_k: supervisor.request_stop('signal-SIGINT', 2)), \
+                 patch.object(self.evidence, 'put_file', side_effect=summary_fails), \
+                 patch.object(campaign, 'invoke') as invoke, self.assertRaises(RuntimeError):
+                campaign.run()
+            invoke.assert_not_called()
+            self.assertEqual(list(self.root.glob('stop*')), [])
+        state, _calls = self.restart_must_not_create(prepare)
+        self.assertNotIn('rehearsal-hetzner', state['runs'])
+        # No durable record survived, so the restart itself is the cause.
+        self.assertEqual(state['stopReason']['cause'], 'supervisor-restarted')
+
+    def test_damaged_summary_is_kept_and_the_run_directories_are_still_cleaned(self):
+        def prepare():
+            self.run_fixture('soak-hetzner')
+            (self.root / 'supervisor.json').write_text('{"runs": {')
+        state, calls = self.restart_must_not_create(prepare)
+        self.assertEqual(calls, [('soak-hetzner', '--cleanup', True)])
+        self.assertTrue(state['summaryUnreadable'])
+        self.assertEqual((self.root / 'supervisor.json.unreadable').read_text(), '{"runs": {')
+
+    def test_any_second_start_never_creates_whatever_is_on_disk(self):
+        import itertools, random
+        kinds = ('absent', 'passed', 'failed-settled', 'failed-unexported', 'directory-only')
+        records = ('none', 'valid', 'truncated', 'tmp', 'foreign', 'unrelated-file')
+        summaries = ('present', 'terminal', 'missing', 'truncated')
+        combos = list(itertools.product(kinds, kinds, kinds, kinds, records, summaries))
+        for combo in random.Random(20261127).sample(combos, 80):
+            with self.subTest(combo=combo):
+                self.clear_root()
+                def prepare():
+                    campaign = self.campaign()
+                    for label, kind in zip(('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner'), combo):
+                        if kind == 'absent':
+                            continue
+                        run_dir = self.run_fixture(label, passed=kind == 'passed', workspace=kind != 'passed')
+                        if kind == 'directory-only':
+                            continue
+                        if kind == 'failed-settled':
+                            self.cleanup_success(run_dir)
+                        campaign.state['runs'][label] = {
+                            'provider': label.split('-')[-1], 'label': label,
+                            'status': 'passed' if kind == 'passed' else 'failed', 'complete': kind == 'passed',
+                            'cleanupVerifiedAbsent': kind in ('passed', 'failed-settled'),
+                            'proofExported': kind in ('passed', 'failed-settled'), 'settlementAttempts': 1}
+                    record, summary = combo[4], combo[5]
+                    if summary == 'terminal':
+                        campaign.state.update(status='failed', finishedAt=1795760500.0, stopReason=None)
+                    campaign.save()
+                    path = supervisor.stop_record_path(self.config['specSha256'])
+                    if record == 'valid':
+                        supervisor.atomic_json(path, {'specSha256': self.config['specSha256'], 'cause': 'signal-SIGTERM'})
+                    elif record == 'truncated':
+                        path.write_text('{"cau')
+                    elif record == 'tmp':
+                        path.with_name(path.name + '.tmp').write_text('{}')
+                    elif record == 'foreign':
+                        supervisor.atomic_json(supervisor.stop_record_path('b' * 64), {'specSha256': 'b' * 64, 'cause': 'signal-SIGTERM'})
+                    elif record == 'unrelated-file':
+                        (self.root / 'stopwatch.txt').write_text('not a stop')
+                    if summary == 'missing':
+                        (self.root / 'supervisor.json').unlink()
+                    elif summary == 'truncated':
+                        (self.root / 'supervisor.json').write_text('{"runs"')
+                state, calls = self.restart_must_not_create(prepare)
+                # Every existing workspace got a cleanup.
+                for label in ('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner'):
+                    if (supervisor.safe_relative_run(label) / 'workspace').exists():
+                        self.fail('workspace left without cleanup: ' + label)
+                if combo[5] != 'terminal':
+                    expected = 'signal-SIGTERM' if combo[4] == 'valid' else 'supervisor-restarted'
+                    self.assertEqual(state['stopReason']['cause'], expected)
+
+    def test_credential_outage_spends_no_cleanup_attempt_and_a_later_start_cleans(self):
+        # The reviewer's case: both workspaces; the Hetzner lookup fails for
+        # the whole first activation, then recovers.
+        self.campaign()
+        aws = self.run_fixture('soak-aws')
+        hetzner = self.run_fixture('soak-hetzner')
+        lookups = []
+        outage = [True]
+        def lookup():
+            lookups.append(outage[0])
+            if outage[0]:
+                raise TimeoutError('injected-parameter-timeout')
+            return TOKEN
+        cleaned = []
+        def clean(label, arguments, cleanup=False):
+            restarted.token_for(label.split('-')[-1])
+            cleaned.append(label)
+            self.cleanup_success(supervisor.safe_relative_run(label))
+            return 0
+        for activation in range(2):
+            with self.subTest(activation=activation):
+                self.reset_process()
+                restarted = self.campaign(creator=False)
+                restarted.token_source = lookup
+                with patch.object(restarted, 'invoke', side_effect=clean), patch.object(supervisor.time, 'sleep'):
+                    if activation == 0:
+                        with self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+                            restarted.run()
+                    else:
+                        self.assertEqual(restarted.run(), 0)
+                if restarted.diagnostic_thread is not None:
+                    restarted.diagnostic_thread.join(5)
+                outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+                if activation == 0:
+                    self.assertEqual(cleaned, ['soak-aws'])
+                    self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+                    self.assertEqual(outcome['credentialFailureType'], 'TimeoutError')
+                    self.assertTrue((hetzner / 'workspace').exists())
+                    outage[0] = False
+                else:
+                    self.assertEqual(cleaned, ['soak-aws', 'soak-hetzner'])
+                    self.assertEqual(outcome['settlementAttempts'], 1)
+                    self.assertFalse((hetzner / 'workspace').exists())
+        self.assertFalse((aws / 'workspace').exists())
+        self.assertGreater(lookups.count(True), 1)
+
+    def test_every_label_gets_a_first_cleanup_before_any_retry(self):
+        # Full two-hour reserve; each failed AWS cleanup takes 31 minutes.
+        clock = [1900000000.0]
+        self.config['stopAt'] = clock[0] + 7200
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        self.run_fixture('soak-aws')
+        self.run_fixture('soak-hetzner')
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        attempts = []
+        def slow_failing_cleanup(label, arguments, cleanup=False):
+            attempts.append((label, self.config['stopAt'] - clock[0]))
+            clock[0] += 1860 if label == 'soak-aws' else 60
+            return 1
+        def advance(seconds):
+            clock[0] += seconds
+        with patch.object(supervisor.time, 'time', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.time, 'sleep', side_effect=advance), \
+             patch.object(restarted, 'invoke', side_effect=slow_failing_cleanup), \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        order = [label for label, _ in attempts]
+        self.assertEqual(order[:2], ['soak-aws', 'soak-hetzner'])
+        self.assertLess(order.index('soak-hetzner'), [i for i, l in enumerate(order) if l == 'soak-aws'][1]
+                        if order.count('soak-aws') > 1 else len(order))
+        self.assertGreaterEqual(dict(attempts)['soak-hetzner'], 2400)
+
+    def test_term_handling_child_that_exits_zero_keeps_the_observed_signal(self):
+        # The child handles TERM and exits 0; the watcher has not yet set STOP
+        # or written the record. The in-memory signal still names the cause.
+        campaign = self.campaign()
+        runner = self.root / 'fixture-runner.py'
+        pid_file = self.root / 'child.pid'
+        runner.write_text('import os, signal, sys, time\nsignal.signal(signal.SIGTERM, lambda *a: sys.exit(0))\n'
+                          'open(%r, "w").write(str(os.getpid()))\ntime.sleep(30)\n' % str(pid_file))
+        self.process_patch.stop()
+        def service_stop():
+            for _ in range(100):
+                if pid_file.exists() and pid_file.read_text():
+                    break
+                time.sleep(0.05)
+            os.kill(int(pid_file.read_text()), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGTERM)
+        with self.signal_handlers(), patch.object(supervisor, 'consume_signal'), \
+             patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root)), \
+             patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            stopper = threading.Thread(target=service_stop)
+            stopper.start()
+            outcome = campaign.run_one('rehearsal-aws')
+            stopper.join(10)
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+
+    def test_run_interrupted_before_its_outcome_was_saved_is_settled_never_resumed(self):
+        label = 'rehearsal-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        calls = []
+
+        def clean(request_label, arguments, cleanup=False):
+            calls.append(arguments)
+            self.cleanup_success(run_dir)
+            return 0
+
+        resumed = AssertionError('an interrupted run must never be resumed')
+        with patch.object(restarted, 'invoke', side_effect=clean), \
+             patch.object(restarted, 'export_observation', side_effect=resumed), \
+             patch.object(restarted, 'wait_for_tick', side_effect=resumed):
+            restarted.run()
+        self.assertEqual(calls, [['--cleanup', str(run_dir)]])
+        outcome = supervisor.read_json(restarted.state_path)['runs'][label]
+        self.assertEqual(outcome['failureReason'], 'outcome-not-saved')
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertEqual(outcome['status'], 'failed')
+
+    def fixture_runner(self, seconds):
+        runner = self.root / 'fixture-runner.py'
+        runner.write_text('import time\nprint("fixture-running", flush=True)\ntime.sleep(%d)\n' % seconds)
+        self.process_patch.stop()
+        return patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root))
+
+    def test_signal_while_a_child_runs_reaches_the_run_outcome(self):
+        campaign = self.campaign()
+        timer = threading.Timer(0.5, supervisor.request_stop, ('signal-SIGTERM', 15))
+        with self.fixture_runner(30), patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            timer.start()
+            try:
+                outcome = campaign.run_one('rehearsal-aws')
+            finally:
+                timer.cancel()
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertEqual(supervisor.read_json(campaign.state_path)['stopReason']['cause'], 'signal-SIGTERM')
+
+    def test_service_stop_delivered_to_child_and_supervisor_reaches_the_outcome(self):
+        # KillMode=control-group: systemd signals both processes at once, so
+        # the child exits -15 before the supervisor terminates it.
+        campaign = self.campaign()
+        runner = self.root / 'fixture-runner.py'
+        pid_file = self.root / 'child.pid'
+        runner.write_text('import os, time\nopen(%r, "w").write(str(os.getpid()))\ntime.sleep(30)\n' % str(pid_file))
+        self.process_patch.stop()
+
+        def service_stop():
+            for _ in range(100):
+                if pid_file.exists() and pid_file.read_text():
+                    break
+                time.sleep(0.05)
+            os.kill(int(pid_file.read_text()), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        with self.signal_handlers(), \
+             patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root)), \
+             patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            timer = threading.Thread(target=service_stop)
+            timer.start()
+            outcome = campaign.run_one('rehearsal-aws')
+            timer.join(10)
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+
+    def test_unrelated_child_failure_gets_no_stop_cause(self):
+        for body in ('raise SystemExit(3)\n', 'import os, signal\nos.kill(os.getpid(), signal.SIGKILL)\n'):
+            with self.subTest(body=body):
+                campaign = self.campaign()
+                runner = self.root / 'fixture-runner.py'
+                runner.write_text(body)
+                self.process_patch.stop()
+                with patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root)), \
+                     patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+                    outcome = campaign.run_one('rehearsal-aws')
+                self.assertNotIn('stopReason', outcome)
+                self.assertFalse(supervisor.STOP.is_set())
+
+    def test_deadline_and_child_timeout_are_distinct_from_a_stop(self):
+        # Campaign deadline already passed at entry, with no signal.
+        campaign = self.campaign()
+        campaign.deadline = time.time() - 1
+        with patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome), \
+             patch.object(campaign, 'invoke') as invoke:
+            outcome = campaign.run_one('rehearsal-aws')
+        invoke.assert_not_called()
+        self.assertEqual((outcome['failureType'], outcome['stopReason']), ('CampaignStopped', 'campaign-deadline'))
+        self.assertFalse(supervisor.STOP.is_set())
+        self.assertNotIn('stopReason', supervisor.read_json(campaign.state_path))
+        # The campaign deadline expires while a child runs.
+        campaign = self.campaign()
+        campaign.deadline = time.time() + 1
+        campaign.monotonic_deadline = time.monotonic() + 1
+        with self.fixture_runner(30), patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            outcome = campaign.run_one('rehearsal-aws')
+        self.assertEqual(outcome['stopReason'], 'campaign-deadline')
+        # The child's own operation budget expires; the campaign continues.
+        label = 'soak-hetzner'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        with self.fixture_runner(30), patch.object(supervisor, 'RESUME_BUDGET', 1), \
+             patch.object(campaign, 'export_observation'), patch.object(campaign, 'wait_for_tick'), \
+             patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            outcome = campaign.run_one(label)
+        self.assertEqual((outcome['observerExitCode'], outcome['stopReason']), (124, 'child-operation-timeout'))
+        self.assertFalse(supervisor.STOP.is_set())
+        self.assertNotIn('stopReason', supervisor.read_json(campaign.state_path))
+        self.assertTrue(run_dir.exists())
 
     def test_exports_bounded_real_log_bytes_and_fsynced_lifecycle_events(self):
         campaign = self.campaign()
@@ -251,7 +1422,7 @@ class SupervisorTests(unittest.TestCase):
         self.run_fixture(label, passed=True, workspace=False)
         original = self.campaign()
         expected = self.saved_outcome(original, label, passed=True, settled=True)
-        restarted = self.campaign()
+        restarted = self.campaign(creator=False)
         with patch.object(restarted, 'invoke') as invoke, patch.object(restarted, 'export_run') as export:
             self.assertEqual(restarted.run_one(label), expected)
         invoke.assert_not_called()
@@ -278,7 +1449,7 @@ class SupervisorTests(unittest.TestCase):
         run_dir = self.run_fixture(label)
         original = self.campaign()
         self.saved_outcome(original, label)
-        restarted = self.campaign()
+        restarted = self.campaign(creator=False)
         self.client.fail_once_suffix = '/export.json'
 
         def clean(request_label, arguments, cleanup=False):
@@ -295,11 +1466,12 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(result['status'], 'failed')
         self.assertFalse(result['complete'])
         self.assertEqual(result['completedRuns'], 16)
-        self.assertEqual(result['settlementAttempts'], 2)
+        # Cleanup succeeded once; only the export was retried.
+        self.assertEqual((result['settlementAttempts'], result['exportAttempts']), (1, 2))
         self.assertTrue(result['cleanupVerifiedAbsent'])
         self.assertTrue(result['proofExported'])
         self.assertFalse((run_dir / 'workspace').exists())
-        again = self.campaign()
+        again = self.campaign(creator=False)
         with patch.object(again, 'invoke') as invoke_again:
             self.assertEqual(again.run_one(label), result)
         invoke_again.assert_not_called()
@@ -310,7 +1482,7 @@ class SupervisorTests(unittest.TestCase):
         (run_dir / 'workspace' / 'app-linux-x64').write_bytes(b'\x7fELF SEA fixture')
         original = self.campaign()
         self.saved_outcome(original, label)
-        restarted = self.campaign()
+        restarted = self.campaign(creator=False)
         with patch.object(restarted, 'invoke', return_value=1) as invoke, patch.object(supervisor.time, 'sleep'):
             result = restarted.run_one(label)
         self.assertEqual(invoke.call_count, 3)
@@ -325,7 +1497,7 @@ class SupervisorTests(unittest.TestCase):
         recovery_key = 'fixture-campaign/runs/soak-hetzner/recovery.tar.gz'
         self.assertEqual(self.client.puts.count(recovery_key), 3)
         self.assertEqual(self.client.gets.count(recovery_key), 3)
-        again = self.campaign()
+        again = self.campaign(creator=False)
         with patch.object(again, 'invoke') as invoke_again, patch.object(again, 'export_run') as export_again:
             self.assertEqual(again.run_one(label), result)
         invoke_again.assert_not_called()
@@ -360,7 +1532,7 @@ class SupervisorTests(unittest.TestCase):
         previous.update(proofExported=True, settlementAttempts=2)
         campaign.state['runs'][label] = previous
         campaign.save()
-        restarted = self.campaign()
+        restarted = self.campaign(creator=False)
         self.client.fail_once_suffix = '/export.json'
         persisted_export_flags = []
 
@@ -375,11 +1547,12 @@ class SupervisorTests(unittest.TestCase):
             result = restarted.run_one(label)
         self.assertEqual(invoke.call_count, 1)
         self.assertEqual(result['settlementAttempts'], 3)
-        self.assertEqual(result['status'], 'failed')
         self.assertTrue(result['cleanupVerifiedAbsent'])
-        self.assertFalse(result['proofExported'])
+        # The stale flag was cleared before the new cleanup ran; the failed
+        # final export is then retried, independently of the cleanup cap.
         self.assertEqual(persisted_export_flags, [False])
-        self.assertFalse(supervisor.read_json(restarted.state_path)['runs'][label]['proofExported'])
+        self.assertEqual(result['exportAttempts'], 2)
+        self.assertTrue(result['proofExported'])
 
     def test_external_stop_nearby_preserves_recovery_authority_without_starting_cleanup(self):
         label = 'soak-hetzner'

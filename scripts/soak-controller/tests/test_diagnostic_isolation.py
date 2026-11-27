@@ -27,13 +27,14 @@ class DiagnosticIsolationTests(unittest.TestCase):
         self.addCleanup(root_patch.stop)
         supervisor.STOP.clear()
         supervisor.STOP_REASON = None
+        supervisor.STOP_RECORD = None
         self.addCleanup(supervisor.STOP.clear)
         self.config = {'campaignId': 'fixture-campaign', 'specSha256': 'a' * 64,
                        'stopAt': time.time() + 80 * 3600, 'soakHours': 72,
                        'bucket': 'fixture-never-contacted'}
         self.client = MemoryEvidenceClient()
         self.campaign = supervisor.Campaign(
-            self.config, supervisor.Evidence(self.config, self.client), 'fixture-no-real-token')
+            self.config, supervisor.Evidence(self.config, self.client), 'fixture-no-real-token', creator=True)
         self.label = 'soak-aws'
         self.addCleanup(self.close_logs)
 
