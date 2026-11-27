@@ -677,6 +677,87 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn('creator=creator', source)
         self.assertIn('not options.repair_cleanup and claim_first_start', source)
 
+    def test_a_failed_marker_create_still_leaves_the_campaign_claimed(self):
+        import errno
+        spec = self.config['specSha256']
+        real_open = os.open
+        def no_space(path, *args, **kwargs):
+            if str(path).endswith('first-start.json'):
+                raise OSError(errno.ENOSPC, 'injected-no-space')
+            return real_open(path, *args, **kwargs)
+        # The reviewer's case: the marker create fails, and that process runs
+        # cleanup-only and records a terminal summary without any marker.
+        with patch.object(supervisor.os, 'open', side_effect=no_space):
+            self.assertFalse(supervisor.claim_first_start(spec))
+        self.assertFalse((self.root / 'first-start.json').exists())
+        first = self.campaign(creator=False)
+        self.assertEqual(first.run(), 0)
+        first.diagnostic_thread.join(5)
+        self.assertEqual(supervisor.read_json(first.state_path)['status'], 'failed')
+        # Its own summary is prior activity: the next start is not a creator.
+        self.assertFalse(supervisor.claim_first_start(spec))
+        self.assertFalse((self.root / 'first-start.json').exists())
+
+    def test_a_first_process_that_wrote_nothing_leaves_the_campaign_unclaimed(self):
+        import errno
+        spec = self.config['specSha256']
+        # Bootstrap's layout: empty run and home directories, and the lock.
+        (self.root / 'runs').mkdir()
+        (self.root / 'homes/aws').mkdir(parents=True)
+        (self.root / 'supervisor.lock').touch()
+        with patch.object(supervisor.os, 'open', side_effect=OSError(errno.ENOSPC, 'injected-no-space')):
+            self.assertFalse(supervisor.claim_first_start(spec))
+        # Nothing happened, so the next process legitimately creates.
+        self.assertTrue(supervisor.claim_first_start(spec))
+
+    def test_any_prior_activity_or_read_error_prevents_a_claim(self):
+        spec = self.config['specSha256']
+        for name, make in (('run directory', lambda: (self.root / 'runs/rehearsal-aws').mkdir(parents=True)),
+                           ('summary', lambda: (self.root / 'supervisor.json').write_text('{}')),
+                           ('stop record', lambda: supervisor.stop_record_path(spec).write_text('{}')),
+                           ('unreadable summary', lambda: (self.root / 'supervisor.json.unreadable').write_text('x')),
+                           ('diagnostics', lambda: (self.root / 'soak-aws.log').write_text('x'))):
+            with self.subTest(name=name):
+                self.clear_root()
+                make()
+                self.assertFalse(supervisor.claim_first_start(spec))
+                self.assertFalse((self.root / 'first-start.json').exists())
+        self.clear_root()
+        with patch.object(supervisor.os, 'scandir', side_effect=PermissionError('injected')):
+            self.assertFalse(supervisor.claim_first_start(spec))
+
+    def test_spawn_failures_spend_no_cleanup_attempt_and_a_later_start_cleans(self):
+        import errno
+        hetzner = self.run_fixture('soak-hetzner')
+        self.campaign()
+        spawns = []
+        def no_process(*_args, **_kwargs):
+            spawns.append(1)
+            raise OSError(errno.EAGAIN, 'injected-resource-unavailable')
+        self.process_patch.stop()
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        with patch.object(supervisor.subprocess, 'Popen', side_effect=no_process), \
+             patch.object(supervisor.time, 'sleep'), \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+        self.assertGreaterEqual(len(spawns), 3)
+        self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+        self.assertEqual(outcome['spawnFailureType'], 'BlockingIOError')
+        self.assertTrue((hetzner / 'workspace').exists())
+        # A healthy activation still has every attempt.
+        self.reset_process()
+        healthy = self.campaign(creator=False)
+        calls = []
+        with patch.object(healthy, 'invoke', side_effect=self.cleanup_recorder(calls)):
+            self.assertEqual(healthy.run(), 0)
+        self.assertEqual(calls, [('soak-hetzner', '--cleanup', True)])
+        outcome = supervisor.read_json(healthy.state_path)['runs']['soak-hetzner']
+        self.assertEqual(outcome['settlementAttempts'], 1)
+        self.assertFalse((hetzner / 'workspace').exists())
+
     def test_launch_gate_is_checked_after_the_credential_lookup(self):
         # A stop observed during the lazy Hetzner lookup refuses the spawn;
         # a non-creator never spawns new work at all.

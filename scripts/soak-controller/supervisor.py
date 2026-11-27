@@ -88,14 +88,35 @@ def request_stop(cause, signum=None):
         write_stop_record(STOP_REASON)
 
 
+# What bootstrap leaves in the state directory before any supervisor runs.
+FRESH_STATE_ENTRIES = frozenset({'runs', 'homes', 'supervisor.lock'})
+
+
+def no_prior_activity():
+    """True only while the state directory holds nothing but bootstrap's layout.
+
+    Any supervisor that ran left something here, a summary, a run directory or
+    a stop record, even if it never created the marker. A read error counts as
+    prior activity.
+    """
+    try:
+        names = {entry.name for entry in os.scandir(ROOT)}
+        return names <= FRESH_STATE_ENTRIES and ('runs' not in names or not any(os.scandir(ROOT / 'runs')))
+    except OSError:
+        return False
+
+
 def claim_first_start(spec):
     """True only for the first process ever to start this campaign.
 
-    The marker is created exclusively and made durable before anything else
-    happens. If it already exists, or any step fails, this process is
-    cleanup-only for its whole life: a restart can never create a run.
+    It must find no prior campaign activity and then create the marker
+    exclusively and durably, before anything else happens. Otherwise this
+    process is cleanup-only for its whole life: a restart can never create a
+    run, and a process whose marker create failed still left its own state.
     """
     path = ROOT / 'first-start.json'
+    if not no_prior_activity():
+        return False
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     except OSError:
@@ -481,6 +502,8 @@ class Campaign:
         self.diagnostic_start_lock = threading.Lock()
         # The fixed cause of the latest supervisor-terminated child, per label.
         self.terminations = {}
+        # Per label, what to run once a cleanup child has started.
+        self.spawn_hooks = {}
 
     def deadline_reached(self):
         return time.time() >= self.deadline or time.monotonic() >= self.monotonic_deadline
@@ -729,6 +752,10 @@ class Campaign:
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, start_new_session=True)
         try:
+            # A cleanup attempt is counted here, once a child exists.
+            hook = self.spawn_hooks.pop(label, None)
+            if hook is not None:
+                hook()
             # Every post-spawn operation is protected by termination/reaping.
             self.event(label, 'child-started', pid=child.pid, cleanup=cleanup)
             # Keep draining even if optional log storage fails, so a full pipe
@@ -916,12 +943,8 @@ class Campaign:
                 if not cleanup_verified(run_dir) and not never_created(run_dir):
                     # Only a started cleanup child counts against the cap, so
                     # a credential outage leaves every attempt for later.
-                    if not self.credentials_for_cleanup(label, outcome):
+                    if not self.start_cleanup(label, outcome):
                         return
-                    outcome['settlementAttempts'] = outcome.get('settlementAttempts', 0) + 1
-                    outcome['proofExported'] = False
-                    self.put_outcome(label, outcome)
-                    outcome['cleanupExitCode'] = self.invoke(label, ['--cleanup', str(run_dir)], cleanup=True)
                     cause = self.terminations.pop(label, None)
                     if outcome['cleanupExitCode'] == 124 and cause is not None:
                         outcome['cleanupStopReason'] = cause
@@ -931,17 +954,49 @@ class Campaign:
             outcome['cleanupFailureType'] = type(error).__name__
         self.put_outcome(label, outcome)
 
-    def credentials_for_cleanup(self, label, outcome):
-        """Fetch the provider credential, retrying with capped backoff within the reserve."""
+    def start_cleanup(self, label, outcome):
+        """Run one cleanup child; count the attempt only once it has started.
+
+        A credential lookup or spawn failure happens before any child exists.
+        It is retried with capped backoff within the reserve and, if it
+        persists, spends no attempt, so a later activation retries.
+        """
+        run_dir = safe_relative_run(label)
         backoff = 5
         while True:
+            started = []
+
+            def counted():
+                started.append(True)
+                outcome['settlementAttempts'] = outcome.get('settlementAttempts', 0) + 1
+                self.put_outcome(label, outcome)
+
             try:
                 self.token_for(label.split('-')[-1])
                 outcome.pop('credentialFailureType', None)
-                return True
             except Exception as error:
                 outcome['credentialFailureType'] = type(error).__name__
                 outcome['credentialFailures'] = outcome.get('credentialFailures', 0) + 1
+            else:
+                # A stale export flag never survives into a new cleanup.
+                outcome['proofExported'] = False
+                self.put_outcome(label, outcome)
+                self.spawn_hooks[label] = counted
+                try:
+                    outcome['cleanupExitCode'] = self.invoke(label, ['--cleanup', str(run_dir)], cleanup=True)
+                except Exception as error:
+                    if started:
+                        raise
+                    outcome['spawnFailureType'] = type(error).__name__
+                    outcome['spawnFailures'] = outcome.get('spawnFailures', 0) + 1
+                else:
+                    if not started:
+                        # A child ran and returned.
+                        counted()
+                    outcome.pop('spawnFailureType', None)
+                    return True
+                finally:
+                    self.spawn_hooks.pop(label, None)
             if self.config['stopAt'] - time.time() - backoff < 2400 or backoff > 60:
                 self.put_outcome(label, outcome)
                 return False
