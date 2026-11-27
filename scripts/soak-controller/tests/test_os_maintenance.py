@@ -8,6 +8,7 @@ import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -404,6 +405,13 @@ class OsMaintenanceTests(unittest.TestCase):
                                 text=True, timeout=60)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('apt maintenance still running after 2s', result.stderr)
+        # One lookup slower than the whole budget is cut off at the budget.
+        self.environment['FAKE_SHOW_DELAY'] = '6'
+        began = time.monotonic()
+        result = subprocess.run(['bash', '-c', script], env=self.environment, capture_output=True,
+                                text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertLess(time.monotonic() - began, 5)
 
     def test_every_apt_call_waits_for_the_package_lock(self):
         userdata, _ = self.userdata_drain()
