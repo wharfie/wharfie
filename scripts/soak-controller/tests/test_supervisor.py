@@ -191,6 +191,13 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(supervisor.STOP_REASON['cause'], 'signal-SIGINT')
         self.assertEqual(os.read(read_fd, 64), b'\0\0')
 
+    def test_stop_is_set_before_its_record_is_written(self):
+        # Writing may be slow (fsync); launches must already be inhibited.
+        seen = []
+        with patch.object(supervisor, 'write_stop_record', side_effect=lambda _reason: seen.append(supervisor.STOP.is_set())):
+            supervisor.request_stop('full-build-start-deadline')
+        self.assertEqual(seen, [True])
+
     def test_signal_handler_never_takes_the_stop_event_lock(self):
         # The handler can run while the main thread holds STOP's condition lock
         # inside Event.wait or Event.set; it must still return.
@@ -653,6 +660,8 @@ class SupervisorTests(unittest.TestCase):
             'empty': '',
             'digest-only': json.dumps({'specSha256': self.config['specSha256']}),
             'unknown-cause': json.dumps({'specSha256': self.config['specSha256'], 'cause': 'x'}),
+            # Our file name, but another campaign's spec inside.
+            'wrong-spec': json.dumps({'specSha256': 'b' * 64, 'cause': 'signal-SIGTERM'}),
         }
         for case, content in cases.items():
             with self.subTest(case=case):
