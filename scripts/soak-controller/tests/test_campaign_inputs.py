@@ -183,6 +183,57 @@ class CampaignInputTests(unittest.TestCase):
         self.assertTrue(operator.ownership['inputsUploaded'])
         self.assertFalse((operator.root / 'input-readback.tmp').exists())
 
+    def staging_store(self, operator, puts, store):
+        def aws(service, action, value, **kwargs):
+            if action == 'put-object':
+                store[value['Key']] = Path(kwargs['extra'][1]).read_bytes()
+                puts.append(value['Key'])
+            else:
+                Path(kwargs['extra'][0]).write_bytes(store[value['Key']])
+            return {}
+        return aws
+
+    def test_stage_uploads_the_bundle_prepare_froze_even_after_a_checkout_edit(self):
+        operator = self.prepare()
+        operator.identity = Mock()
+        frozen = (operator.root / 'operations.json.xz').read_bytes()
+        store, puts = {}, []
+        operator.aws = self.staging_store(operator, puts, store)
+        # A later edit to the checkout would rebuild a different bundle; staging
+        # must not rebuild at all.
+        with patch.object(ops, 'runtime_bundle', side_effect=AssertionError('rebuilt during staging')):
+            operator.stage_inputs()
+        key = operator.config['campaignId'] + '/inputs/operations.json.xz'
+        self.assertEqual(store[key], frozen)
+        self.assertTrue(operator.ownership['inputsUploaded'])
+
+    def test_stage_refuses_a_bundle_the_userdata_does_not_pin(self):
+        operator = self.prepare()
+        operator.identity = Mock()
+        operator.aws = Mock()
+        bundle = operator.root / 'operations.json.xz'
+        bundle.write_bytes(bundle.read_bytes() + b'\0')
+        with self.assertRaisesRegex(RuntimeError, 'frozen-operations-bundle-changed'):
+            operator.stage_inputs()
+        operator.aws.assert_not_called()
+        self.assertNotIn('inputsUploaded', operator.ownership)
+
+    def test_stage_refuses_a_bundle_changed_after_its_check(self):
+        operator = self.prepare()
+        operator.identity = Mock()
+        bundle = operator.root / 'operations.json.xz'
+        store, puts = {}, []
+        # The file changes between the pin check and the upload.
+        store_aws = self.staging_store(operator, puts, store)
+        def changed_upload(service, action, value, **kwargs):
+            if action == 'put-object' and value['Key'].endswith('operations.json.xz'):
+                bundle.write_bytes(bundle.read_bytes() + b'\0')
+            return store_aws(service, action, value, **kwargs)
+        operator.aws = changed_upload
+        with self.assertRaisesRegex(RuntimeError, 'frozen-input-readback-mismatch'):
+            operator.stage_inputs()
+        self.assertNotIn('inputsUploaded', operator.ownership)
+
     def test_changed_assets_refuse_before_any_upload(self):
         operator = self.prepare()
         operator.identity = Mock()

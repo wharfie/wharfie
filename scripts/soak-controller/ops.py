@@ -166,6 +166,10 @@ def prepare(options):
     atomic_json(root / 'campaign.json', config)
     template = render(config, contents=operations)
     atomic_json(root / 'cloudformation.json', template)
+    # The exact bundle the userdata pins; `stage-inputs` uploads these bytes.
+    bundle = root / 'operations.json.xz'
+    bundle.write_bytes(runtime_bundle(config, contents=operations))
+    bundle.chmod(0o600)
     atomic_json(root / 'ownership.json', {
         'campaignId': config['campaignId'], 'specSha256': config['specSha256'],
         'templateSha256': sha256(root / 'cloudformation.json'), 'stackId': None,
@@ -374,9 +378,14 @@ class Operator:
         """Upload and read back the exact frozen inputs while bootstrap waits."""
         self.verify_local_bundle()
         self.identity()
+        # Upload the bundle `prepare` froze, never one rebuilt from the
+        # checkout, and only if the reviewed userdata pins exactly these bytes.
         bundle = self.root / 'operations.json.xz'
-        bundle.write_bytes(runtime_bundle(self.config))
-        bundle.chmod(0o600)
+        data = bundle.read_bytes()
+        template = read_json(self.root / 'cloudformation.json')
+        userdata = template['Resources']['Controller']['Properties']['UserData']['Fn::Base64']['Fn::Sub']
+        if "'size': %d, 'sha256': '%s'" % (len(data), hashlib.sha256(data).hexdigest()) not in userdata:
+            raise RuntimeError('frozen-operations-bundle-changed')
         assets = Path(self.ownership['assetsDirectory'])
         entries = []
         for name, expected in self.config['assets'].items():
@@ -385,7 +394,8 @@ class Operator:
                 raise RuntimeError('frozen-candidate-input-changed')
             entries.append(('assets/' + name, source, expected['sha256'], expected['size']))
         # Publishing the bundle last releases bootstrap only after all assets exist.
-        entries.append(('operations.json.xz', bundle, sha256(bundle), bundle.stat().st_size))
+        # The readback must match the checked digest, so a later change to the file refuses.
+        entries.append(('operations.json.xz', bundle, hashlib.sha256(data).hexdigest(), len(data)))
         for suffix, source, digest, size in entries:
             key = self.config['campaignId'] + '/inputs/' + suffix
             self.aws('s3api', 'put-object', {'Bucket': self.config['bucket'], 'Key': key,
