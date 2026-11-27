@@ -69,6 +69,12 @@ def request_stop(cause, signum=None):
     STOP.set()
 
 
+def stop_for_signal(signum, _frame=None):
+    # A fixed reason such as `signal-SIGTERM`: systemd and needrestart stop the
+    # service with SIGTERM, so the summary must say a signal ended the campaign.
+    request_stop('signal-' + signal.Signals(signum).name, signum)
+
+
 class CampaignTimeRefused(RuntimeError):
     """The remaining campaign time cannot hold a full soak and its final teardown."""
 
@@ -625,6 +631,9 @@ class Campaign:
                 outcome['status'] = 'passed'
         except Exception as error:
             outcome['failureType'] = type(error).__name__
+            if STOP.is_set() and STOP_REASON is not None:
+                # The fixed cause that stopped this run, never a raw exception string.
+                outcome['stopReason'] = STOP_REASON['cause']
             if isinstance(error, CampaignTimeRefused):
                 # A fixed reason, never a raw exception string.
                 outcome['failureReason'] = str(error)
@@ -693,7 +702,9 @@ class Campaign:
             x.get('status') == 'passed' and x.get('complete') and x.get('cleanupVerifiedAbsent')
             and x.get('proofExported') for x in self.state['runs'].values())
         self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
-        self.state['stopReason'] = STOP_REASON
+        # A supervisor restarted after a stop finds every run settled and
+        # finishes again; it keeps the reason the first process recorded.
+        self.state['stopReason'] = self.state.get('stopReason') or STOP_REASON
         self.save()
         self.schedule_diagnostics()
         self.evidence.put_file('supervisor.json', self.state_path)
@@ -746,7 +757,7 @@ def main():
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     config = read_json(Path('/etc/wharfie-soak/campaign.json'))
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, lambda signum, _frame: request_stop('signal', signum))
+        signal.signal(sig, stop_for_signal)
     sdk_config = Config(connect_timeout=10, read_timeout=30, retries={'max_attempts': 2})
     ssm = boto3.client('ssm', region_name=config['region'], config=sdk_config)
     # No token in userdata, command payload, environment file, logs, or receipts.
