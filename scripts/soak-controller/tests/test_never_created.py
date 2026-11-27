@@ -139,6 +139,7 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
         self.addCleanup(root_patch.stop)
         supervisor.STOP.clear()
         supervisor.STOP_REASON = None
+        supervisor.STOP_RECORD = None
         self.addCleanup(supervisor.STOP.clear)
         self.config = {'campaignId': 'fixture-campaign', 'specSha256': 'a' * 64,
                        'sourceCommit': 'b' * 40, 'controllerIpv4': '192.0.2.15',

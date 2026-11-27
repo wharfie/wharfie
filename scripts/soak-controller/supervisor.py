@@ -31,6 +31,8 @@ SIGNAL_CAUSES = {signal.SIGTERM: 'signal-SIGTERM', signal.SIGINT: 'signal-SIGINT
 # Written only by the signal handler; read by the watcher thread.
 FIRST_SIGNAL = None
 SIGNAL_PIPE = None
+# (path, specSha256) of the local stop record; set by the campaign.
+STOP_RECORD = None
 REPORT_NAMES = (
     'run.json', 'report.json', 'cleanup-report.json', 'retirement.json',
     'failure.json', 'soak-progress.json', 'soak.json', 'preview.json',
@@ -72,10 +74,31 @@ def request_stop(cause, signum=None):
     # Never called from a signal handler: it takes thread locks.
     global STOP_REASON
     with STOP_LOCK:
-        if STOP_REASON is None:
+        first = STOP_REASON is None
+        if first:
             STOP_REASON = {'cause': cause, 'signal': signum, 'at': time.time(),
                            'monotonicAt': time.monotonic()}
+    if first:
+        write_stop_record(STOP_REASON)
     STOP.set()
+
+
+def write_stop_record(reason):
+    """Make the first stop durable at once: a local fsynced file, no network.
+
+    It is bound to the campaign spec, and a restart consults it before
+    scheduling anything, so a stop survives a death before it reached
+    supervisor.json.
+    """
+    record = STOP_RECORD
+    if record is None:
+        return
+    path, spec = record
+    try:
+        if not path.exists():
+            atomic_json(path, {'specSha256': spec, **reason})
+    except (OSError, RuntimeError):
+        pass
 
 
 def stop_cause():
@@ -101,6 +124,14 @@ def stop_for_signal(signum, _frame=None):
             pass
 
 
+def consume_signal():
+    """Turn the first handled signal into the stop; later signals never replace it."""
+    signum = FIRST_SIGNAL
+    # systemd and needrestart stop the service with SIGTERM, so the summary
+    # must say a signal ended the campaign.
+    request_stop(SIGNAL_CAUSES.get(signum, 'signal'), None if signum is None else int(signum))
+
+
 def install_signal_handlers():
     """A self-pipe and one watcher thread turn signals into a fixed stop cause."""
     global SIGNAL_PIPE
@@ -115,10 +146,7 @@ def install_signal_handlers():
                     return
             except OSError:
                 return
-            signum = FIRST_SIGNAL
-            # systemd and needrestart stop the service with SIGTERM, so the
-            # summary must say a signal ended the campaign.
-            request_stop(SIGNAL_CAUSES.get(signum, 'signal'), None if signum is None else int(signum))
+            consume_signal()
 
     watcher = threading.Thread(target=watch, daemon=True, name='signal-watch')
     watcher.start()
@@ -370,6 +398,8 @@ class Campaign:
             self.state = {'format': 'wharfie.soak.supervisor.v1', 'specSha256': config['specSha256'],
                           'campaignId': config['campaignId'], 'startedAt': time.time(), 'runs': {}}
             self.save()
+        global STOP_RECORD
+        STOP_RECORD = (ROOT / 'stop.json', config['specSha256'])
         self.soak_hours = soak_hours(config)
         self.deadline = supervisor_deadline(config, self.state['startedAt'])
         self.monotonic_deadline = time.monotonic() + max(0, self.deadline - time.time())
@@ -388,6 +418,16 @@ class Campaign:
         """Why the campaign can no longer continue a run: a stop, else its deadline."""
         return stop_cause() if STOP.is_set() else 'campaign-deadline'
 
+    def durable_stop(self):
+        """The local stop record for this campaign spec, or None."""
+        path = ROOT / 'stop.json'
+        if not path.exists():
+            return None
+        record = read_json(path)
+        if record.get('specSha256') != self.config['specSha256']:
+            return None
+        return {key: value for key, value in record.items() if key != 'specSha256'}
+
     def record_stop(self):
         """Persist the first campaign stop before any cleanup or network work.
 
@@ -395,7 +435,7 @@ class Campaign:
         restart even when this process dies before `finish`.
         """
         reason = STOP_REASON
-        if reason is None or self.state.get('stopReason'):
+        if reason is None or self.state.get('stopReason') or 'finishedAt' in self.state:
             return
         with self.lock:
             if not self.state.get('stopReason'):
@@ -459,7 +499,8 @@ class Campaign:
                  'monotonicAt': time.monotonic(), 'pid': os.getpid(),
                  # The campaign's persisted cause, then this process's own state.
                  'status': self.state.get('status'),
-                 'stopReason': self.state.get('stopReason') or STOP_REASON,
+                 'stopReason': (self.state.get('stopReason') if 'finishedAt' in self.state
+                                else self.state.get('stopReason') or STOP_REASON),
                  'processStopRequested': STOP.is_set(), 'processStopReason': STOP_REASON,
                  'deadline': self.deadline, 'monotonicDeadline': self.monotonic_deadline,
                  'memoryEvents': counters, 'diskAvailableBytes': usage.free}
@@ -663,6 +704,14 @@ class Campaign:
                         pass
                 time.sleep(1)
             pump.join(timeout=5)
+            if term_at is None and not cleanup:
+                # KillMode=control-group signals the child and the supervisor
+                # together, so the child can exit before the stop is seen.
+                if child.returncode < 0 and not STOP.is_set():
+                    STOP.wait(2)
+                if STOP.is_set():
+                    self.terminations[label] = stop_cause()
+                    self.record_stop()
             self.event(label, 'child-exited', pid=child.pid, exitCode=child.returncode,
                        terminatedBySupervisor=term_at is not None)
             return 124 if term_at is not None else child.returncode
@@ -744,9 +793,9 @@ class Campaign:
         return outcome
 
     def note_termination(self, label, code, outcome):
-        """A child the supervisor terminated returns 124; keep its fixed cause."""
+        """Keep the fixed cause of a child ended by a stop, deadline or budget."""
         cause = self.terminations.pop(label, None)
-        if code == 124 and cause is not None:
+        if cause is not None:
             outcome['stopReason'] = cause
 
     def settle(self, label, outcome):
@@ -787,11 +836,18 @@ class Campaign:
         return outcome
 
     def run(self):
+        terminal = 'finishedAt' in self.state or self.state.get('status') in ('passed', 'failed')
         saved = self.state.get('stopReason')
+        if not terminal and not saved:
+            saved = self.durable_stop()
+            if saved:
+                with self.lock:
+                    self.state['stopReason'] = saved
+                    self.save()
         if saved:
             # A stop recorded by an earlier process stays latched.
             request_stop(saved['cause'], saved.get('signal'))
-        if saved or self.state.get('status') in ('passed', 'failed'):
+        if saved or terminal:
             return self.replay()
         # Native rehearsal builds and short runs are sequential on the 4GiB host.
         for provider in ('aws', 'hetzner'):
@@ -823,18 +879,29 @@ class Campaign:
         first finish time and status.
         """
         saved = self.state.get('stopReason')
+        failures = []
         for label in LABELS:
-            previous = self.state['runs'].get(label)
-            if previous is not None:
-                if not (cleanup_settled(previous) and previous.get('proofExported')):
-                    self.settle(label, dict(previous))
-            elif safe_relative_run(label).exists():
-                outcome = {'provider': label.split('-')[-1], 'label': label, 'status': 'failed',
-                           'failureReason': 'outcome-not-saved-before-stop'}
-                if saved:
-                    outcome['stopReason'] = saved['cause']
-                self.settle(label, outcome)
-        return self.finish()
+            # Each label settles on its own: one label's evidence-transport
+            # failure must never leave another label's guest uncleaned.
+            try:
+                previous = self.state['runs'].get(label)
+                if previous is not None:
+                    if not (cleanup_settled(previous) and previous.get('proofExported')):
+                        self.settle(label, dict(previous))
+                elif safe_relative_run(label).exists():
+                    outcome = {'provider': label.split('-')[-1], 'label': label, 'status': 'failed',
+                               'failureReason': 'outcome-not-saved-before-stop'}
+                    if saved:
+                        outcome['stopReason'] = saved['cause']
+                    self.settle(label, outcome)
+            except Exception as error:
+                failures.append(type(error).__name__)
+        self.finish()
+        if failures:
+            # Every eligible cleanup was attempted; exit non-zero so systemd
+            # restarts the supervisor and the exports are retried.
+            raise RuntimeError('replay-settlement-incomplete')
+        return 0
 
     def finish(self):
         required = set(LABELS)
@@ -842,13 +909,12 @@ class Campaign:
             x.get('status') == 'passed' and x.get('complete') and x.get('cleanupVerifiedAbsent')
             and x.get('proofExported') for x in self.state['runs'].values())
         if 'finishedAt' in self.state:
-            # A restarted supervisor keeps the first terminal time and status.
+            # A restarted supervisor keeps the first terminal time, status and
+            # stopReason, even a null one; its own signals go to diagnostics.
             self.state['replays'] = self.state.get('replays', 0) + 1
         else:
             self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
-        # A supervisor restarted after a stop keeps the reason the first
-        # process recorded.
-        self.state['stopReason'] = self.state.get('stopReason') or STOP_REASON
+            self.state['stopReason'] = self.state.get('stopReason') or STOP_REASON
         self.save()
         self.schedule_diagnostics()
         self.evidence.put_file('supervisor.json', self.state_path)

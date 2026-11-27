@@ -24,6 +24,7 @@ SPEC = importlib.util.spec_from_file_location('supervisor_under_test', MODULE_PA
 supervisor = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(supervisor)
 TOKEN = 'fixture-hetzner-token-not-a-real-credential'
+LABELS_FOR_TEST = ('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner')
 
 
 class MemoryBody(io.BytesIO):
@@ -73,6 +74,7 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(self.root_patch.stop)
         supervisor.STOP.clear()
         supervisor.STOP_REASON = None
+        supervisor.STOP_RECORD = None
         self.addCleanup(supervisor.STOP.clear)
         self.config = {
             'campaignId': 'fixture-campaign',
@@ -171,6 +173,21 @@ class SupervisorTests(unittest.TestCase):
                 supervisor.stop_for_signal(signal.SIGINT if signum != signal.SIGINT else signal.SIGTERM, None)
                 self.assertEqual(supervisor.STOP_REASON['cause'], cause)
         self.assertIn('install_signal_handlers()', inspect.getsource(supervisor.main))
+
+    def test_first_of_two_signals_before_consumption_is_the_cause(self):
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        with patch.object(supervisor, 'SIGNAL_PIPE', (read_fd, write_fd)):
+            try:
+                supervisor.stop_for_signal(signal.SIGINT, None)
+                supervisor.stop_for_signal(signal.SIGTERM, None)
+                # The watcher consumes only after both arrived.
+                supervisor.consume_signal()
+            finally:
+                supervisor.FIRST_SIGNAL = None
+        self.assertEqual(supervisor.STOP_REASON['cause'], 'signal-SIGINT')
+        self.assertEqual(os.read(read_fd, 64), b'\0\0')
 
     def test_signal_handler_never_takes_the_stop_event_lock(self):
         # The handler can run while the main thread holds STOP's condition lock
@@ -395,6 +412,114 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(saved_at_cleanup[0]['cause'], 'signal-SIGTERM')
         self.assertTrue(outcome['proofExported'])
 
+    def test_stop_during_the_final_export_survives_a_failed_summary_upload(self):
+        # A passed rehearsal; the stop arrives during its final export, after
+        # settlement began, and the summary upload then fails.
+        label = 'rehearsal-aws'
+        self.run_fixture(label, passed=True, workspace=False)
+        campaign = self.campaign()
+        real_put = self.evidence.put_file
+
+        def summary_fails(name, *args, **kwargs):
+            if name == 'supervisor.json':
+                raise RuntimeError('injected-summary-failure')
+            return real_put(name, *args, **kwargs)
+
+        def stopped_during_export(_label, recovery=False):
+            supervisor.request_stop('signal-SIGINT', 2)
+
+        with patch.object(campaign, 'export_run', side_effect=stopped_during_export), \
+             patch.object(self.evidence, 'put_file', side_effect=summary_fails), \
+             patch.object(campaign, 'invoke') as invoke, self.assertRaises(RuntimeError):
+            campaign.run()
+        invoke.assert_not_called()
+        self.assertNotIn('stopReason', supervisor.read_json(campaign.state_path))
+        record = supervisor.read_json(self.root / 'stop.json')
+        self.assertEqual((record['cause'], record['specSha256']), ('signal-SIGINT', self.config['specSha256']))
+
+        self.reset_process()
+        restarted = self.campaign()
+        with patch.object(restarted, 'invoke') as invoke:
+            self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        state = supervisor.read_json(restarted.state_path)
+        self.assertEqual(state['stopReason']['cause'], 'signal-SIGINT')
+        self.assertEqual(set(state['runs']), {label})
+        self.assertEqual(state['status'], 'failed')
+
+    def test_stop_record_of_another_campaign_spec_is_ignored(self):
+        supervisor.atomic_json(self.root / 'stop.json', {'specSha256': 'b' * 64, 'cause': 'signal-SIGTERM'})
+        campaign = self.campaign()
+        self.assertIsNone(campaign.durable_stop())
+
+    def test_failed_export_of_one_label_never_starves_cleanup_of_another(self):
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        aws = self.run_fixture('soak-aws')
+        self.cleanup_success(aws)
+        campaign.state['runs']['soak-aws'] = {'provider': 'aws', 'label': 'soak-aws', 'status': 'failed',
+                                               'cleanupVerifiedAbsent': True, 'proofExported': False,
+                                               'settlementAttempts': 3}
+        hetzner = self.run_fixture('soak-hetzner')
+        campaign.state['runs']['soak-hetzner'] = {'provider': 'hetzner', 'label': 'soak-hetzner',
+                                                   'status': 'failed', 'settlementAttempts': 0}
+        campaign.save()
+        real_put = self.evidence.put_file
+
+        def summary_fails(name, *args, **kwargs):
+            if name == 'supervisor.json':
+                raise RuntimeError('injected-summary-failure')
+            return real_put(name, *args, **kwargs)
+
+        cleanups = []
+
+        def clean(label, arguments, cleanup=False):
+            cleanups.append(label)
+            self.cleanup_success(hetzner)
+            return 0
+
+        for restart in range(3):
+            with self.subTest(restart=restart):
+                self.reset_process()
+                restarted = self.campaign()
+                with patch.object(restarted, 'invoke', side_effect=clean), \
+                     patch.object(self.evidence, 'put_file', side_effect=summary_fails), \
+                     self.assertRaises(RuntimeError):
+                    restarted.run()
+                # The first restart already cleaned the Hetzner guest.
+                self.assertEqual(cleanups, ['soak-hetzner'])
+                self.assertFalse((hetzner / 'workspace').exists())
+                state = supervisor.read_json(restarted.state_path)
+                self.assertTrue(state['runs']['soak-hetzner']['cleanupVerifiedAbsent'])
+                self.assertNotIn('rehearsal-aws', state['runs'])
+
+    def test_terminal_null_stop_reason_is_kept_when_the_replay_is_signalled(self):
+        campaign = self.campaign()
+        for label in LABELS_FOR_TEST:
+            self.saved_outcome(campaign, label, passed=True, settled=True)
+        self.assertEqual(campaign.finish(), 0)
+        campaign.diagnostic_thread.join(5)
+        first = supervisor.read_json(campaign.state_path)
+        self.assertIsNone(first['stopReason'])
+        self.reset_process()
+        restarted = self.campaign()
+        with patch.object(restarted, 'replay', wraps=restarted.replay):
+            supervisor.request_stop('signal-SIGHUP', 1)
+            self.assertEqual(restarted.run(), 0)
+        restarted.diagnostic_thread.join(5)
+        final = supervisor.read_json(restarted.state_path)
+        self.assertIsNone(final['stopReason'])
+        self.assertEqual((final['status'], final['finishedAt']), ('passed', first['finishedAt']))
+        diagnostics = json.loads(self.client.objects['fixture-campaign/supervisor-diagnostics.json'])
+        self.assertIsNone(diagnostics['stopReason'])
+        self.assertEqual(diagnostics['processStopReason']['cause'], 'signal-SIGHUP')
+        # Nor does a later restart adopt the replay's own stop record.
+        self.reset_process()
+        again = self.campaign()
+        self.assertEqual(again.run(), 0)
+        self.assertIsNone(supervisor.read_json(again.state_path)['stopReason'])
+
     def test_run_interrupted_before_its_outcome_was_saved_is_settled_never_resumed(self):
         label = 'rehearsal-aws'
         run_dir = self.running_rehearsal(label)
@@ -438,6 +563,45 @@ class SupervisorTests(unittest.TestCase):
                 timer.cancel()
         self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
         self.assertEqual(supervisor.read_json(campaign.state_path)['stopReason']['cause'], 'signal-SIGTERM')
+
+    def test_service_stop_delivered_to_child_and_supervisor_reaches_the_outcome(self):
+        # KillMode=control-group: systemd signals both processes at once, so
+        # the child exits -15 before the supervisor terminates it.
+        campaign = self.campaign()
+        runner = self.root / 'fixture-runner.py'
+        pid_file = self.root / 'child.pid'
+        runner.write_text('import os, time\nopen(%r, "w").write(str(os.getpid()))\ntime.sleep(30)\n' % str(pid_file))
+        self.process_patch.stop()
+
+        def service_stop():
+            for _ in range(100):
+                if pid_file.exists() and pid_file.read_text():
+                    break
+                time.sleep(0.05)
+            os.kill(int(pid_file.read_text()), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        with self.signal_handlers(), \
+             patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root)), \
+             patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            timer = threading.Thread(target=service_stop)
+            timer.start()
+            outcome = campaign.run_one('rehearsal-aws')
+            timer.join(10)
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+
+    def test_unrelated_child_failure_gets_no_stop_cause(self):
+        for body in ('raise SystemExit(3)\n', 'import os, signal\nos.kill(os.getpid(), signal.SIGKILL)\n'):
+            with self.subTest(body=body):
+                campaign = self.campaign()
+                runner = self.root / 'fixture-runner.py'
+                runner.write_text(body)
+                self.process_patch.stop()
+                with patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root)), \
+                     patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+                    outcome = campaign.run_one('rehearsal-aws')
+                self.assertNotIn('stopReason', outcome)
+                self.assertFalse(supervisor.STOP.is_set())
 
     def test_deadline_and_child_timeout_are_distinct_from_a_stop(self):
         # Campaign deadline already passed at entry, with no signal.
