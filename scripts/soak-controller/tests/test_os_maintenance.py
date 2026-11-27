@@ -13,21 +13,61 @@ BOOTSTRAP = (ROOT / 'bootstrap.sh').read_text()
 UNITS = ('apt-daily.timer', 'apt-daily-upgrade.timer', 'apt-daily.service', 'apt-daily-upgrade.service')
 OVERRIDE = '$nrconf{override_rc}->{qr(^wharfie-soak\\.service$)} = 0;\n'
 
-FAKE_SYSTEMCTL = r'''#!/bin/bash
-state=$FAKE_SYSTEMD
-echo "$*" >> "$state/log"
-command=$1; shift
-case $command in
-  stop) for unit in "$@"; do echo inactive > "$state/$unit.active"; done ;;
-  mask) for unit in "$@"; do echo masked > "$state/$unit.enabled"; done ;;
-  disable)
-    [ "$1" = --now ] && shift && for unit in "$@"; do echo inactive > "$state/$unit.active"; done
-    for unit in "$@"; do echo disabled > "$state/$unit.enabled"; done ;;
-  list-unit-files) [ -e "$state/$1.enabled" ] && echo "$1 $(cat "$state/$1.enabled") enabled" ;;
-  is-enabled) value=$(cat "$state/$1.enabled" 2>/dev/null) || exit 1; echo "$value"; [ "$value" = enabled ] ;;
-  is-active) value=$(cat "$state/$1.active" 2>/dev/null || echo inactive); echo "$value"; [ "$value" = active ] ;;
-  *) exit 2 ;;
-esac
+FAKE_SYSTEMCTL = r'''#!/usr/bin/env python3
+import os, pathlib, sys
+state = pathlib.Path(os.environ['FAKE_SYSTEMD'])
+args = sys.argv[1:]
+with open(state / 'log', 'a') as log:
+    log.write(' '.join(args) + '\n')
+command = args[0]
+if command in os.environ.get('FAKE_SYSTEMCTL_FAIL', '').split(','):
+    sys.exit(1)
+units = [a for a in args[1:] if not a.startswith('-')]
+def get(unit, kind, default=None):
+    path = state / (unit + '.' + kind)
+    return path.read_text().strip() if path.exists() else default
+def put(unit, kind, value):
+    (state / (unit + '.' + kind)).write_text(value + '\n')
+if command == 'stop':
+    for unit in units:
+        put(unit, 'active', 'inactive')
+elif command == 'mask':
+    for unit in units:
+        put(unit, 'enabled', 'masked')
+elif command == 'disable':
+    for unit in units:
+        put(unit, 'enabled', 'disabled')
+        if '--now' in args:
+            put(unit, 'active', 'inactive')
+elif command == 'list-unit-files':
+    if get(units[0], 'enabled'):
+        print(units[0], get(units[0], 'enabled'), 'enabled')
+elif command == 'show':
+    names = []
+    for index, arg in enumerate(args):
+        if arg.startswith('--property='):
+            names += arg.split('=', 1)[1].split(',')
+        elif arg == '-p':
+            names += args[index + 1].split(',')
+            units.remove(args[index + 1])
+    blocks = []
+    for unit in units:
+        file = get(unit, 'enabled')
+        active = get(unit, 'active', 'inactive')
+        busy = int(get(unit, 'busy', '0'))
+        if busy:
+            # A oneshot upgrade is "activating" while it runs.
+            put(unit, 'busy', str(busy - 1))
+            active = 'activating'
+        values = {'LoadState': 'not-found' if file is None else 'masked' if file == 'masked' else 'loaded',
+                  'ActiveState': active, 'UnitFileState': file or ''}
+        if '--value' in args:
+            blocks.append('\n'.join(values[name] for name in names))
+        else:
+            blocks.append('\n'.join(name + '=' + values[name] for name in names))
+    print('\n\n'.join(blocks))
+else:
+    sys.exit(2)
 '''
 
 # The stock Ubuntu file sets defaults, then evaluates every conf.d file.
@@ -106,18 +146,56 @@ class OsMaintenanceTests(unittest.TestCase):
     def test_verification_fails_on_the_stock_image(self):
         self.assert_refused('not masked and inactive')
 
-    def test_verification_fails_when_a_maintenance_unit_is_not_masked_or_is_active(self):
+    def test_verification_accepts_only_exact_maintenance_unit_states(self):
         for unit in UNITS:
-            for suffix, value in (('.enabled', 'enabled'), ('.enabled', 'disabled'), ('.active', 'active')):
-                with self.subTest(unit=unit, value=suffix + '=' + value):
+            for kind, value in (('enabled', 'enabled'), ('enabled', 'disabled'), ('enabled', 'enabled-runtime'),
+                                ('active', 'active'), ('active', 'activating'), ('active', 'deactivating')):
+                with self.subTest(unit=unit, state=kind + '=' + value):
                     self.disable()
-                    (self.state / (unit + suffix)).write_text(value + '\n')
+                    (self.state / (unit + '.' + kind)).write_text(value + '\n')
                     self.assert_refused('not masked and inactive: ' + unit)
-
-    def test_verification_fails_when_unattended_upgrades_is_enabled(self):
+        # A unit that finished with an error is not running.
         self.disable()
-        (self.state / 'unattended-upgrades.service.enabled').write_text('enabled\n')
-        self.assert_refused('unattended-upgrades.service is not disabled')
+        (self.state / 'apt-daily-upgrade.service.active').write_text('failed\n')
+        self.assert_verified()
+
+    def test_verification_accepts_only_a_stopped_disabled_or_absent_unattended_unit(self):
+        name = 'unattended-upgrades.service'
+        for kind, value in (('enabled', 'enabled'), ('enabled', 'enabled-runtime'), ('enabled', 'static'),
+                            ('active', 'active'), ('active', 'activating'), ('active', 'deactivating')):
+            with self.subTest(state=kind + '=' + value):
+                self.disable()
+                (self.state / (name + '.' + kind)).write_text(value + '\n')
+                self.assert_refused('unattended-upgrades.service is not disabled')
+        # An image without the unit is supported.
+        self.disable()
+        (self.state / (name + '.enabled')).unlink()
+        self.assert_verified()
+
+    def test_verification_fails_when_systemd_cannot_answer(self):
+        self.disable()
+        self.environment['FAKE_SYSTEMCTL_FAIL'] = 'show'
+        self.assert_refused('OS maintenance unit state unavailable: apt-daily.timer')
+
+    def test_verification_requires_the_main_needrestart_configuration(self):
+        self.disable()
+        (self.root / 'etc/needrestart/needrestart.conf').unlink()
+        self.assert_refused('needrestart configuration is not readable')
+
+    def test_verification_evaluates_conditional_snippets_in_every_loader_context(self):
+        # The apt hook runs `needrestart -m u`; a snippet that undoes the
+        # override only there, or only without a TTY, must still refuse.
+        for content in ("$nrconf{override_rc} = {} if $opt_m eq 'u';\n",
+                        "delete $nrconf{override_rc}->{$_} for grep { /wharfie/ } keys %{$nrconf{override_rc}} unless $is_tty;\n",
+                        "$nrconf{override_rc} = {} if ($ENV{NEEDRESTART_MODE} // '') eq 'a';\n"):
+            with self.subTest(content=content):
+                self.disable()
+                (self.dropin.parent / 'zz-local.conf').write_text(content)
+                self.assert_refused('needrestart may still restart wharfie-soak.service')
+        # A conditional snippet that keeps the override everywhere passes.
+        self.disable()
+        (self.dropin.parent / 'zz-local.conf').write_text("$nrconf{restart} = 'l' if $opt_m eq 'u';\n")
+        self.assert_verified()
 
     def test_verification_fails_when_the_override_is_missing_or_not_exact(self):
         for content in (None, OVERRIDE.replace('= 0', '= 1'), OVERRIDE.replace('^wharfie', 'wharfie'),

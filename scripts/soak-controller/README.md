@@ -68,10 +68,16 @@ Guest SSH ingress is limited to the controller EIP `/32` by the runner (`--allow
 Bootstrap turns off the controller's automatic OS maintenance for its whole life. It masks `apt-daily.timer`, `apt-daily-upgrade.timer` and their two services, and disables `unattended-upgrades.service`. It also installs `/etc/needrestart/conf.d/wharfie-soak.conf`, which contains exactly `$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;`. needrestart matches each `override_rc` regex against the unit name, so it never restarts the supervisor, even after a package installed by hand over SSM. On 2026-11-27 the stock `apt-daily-upgrade` run upgraded `libexpat1`, which `python3` maps. needrestart then restarted `wharfie-soak.service`, and the stop failed both full soaks 2 h 18 m in, while Wharfie stayed healthy.
 
 Leaving updates off is acceptable here. The controller is disposable: it lives at most the soak length plus six hours (54 or 78 h), boots the newest pinned Ubuntu image selected by the fresh preflight at `prepare`, and its security group has no inbound rules. A security update that lands during a campaign waits for the next campaign's image. Before writing `bootstrap-ready.json`, bootstrap verifies all of this and fails if any check does not hold:
-- each of the four units reports `masked` and `inactive`;
-- `unattended-upgrades.service` is neither enabled nor active;
-- the drop-in matches the expected bytes exactly;
-- when evaluated as needrestart does, the full needrestart configuration denies a restart for every `override_rc` regex that matches `wharfie-soak.service`.
+- `systemctl show` answers for every unit. A lookup failure refuses; it is never read as "off".
+- Each of the four units is exactly `LoadState=masked`, `UnitFileState=masked` and `ActiveState` `inactive` (or `failed`, which is not running).
+- `unattended-upgrades.service` is absent (`not-found`), or loaded with `disabled` or `masked` and `inactive`. Any other state refuses, including `enabled-runtime`, `static`, `activating` and `deactivating`.
+- `/etc/needrestart/needrestart.conf` exists and is readable, and the drop-in matches the expected bytes exactly.
+- Perl loads the main configuration, which includes every `conf.d/*.conf`, as needrestart does. It repeats this for every combination of the loader variables a snippet could branch on:
+  - `$opt_m`: `u` (the apt hook's `-m u`), `a` or `e`;
+  - `$opt_r` and `NEEDRESTART_MODE`: unset, `a`, `l` or `i`;
+  - `$opt_b`, `$is_tty` and `$has_pam_systemd`.
+
+  In each combination, every `override_rc` regex that matches `wharfie-soak.service` must deny the restart. Perl hash order is not precedence, so one denying key is not enough. Snippets that branch on any other state, such as other environment variables or files, are unsupported. The verification cannot see them, and the stock image ships none.
 
 Neither the userdata nor cloud-init runs a package upgrade. Both only `apt-get install` fixed packages, before the service is started.
 

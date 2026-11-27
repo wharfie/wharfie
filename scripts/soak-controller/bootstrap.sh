@@ -30,38 +30,71 @@ disable_os_maintenance() {
   fi
 }
 
+# Print "LoadState ActiveState UnitFileState"; fail when systemd cannot answer.
+unit_states() {
+  local output line load='' active='' file=''
+  output=$(systemctl show --property=LoadState --property=ActiveState --property=UnitFileState -- "$1") || return 1
+  while IFS= read -r line; do
+    case $line in
+      LoadState=*) load=${line#LoadState=} ;;
+      ActiveState=*) active=${line#ActiveState=} ;;
+      UnitFileState=*) file=${line#UnitFileState=} ;;
+    esac
+  done <<< "$output"
+  [ -n "$load" ] && [ -n "$active" ] || return 1
+  printf '%s %s %s\n' "$load" "$active" "${file:--}"
+}
+
+maintenance_failure() {
+  echo "$1" >&2
+  exit 1
+}
+
 verify_os_maintenance() {
-  local unit
+  local unit states
+  # Only these exact states pass; any other state or a lookup failure refuses.
   for unit in $apt_maintenance_units; do
-    if [ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" != masked ] || \
-        [ "$(systemctl is-active "$unit" 2>/dev/null || true)" != inactive ]; then
-      echo "OS maintenance unit is not masked and inactive: $unit" >&2
-      exit 1
-    fi
+    states=$(unit_states "$unit") || maintenance_failure "OS maintenance unit state unavailable: $unit"
+    case $states in
+      'masked inactive masked'|'masked failed masked') ;;
+      *) maintenance_failure "OS maintenance unit is not masked and inactive: $unit ($states)" ;;
+    esac
   done
-  if [ "$(systemctl is-enabled unattended-upgrades.service 2>/dev/null || true)" = enabled ] || \
-      [ "$(systemctl is-active unattended-upgrades.service 2>/dev/null || true)" = active ]; then
-    echo 'unattended-upgrades.service is not disabled' >&2
-    exit 1
-  fi
+  states=$(unit_states unattended-upgrades.service) || \
+    maintenance_failure 'OS maintenance unit state unavailable: unattended-upgrades.service'
+  case $states in
+    # An image without the unit is supported; an unreadable unit is not.
+    'not-found inactive -'|'loaded inactive disabled'|'loaded inactive masked'|'masked inactive masked') ;;
+    *) maintenance_failure "unattended-upgrades.service is not disabled ($states)" ;;
+  esac
+  [ -f "$needrestart_conf" ] && [ -r "$needrestart_conf" ] || \
+    maintenance_failure "needrestart configuration is not readable: $needrestart_conf"
   if ! printf '%s\n' "$needrestart_override" | cmp -s - "$needrestart_dropin"; then
-    echo "needrestart override is not exact: $needrestart_dropin" >&2
-    exit 1
+    maintenance_failure "needrestart override is not exact: $needrestart_dropin"
   fi
-  # Evaluate the configuration as needrestart does: every override_rc regex
-  # that matches the unit must deny the restart.
-  if [ -e "$needrestart_conf" ] && ! perl - "$needrestart_conf" <<'PERL'
-our %nrconf = (override_rc => {});
+  # Evaluate the configuration as needrestart loads it: every override_rc
+  # regex that matches the unit must deny the restart. The apt hook runs
+  # `needrestart -m u`; other callers differ. A snippet that branches on these
+  # loader variables is evaluated in every combination of them; snippets that
+  # branch on anything else are unsupported (see README).
+  if ! perl - "$needrestart_conf" <<'PERL'
+our (%nrconf, $opt_m, $opt_r, $opt_b, $is_tty, $has_pam_systemd);
 my $file = shift;
 my $config = do { local $/; open my $handle, '<', $file or die; <$handle> };
-eval $config;
-die $@ if $@;
-my @matches = grep { 'wharfie-soak.service' =~ /$_/ } keys %{$nrconf{override_rc}};
-exit((@matches && !grep { $nrconf{override_rc}{$_} } @matches) ? 0 : 1);
+for my $m ('u', 'a', 'e') { for my $r (undef, 'a', 'l', 'i') { for my $b (undef, 1) {
+for my $tty (0, 1) { for my $pam (0, 1) {
+  ($opt_m, $opt_r, $opt_b, $is_tty, $has_pam_systemd) = ($m, $r, $b, $tty, $pam);
+  local $ENV{NEEDRESTART_MODE} = $r if defined $r;
+  %nrconf = (override_rc => {}, override_cont => {}, blacklist_rc => [], restart => 'i');
+  eval $config;
+  die $@ if $@;
+  my @matches = grep { 'wharfie-soak.service' =~ /$_/ } keys %{$nrconf{override_rc}};
+  exit 1 unless @matches && !grep { $nrconf{override_rc}{$_} } @matches;
+} } } } }
+exit 0;
 PERL
   then
-    echo 'needrestart may still restart wharfie-soak.service' >&2
-    exit 1
+    maintenance_failure 'needrestart may still restart wharfie-soak.service'
   fi
 }
 # os-maintenance: end
