@@ -40,20 +40,35 @@ for attempt in $(seq 1 60); do
   sleep 5
 done
 # apt-drain: begin
-# Suppress new apt timer runs at once, then wait, boundedly, for one already
-# running; its dpkg is never killed. Bootstrap masks the units later.
-systemctl stop apt-daily.timer apt-daily-upgrade.timer
-for attempt in $(seq 1 150); do
+# Suppress new apt timer runs at once, then wait, at most 25 minutes of wall
+# time, for one already running; its dpkg is never killed. Every manager call
+# is limited to the time that remains. Bootstrap masks the units later.
+drain_deadline=$((SECONDS + 1500))
+timeout 120 systemctl stop apt-daily.timer apt-daily-upgrade.timer
+while :; do
+  left=$((drain_deadline - SECONDS))
+  if [ "$left" -le 0 ]; then exit 1; fi
   # Both must report idle; a oneshot upgrade is "activating" while it runs.
-  states=$(systemctl show -p ActiveState --value apt-daily.service apt-daily-upgrade.service) || states=unknown
+  states=$(timeout "$left" systemctl show -p ActiveState --value apt-daily.service apt-daily-upgrade.service) || states=unknown
   idle=0
   for state in $states; do case $state in inactive|failed) idle=$((idle + 1)) ;; esac; done
   if [ "$idle" = 2 ]; then break; fi
-  if [ "$attempt" = 150 ]; then exit 1; fi
-  sleep 10
+  left=$((drain_deadline - SECONDS))
+  if [ "$left" -le 0 ]; then exit 1; fi
+  sleep $((left < 10 ? left : 10))
 done
 # apt-drain: end
-timeout 900 apt-get -o DPkg::Lock::Timeout=600 update -q
+# apt-update: begin
+# `apt-get update` does not wait for the lists lock; retry only that, within 15 minutes.
+update_deadline=$((SECONDS + 900))
+while :; do
+  left=$((update_deadline - SECONDS))
+  if [ "$left" -le 0 ]; then exit 1; fi
+  if output=$(timeout "$left" apt-get -o DPkg::Lock::Timeout=600 update -q 2>&1); then break; fi
+  printf '%s\n' "$output" >&2
+  case $output in *'Could not get lock'*) sleep 15 ;; *) exit 1 ;; esac
+done
+# apt-update: end
 timeout 1500 apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends python3-boto3
 timeout 1800 python3 - <<'WHARFIE_BUNDLE'
 import hashlib, lzma, json, pathlib, time

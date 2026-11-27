@@ -24,7 +24,8 @@ needrestart_override='$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;'
 # Print "LoadState ActiveState UnitFileState"; fail when systemd cannot answer.
 unit_states() {
   local output line load='' active='' file=''
-  output=$(systemctl show --property=LoadState --property=ActiveState --property=UnitFileState -- "$1") || return 1
+  output=$(timeout "${systemctl_seconds:-30}" systemctl show --property=LoadState \
+    --property=ActiveState --property=UnitFileState -- "$1") || return 1
   while IFS= read -r line; do
     case $line in
       LoadState=*) load=${line#LoadState=} ;;
@@ -45,11 +46,13 @@ maintenance_failure() {
 # while it works, so only inactive or failed counts as finished. Stopping the
 # service would not join it: with KillMode=process its upgrade can outlive it.
 drain_apt_maintenance() {
-  local deadline=$((SECONDS + apt_drain_seconds)) unit states busy
+  local deadline=$((SECONDS + apt_drain_seconds)) unit states busy left
   while :; do
     busy=
     for unit in $apt_services; do
-      if ! states=$(unit_states "$unit"); then
+      # Every manager call is limited to the time that remains.
+      left=$((deadline - SECONDS))
+      if [ "$left" -le 0 ] || ! states=$(systemctl_seconds=$left unit_states "$unit"); then
         busy=$unit
         continue
       fi
@@ -59,10 +62,33 @@ drain_apt_maintenance() {
       esac
     done
     [ -z "$busy" ] && return 0
-    if [ "$SECONDS" -ge "$deadline" ]; then
+    left=$((deadline - SECONDS))
+    if [ "$left" -le 0 ]; then
       maintenance_failure "apt maintenance still running after ${apt_drain_seconds}s: $busy"
     fi
-    sleep 10
+    sleep $((left < 10 ? left : 10))
+  done
+}
+
+# `apt-get update` does not wait for the lists lock (Noble apt 2.8), so it is
+# retried while its error names a held lock, within a fixed budget.
+apt_update_seconds=900
+apt_update() {
+  local deadline=$((SECONDS + apt_update_seconds)) output left
+  while :; do
+    left=$((deadline - SECONDS))
+    if [ "$left" -le 0 ]; then
+      maintenance_failure "apt-get update still locked after ${apt_update_seconds}s"
+    fi
+    if output=$(timeout "$left" apt-get -o DPkg::Lock::Timeout=600 update -q 2>&1); then
+      printf '%s\n' "$output"
+      return 0
+    fi
+    printf '%s\n' "$output" >&2
+    case $output in
+      *'Could not get lock'*) sleep 15 ;;
+      *) maintenance_failure 'apt-get update failed' ;;
+    esac
   done
 }
 
@@ -156,8 +182,8 @@ for attempt in $(seq 1 60); do
   if [ "$attempt" = 60 ]; then exit 1; fi
   sleep 5
 done
-# The drain above leaves no daily run; the lock timeout covers any other holder.
-timeout 900 apt-get -o DPkg::Lock::Timeout=600 update -q
+# The drain above leaves no daily run; any other lock holder is waited for.
+apt_update
 timeout 1500 apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
   ca-certificates curl git xz-utils openssh-client python3 python3-boto3 \
   build-essential pkg-config libssl-dev

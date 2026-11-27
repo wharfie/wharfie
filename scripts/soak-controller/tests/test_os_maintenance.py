@@ -45,6 +45,8 @@ elif command == 'list-unit-files':
     if get(units[0], 'enabled'):
         print(units[0], get(units[0], 'enabled'), 'enabled')
 elif command == 'show':
+    import time
+    time.sleep(float(os.environ.get('FAKE_SHOW_DELAY', '0')))
     names = []
     for index, arg in enumerate(args):
         if arg.startswith('--property='):
@@ -70,6 +72,31 @@ elif command == 'show':
     print('\n\n'.join(blocks))
 else:
     sys.exit(2)
+'''
+
+# Enforces its duration, as coreutils timeout does: 124 on expiry.
+FAKE_TIMEOUT = r'''#!/usr/bin/env python3
+import subprocess, sys
+try:
+    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+'''
+
+# FAKE_APT=lock:N fails N times on the lists lock; FAKE_APT=fail fails otherwise.
+FAKE_APT_GET = r'''#!/bin/sh
+count=$(($(cat "$FAKE_SYSTEMD/apt-calls" 2>/dev/null || echo 0) + 1))
+echo "$count" > "$FAKE_SYSTEMD/apt-calls"
+echo "apt-get $*" >> "$FAKE_SYSTEMD/log"
+case ${FAKE_APT:-} in
+  lock:*)
+    if [ "$count" -le "${FAKE_APT#lock:}" ]; then
+      echo 'E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)' >&2
+      exit 100
+    fi ;;
+  fail) echo 'E: Failed to fetch http://archive.ubuntu.com/ubuntu' >&2; exit 100 ;;
+esac
+echo 'Reading package lists... Done'
 '''
 
 # The stock Ubuntu file sets defaults, then evaluates every conf.d file.
@@ -112,7 +139,7 @@ class OsMaintenanceTests(unittest.TestCase):
         self.package(conf)
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
-        for name, body in (('systemctl', FAKE_SYSTEMCTL), ('timeout', '#!/bin/bash\nshift\nexec "$@"\n'),
+        for name, body in (('systemctl', FAKE_SYSTEMCTL), ('timeout', FAKE_TIMEOUT), ('apt-get', FAKE_APT_GET),
                            ('sleep', '#!/bin/sh\n'),
                            ('dpkg-query', '#!/bin/sh\n[ -z "$FAKE_DPKG_FAIL" ] || exit 1\n'
                                           '[ "$3" = needrestart ] || exit 2\ncat "$FAKE_SYSTEMD/conffiles"\n')):
@@ -323,23 +350,61 @@ class OsMaintenanceTests(unittest.TestCase):
         self.assertEqual(log[0], 'stop apt-daily.timer apt-daily-upgrade.timer')
         self.assertEqual(len([line for line in log if line.startswith('show')]), 4)
         self.assertFalse([line for line in log if line.startswith('stop') and '.service' in line])
-        # The real bound is 150 reads 10 s apart; three attempts show its behaviour.
-        self.assertIn('$(seq 1 150)', drain)
-        self.assertIn('"$attempt" = 150', drain)
-        self.assertIn('sleep 10', drain)
-        short = drain.replace('$(seq 1 150)', '$(seq 1 3)').replace('"$attempt" = 150', '"$attempt" = 3')
-        for busy, fail in (('1000000', ''), ('0', 'show')):
-            with self.subTest(busy=busy, fail=fail):
+        # The real budget is 25 minutes of wall time; 2 s shows its behaviour.
+        self.assertIn('drain_deadline=$((SECONDS + 1500))', drain)
+        short = drain.replace('drain_deadline=$((SECONDS + 1500))', 'drain_deadline=$((SECONDS + 2))')
+        for busy, fail, delay in (('1000000', '', '0'), ('0', 'show', '0'), ('0', '', '3')):
+            with self.subTest(busy=busy, fail=fail, delay=delay):
                 (self.state / 'apt-daily-upgrade.service.busy').write_text(busy + '\n')
-                self.environment['FAKE_SYSTEMCTL_FAIL'] = fail
+                self.environment.update(FAKE_SYSTEMCTL_FAIL=fail, FAKE_SHOW_DELAY=delay)
                 result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + short], env=self.environment,
                                         capture_output=True, text=True, timeout=60)
                 self.assertNotEqual(result.returncode, 0)
 
+    def userdata_update(self):
+        userdata, _ = self.userdata_drain()
+        update = userdata[userdata.index('# apt-update: begin\n'):userdata.index('# apt-update: end\n')]
+        self.assertIn('update_deadline=$((SECONDS + 900))', update)
+        return update.replace('update_deadline=$((SECONDS + 900))', 'update_deadline=$((SECONDS + 2))')
+
+    def run_update(self, script, mode):
+        (self.state / 'apt-calls').unlink(missing_ok=True)
+        self.environment['FAKE_APT'] = mode
+        result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + script], env=self.environment,
+                                capture_output=True, text=True, timeout=60)
+        calls = int((self.state / 'apt-calls').read_text()) if (self.state / 'apt-calls').exists() else 0
+        return result, calls
+
+    def test_apt_update_retries_only_lock_contention_within_its_budget(self):
+        bootstrap = (section().replace('/etc/', str(self.root) + '/etc/')
+                     .replace('apt_update_seconds=900', 'apt_update_seconds=2') + 'apt_update\n')
+        self.assertIn('apt_update_seconds=900', section())
+        for name, script in (('bootstrap', bootstrap), ('userdata', self.userdata_update())):
+            with self.subTest(stage=name):
+                result, calls = self.run_update(script, 'lock:2')
+                self.assertEqual((result.returncode, calls), (0, 3), result.stderr)
+                result, calls = self.run_update(script, 'fail')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, 1)
+                result, calls = self.run_update(script, 'lock:1000000')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertGreater(calls, 1)
+
+    def test_slow_manager_calls_cannot_overrun_the_drain_budget(self):
+        # Two idle lookups of 1.5 s each against a 2 s budget must fail, not
+        # report success after the budget.
+        self.environment['FAKE_SHOW_DELAY'] = '1.5'
+        script = ('set -euo pipefail\n' + section().replace('/etc/', str(self.root) + '/etc/').replace(
+            'apt_drain_seconds=1500', 'apt_drain_seconds=2') + 'drain_apt_maintenance\n')
+        result = subprocess.run(['bash', '-c', script], env=self.environment, capture_output=True,
+                                text=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('apt maintenance still running after 2s', result.stderr)
+
     def test_every_apt_call_waits_for_the_package_lock(self):
         userdata, _ = self.userdata_drain()
         for name, text in (('bootstrap.sh', BOOTSTRAP), ('userdata', userdata)):
-            calls = [line for line in text.splitlines() if 'apt-get ' in line and not line.lstrip().startswith('#')]
+            calls = [line for line in text.splitlines() if 'timeout' in line and 'apt-get ' in line]
             with self.subTest(name=name):
                 self.assertEqual(len(calls), 2)
                 for line in calls:
