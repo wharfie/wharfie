@@ -88,22 +88,57 @@ def request_stop(cause, signum=None):
         write_stop_record(STOP_REASON)
 
 
-# What bootstrap leaves in the state directory before any supervisor runs.
-FRESH_STATE_ENTRIES = frozenset({'runs', 'homes', 'supervisor.lock'})
+# The in-boot latch, on tmpfs (systemd RuntimeDirectory=, preserved across
+# service restarts), so a full state disk cannot hide an earlier start.
+RUNTIME_LATCH = Path('/run/wharfie-soak/started')
+
+
+def is_supervisor_artifact(name):
+    """A state-directory entry that only a supervisor process writes."""
+    return ((name.startswith('supervisor') and name != 'supervisor.lock')
+            or name.startswith(('first-start', 'stop-', 'stop.json')) or name.startswith(LABELS))
 
 
 def no_prior_activity():
-    """True only while the state directory holds nothing but bootstrap's layout.
+    """True unless the state directory holds a supervisor artifact.
 
-    Any supervisor that ran left something here, a summary, a run directory or
-    a stop record, even if it never created the marker. A read error counts as
-    prior activity.
+    Only supervisor artifacts count: its summary and diagnostics, the
+    marker, stop records, per-run logs and archives, and anything under
+    runs/. Everything else is ignored, such as bootstrap's homes/ and the npm
+    cache that `npm ci` leaves in this HOME. A read error counts as activity.
     """
     try:
-        names = {entry.name for entry in os.scandir(ROOT)}
-        return names <= FRESH_STATE_ENTRIES and ('runs' not in names or not any(os.scandir(ROOT / 'runs')))
+        with os.scandir(ROOT) as entries:
+            for entry in entries:
+                if entry.name == 'runs':
+                    with os.scandir(entry.path) as runs:
+                        if next(runs, None) is not None:
+                            return False
+                elif is_supervisor_artifact(entry.name):
+                    return False
     except OSError:
         return False
+    return True
+
+
+def claim_runtime_latch():
+    """True only if this is the first start of the service in this boot."""
+    try:
+        os.close(os.open(RUNTIME_LATCH, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+        return True
+    except OSError:
+        return False
+
+
+def startup_creator(spec):
+    """Both latches freshly created, and no prior activity: only then a creator.
+
+    The in-boot latch comes first, before anything else; the durable marker is
+    still claimed even if it fails, so this start always counts as one.
+    """
+    runtime = claim_runtime_latch()
+    durable = claim_first_start(spec)
+    return runtime and durable
 
 
 def claim_first_start(spec):
@@ -964,6 +999,11 @@ class Campaign:
         run_dir = safe_relative_run(label)
         backoff = 5
         while True:
+            # Rechecked after every wait, immediately before any dispatch.
+            if self.config['stopAt'] - time.time() < 2400:
+                outcome['settlementDeferred'] = 'external-stop-close-preserve-authority'
+                self.put_outcome(label, outcome)
+                return False
             started = []
 
             def counted():
@@ -1183,9 +1223,9 @@ def main():
     ROOT.mkdir(mode=0o700, exist_ok=True)
     config = read_json(Path('/etc/wharfie-soak/campaign.json'))
     # Before anything else: is this the first process ever started for this
-    # campaign? Only that process may create runs.
-    # A manual cleanup repair never claims it.
-    creator = not options.repair_cleanup and claim_first_start(config['specSha256'])
+    # campaign? Only that process may create runs. A manual cleanup repair
+    # never claims either latch.
+    creator = not options.repair_cleanup and startup_creator(config['specSha256'])
     # The stop record is bound, then signals are handled, before any lock,
     # network or credential work, so a stop during startup is never lost.
     bind_stop_record(config['specSha256'])

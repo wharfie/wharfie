@@ -17,6 +17,11 @@ Environment=AWS_DEFAULT_REGION=us-east-2
 Environment=HOME=/var/lib/wharfie-soak
 Environment=PATH=/opt/wharfie-soak/node/bin:/usr/bin:/bin
 UMask=0077
+# The in-boot start latch (/run/wharfie-soak/started): kept across service
+# restarts, cleared only by a reboot.
+RuntimeDirectory=wharfie-soak
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 Restart=on-failure
 RestartSec=30
 TimeoutStopSec=2400

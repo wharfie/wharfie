@@ -20,9 +20,15 @@ from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / 'supervisor.py'
+ROOT_DIR = MODULE_PATH.parent
+
+
+def ops_latch_parent():
+    return REAL_RUNTIME_LATCH.parent
 SPEC = importlib.util.spec_from_file_location('supervisor_under_test', MODULE_PATH)
 supervisor = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(supervisor)
+REAL_RUNTIME_LATCH = supervisor.RUNTIME_LATCH
 TOKEN = 'fixture-hetzner-token-not-a-real-credential'
 LABELS_FOR_TEST = ('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner')
 
@@ -672,10 +678,12 @@ class SupervisorTests(unittest.TestCase):
                     self.assertFalse(supervisor.claim_first_start(spec))
                 (self.root / 'first-start.json').unlink(missing_ok=True)
         source = inspect.getsource(supervisor.main)
-        self.assertLess(source.index('claim_first_start('), source.index('bind_stop_record('))
-        self.assertLess(source.index('claim_first_start('), source.index('install_signal_handlers()'))
+        self.assertLess(source.index('startup_creator('), source.index('bind_stop_record('))
+        self.assertLess(source.index('startup_creator('), source.index('install_signal_handlers()'))
         self.assertIn('creator=creator', source)
-        self.assertIn('not options.repair_cleanup and claim_first_start', source)
+        self.assertIn('not options.repair_cleanup and startup_creator', source)
+        latches = inspect.getsource(supervisor.startup_creator)
+        self.assertLess(latches.index('claim_runtime_latch()'), latches.index('claim_first_start('))
 
     def test_a_failed_marker_create_still_leaves_the_campaign_claimed(self):
         import errno
@@ -712,7 +720,9 @@ class SupervisorTests(unittest.TestCase):
 
     def test_any_prior_activity_or_read_error_prevents_a_claim(self):
         spec = self.config['specSha256']
+        self.assertTrue(supervisor.no_prior_activity())
         for name, make in (('run directory', lambda: (self.root / 'runs/rehearsal-aws').mkdir(parents=True)),
+                           ('unexpected run entry', lambda: (self.root / 'runs/stray').mkdir(parents=True)),
                            ('summary', lambda: (self.root / 'supervisor.json').write_text('{}')),
                            ('stop record', lambda: supervisor.stop_record_path(spec).write_text('{}')),
                            ('unreadable summary', lambda: (self.root / 'supervisor.json.unreadable').write_text('x')),
@@ -757,6 +767,109 @@ class SupervisorTests(unittest.TestCase):
         outcome = supervisor.read_json(healthy.state_path)['runs']['soak-hetzner']
         self.assertEqual(outcome['settlementAttempts'], 1)
         self.assertFalse((hetzner / 'workspace').exists())
+
+    def runtime_latch(self):
+        """A stand-in for /run/wharfie-soak on another directory."""
+        runtime = self.parent / 'run-wharfie-soak'
+        runtime.mkdir(exist_ok=True)
+        latch = patch.object(supervisor, 'RUNTIME_LATCH', runtime / 'started')
+        latch.start()
+        self.addCleanup(latch.stop)
+        return runtime / 'started'
+
+    def bootstrap_state_layout(self):
+        # Exactly what bootstrap and its `npm ci` (HOME is this directory)
+        # leave before the first supervisor start.
+        for path in ('runs', 'homes/aws', 'homes/hetzner', '.npm/_cacache/index-v5/00', '.npm/_logs', '.cache'):
+            (self.root / path).mkdir(parents=True, exist_ok=True)
+        (self.root / '.npm/_logs/2026-11-27T05_00_00_000Z-debug-0.log').write_text('npm log')
+        (self.root / '.npm/_update-notifier-last-checked').write_text('')
+        (self.root / 'supervisor.lock').touch()
+
+    def test_first_start_after_a_real_bootstrap_is_the_creator(self):
+        self.runtime_latch()
+        self.bootstrap_state_layout()
+        self.assertTrue(supervisor.startup_creator(self.config['specSha256']))
+        # Bootstrap creates only these entries in the state directory, and
+        # none of them is a supervisor artifact.
+        bootstrap = (ROOT_DIR / 'bootstrap.sh').read_text()
+        created = bootstrap[bootstrap.index('install -d -m 0700 -o wharfie-soak'):].split('\n', 3)[:3]
+        created = ' '.join(created).split()
+        state = sorted(path[len('/var/lib/wharfie-soak/'):] for path in created
+                       if path.startswith('/var/lib/wharfie-soak/'))
+        self.assertEqual(state, ['homes', 'homes/aws', 'homes/hetzner', 'runs'])
+        self.assertFalse(any(supervisor.is_supervisor_artifact(name.split('/')[0]) for name in state))
+        for npm_name in ('.npm', '.cache', '.config', 'homes', 'supervisor.lock'):
+            self.assertFalse(supervisor.is_supervisor_artifact(npm_name))
+
+    def test_a_start_while_the_state_disk_is_full_still_latches_the_boot(self):
+        import errno
+        latch = self.runtime_latch()
+        spec = self.config['specSha256']
+        real_open = os.open
+        def state_disk_full(path, *args, **kwargs):
+            if str(path).startswith(str(self.root)):
+                raise OSError(errno.ENOSPC, 'injected-no-space')
+            return real_open(path, *args, **kwargs)
+        # The reviewer's case: SIGTERM arrives while the state disk is full;
+        # neither the marker nor the stop record can be written.
+        def full_atomic_write(path, value):
+            raise OSError(errno.ENOSPC, 'injected-no-space')
+        with patch.object(supervisor.os, 'open', side_effect=state_disk_full), \
+             patch.object(supervisor, 'atomic_json', side_effect=full_atomic_write):
+            self.assertFalse(supervisor.startup_creator(spec))
+            supervisor.bind_stop_record(spec)
+            with patch('sys.stdout', new_callable=io.StringIO):
+                supervisor.request_stop('signal-SIGTERM', 15)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertTrue(latch.exists())
+        # Capacity returns; the next start in this boot is still cleanup-only.
+        self.reset_process()
+        self.assertFalse(supervisor.startup_creator(spec))
+
+    def test_each_latch_alone_prevents_a_creator(self):
+        spec = self.config['specSha256']
+        latch = self.runtime_latch()
+        self.assertTrue(supervisor.startup_creator(spec))
+        # A reboot clears /run; the durable marker still applies.
+        latch.unlink()
+        self.assertFalse(supervisor.startup_creator(spec))
+        # The in-boot latch cannot be created: cleanup-only, but the durable
+        # marker is still claimed.
+        self.clear_root()
+        latch.unlink()
+        latch.parent.rmdir()
+        self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue((self.root / 'first-start.json').exists())
+        unit = (ROOT_DIR / 'wharfie-soak.service').read_text()
+        for line in ('RuntimeDirectory=wharfie-soak\n', 'RuntimeDirectoryPreserve=yes\n'):
+            self.assertIn(line, unit)
+        self.assertEqual(str(ops_latch_parent()), '/run/wharfie-soak')
+
+    def test_reserve_is_rechecked_after_a_late_backoff_wakeup(self):
+        import errno
+        clock = [1900000000.0]
+        self.config['stopAt'] = clock[0] + 2407
+        hetzner = self.run_fixture('soak-hetzner')
+        self.process_patch.stop()
+        restarted = self.campaign(creator=False)
+        spawns = []
+        def no_process(*_args, **_kwargs):
+            spawns.append(self.config['stopAt'] - clock[0])
+            raise OSError(errno.EAGAIN, 'injected')
+        def late_sleep(seconds):
+            clock[0] += seconds + 4
+        with patch.object(supervisor.time, 'time', side_effect=lambda: clock[0]), \
+             patch.object(supervisor.time, 'sleep', side_effect=late_sleep), \
+             patch.object(supervisor.subprocess, 'Popen', side_effect=no_process), \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        self.assertTrue(spawns)
+        self.assertTrue(all(remaining >= 2400 for remaining in spawns), spawns)
+        outcome = supervisor.read_json(restarted.state_path)['runs']['soak-hetzner']
+        self.assertEqual(outcome.get('settlementAttempts', 0), 0)
+        self.assertTrue((hetzner / 'workspace').exists())
 
     def test_launch_gate_is_checked_after_the_credential_lookup(self):
         # A stop observed during the lazy Hetzner lookup refuses the spawn;
