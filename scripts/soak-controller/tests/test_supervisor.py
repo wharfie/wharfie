@@ -365,6 +365,36 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(final['status'], 'failed')
         self.assertEqual(final['runs'], state['runs'])
 
+    def test_stop_seen_only_by_an_export_retry_is_saved_before_cleanup(self):
+        label = 'soak-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        saved_at_cleanup = []
+        exports = []
+
+        def export(_label, recovery=False):
+            exports.append(recovery)
+            if len(exports) == 1:
+                raise RuntimeError('injected-export-failure')
+
+        def stopped_during_backoff(_seconds):
+            supervisor.request_stop('signal-SIGTERM', 15)
+            return True
+
+        def clean(_label, _arguments, cleanup=False):
+            saved_at_cleanup.append(supervisor.read_json(campaign.state_path).get('stopReason'))
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(campaign, 'export_run', side_effect=export), \
+             patch.object(campaign, 'invoke', side_effect=clean), \
+             patch.object(campaign, 'wait_for_tick', side_effect=AssertionError('no wait after a stop')), \
+             patch.object(supervisor.STOP, 'wait', side_effect=stopped_during_backoff):
+            outcome = campaign.run_one(label)
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertEqual(saved_at_cleanup[0]['cause'], 'signal-SIGTERM')
+        self.assertTrue(outcome['proofExported'])
+
     def test_run_interrupted_before_its_outcome_was_saved_is_settled_never_resumed(self):
         label = 'rehearsal-aws'
         run_dir = self.running_rehearsal(label)
@@ -380,7 +410,10 @@ class SupervisorTests(unittest.TestCase):
             self.cleanup_success(run_dir)
             return 0
 
-        with patch.object(restarted, 'invoke', side_effect=clean):
+        resumed = AssertionError('an interrupted run must never be resumed')
+        with patch.object(restarted, 'invoke', side_effect=clean), \
+             patch.object(restarted, 'export_observation', side_effect=resumed), \
+             patch.object(restarted, 'wait_for_tick', side_effect=resumed):
             restarted.run()
         self.assertEqual(calls, [['--cleanup', str(run_dir)]])
         outcome = supervisor.read_json(restarted.state_path)['runs'][label]
