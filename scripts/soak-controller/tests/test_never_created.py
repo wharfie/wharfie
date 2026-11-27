@@ -160,7 +160,7 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
                 handler.close()
 
     def campaign(self):
-        campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN)
+        campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN, creator=True)
         def settle_diagnostics():
             if campaign.diagnostic_thread is not None:
                 campaign.diagnostic_thread.join(2)
@@ -189,7 +189,8 @@ class NeverCreatedSupervisorTests(unittest.TestCase):
         self.assertIs(result['neverCreated'], True)
         self.assertIs(result['cleanupVerifiedAbsent'], False)
         self.assertIs(result['proofExported'], True)
-        self.assertEqual(result['settlementAttempts'], 1)
+        # No cleanup child was needed, so no attempt was spent.
+        self.assertEqual(result.get('settlementAttempts', 0), 0)
         self.assertNotIn('fixture-campaign/runs/rehearsal-hetzner/recovery.tar.gz', self.client.puts)
         self.assertIn('fixture-campaign/runs/rehearsal-hetzner/retirement.json', self.client.puts)
         self.assertTrue(supervisor.never_created(run_dir))

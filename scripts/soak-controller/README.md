@@ -108,16 +108,16 @@ Every run attempts to retain fsynced lifecycle metadata: child start/exit, termi
 
 A cleanup child terminated by its budget records `cleanupStopReason`.
 
-Only a supervisor that can show it is in a fresh, unstopped, non-terminal campaign may create runs. If any of the following holds, it enters cleanup-only recovery, and a new run is never created:
-- a terminal `status`;
-- a saved `stopReason`;
-- any stop file at all: a record for this spec, a leftover `.tmp`, a truncated, empty, digest-only or unknown-cause record, or another spec's record. Anything other than a complete record of this spec is recorded as the cause `stop-record-ambiguous`;
-- a signal already observed.
+**Only the first supervisor process ever started for a campaign may create runs.** Before signal handling, network calls or anything else, `supervisor.py` creates `/var/lib/wharfie-soak/first-start.json` exclusively (`O_CREAT|O_EXCL`), bound to `specSha256`, and fsyncs the file and its directory. The process that creates it is the creator. If the marker already exists, or any step of creating it fails, the process is cleanup-only for its whole life, whatever else is on disk.
 
-Every path, normal or recovery, ends the same way:
+Inside the creator, the in-memory stop is the only thing that inhibits new work. It is set the moment the signal handler runs, before any I/O, and once it is set the creator never dispatches again. The spawn gate in `invoke` is checked after any blocking credential lookup and immediately before the child starts. The durable stop record and `supervisor.json` are evidence only: nothing reads them to decide whether a run may start.
+
+**A supervisor crash or restart therefore ends the campaign, and a failed campaign stays failed.** A cleanup-only process never creates or resumes a run. It records the first recorded cause as `stopReason`, or `supervisor-restarted` if there is none, sets `restarted`, and finishes the campaign as `failed`. If `supervisor.json` is unreadable, it is kept as `supervisor.json.unreadable`, and cleanup proceeds from the run directories on disk (`summaryUnreadable`). To soak again, prepare a new campaign. `--repair-cleanup` never claims the marker.
+
+Both kinds of process end the same way:
 - **Inventory:** every run directory on disk without a settled, exported outcome is collected, including one whose outcome was never saved because the process died (`failureReason: outcome-not-saved`).
 - **Round-robin cleanup:** each round gives every such run one cleanup attempt before any retry, and before any proof upload. A slow or failing run therefore cannot take another run's first cleanup.
-- **Separate limits:** cleanup is capped at three attempts per run across all activations. Proof exports are not capped by that limit and are retried on every activation.
+- **Separate limits:** cleanup is capped at three attempts per run across all activations, and only an attempt that started a cleanup child counts. A credential lookup is retried with capped backoff (5 to 40 s) within the reserve; a failure spends no attempt, so a later activation retries. Proof exports are not capped by the cleanup limit and are retried on every activation.
 - **Exit status:** the exit stays non-zero while any existing run is not cleaned up and exported, so systemd restarts the supervisor and retries. A run with no run directory has nothing to clean up.
 - **Terminal summary:** it keeps its first `finishedAt`, `status`, settled outcomes and `stopReason`, even a null one, and counts each later activation in `replays`. A signal to such a process appears only in its process diagnostics.
 

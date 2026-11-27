@@ -624,7 +624,7 @@ class SupervisorScheduleTests(unittest.TestCase):
                                     side_effect=AssertionError('unexpected subprocess'))
         process.start()
         self.addCleanup(process.stop)
-        self.campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN)
+        self.campaign = supervisor.Campaign(self.config, supervisor.Evidence(self.config, self.client), TOKEN, creator=True)
         # Settlement has its own tests; these assert only the scheduling decision.
         self.campaign.settle = lambda _label, outcome: outcome
 

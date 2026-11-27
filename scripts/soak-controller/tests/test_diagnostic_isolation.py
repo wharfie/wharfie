@@ -34,7 +34,7 @@ class DiagnosticIsolationTests(unittest.TestCase):
                        'bucket': 'fixture-never-contacted'}
         self.client = MemoryEvidenceClient()
         self.campaign = supervisor.Campaign(
-            self.config, supervisor.Evidence(self.config, self.client), 'fixture-no-real-token')
+            self.config, supervisor.Evidence(self.config, self.client), 'fixture-no-real-token', creator=True)
         self.label = 'soak-aws'
         self.addCleanup(self.close_logs)
 

@@ -88,6 +88,36 @@ def request_stop(cause, signum=None):
         write_stop_record(STOP_REASON)
 
 
+def claim_first_start(spec):
+    """True only for the first process ever to start this campaign.
+
+    The marker is created exclusively and made durable before anything else
+    happens. If it already exists, or any step fails, this process is
+    cleanup-only for its whole life: a restart can never create a run.
+    """
+    path = ROOT / 'first-start.json'
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return False
+    try:
+        os.write(descriptor, json.dumps({'specSha256': spec, 'pid': os.getpid(), 'at': time.time()}).encode())
+        os.fsync(descriptor)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    try:
+        directory = os.open(ROOT, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        return False
+    return True
+
+
 def stop_record_path(spec):
     # Spec-specific, so a record left by another campaign can never block ours.
     return ROOT / ('stop-' + spec + '.json')
@@ -102,8 +132,8 @@ def bind_stop_record(spec):
 def write_stop_record(reason):
     """Make the first stop durable at once: a local fsynced file, no network.
 
-    A restart treats any stop file, complete or not, as a reason for
-    cleanup-only recovery. A failed write is reported, never ignored.
+    It is evidence for a later `stopReason`, never a dispatch decision: a
+    restarted process is cleanup-only regardless. A failed write is reported.
     """
     global STOP_RECORD_FAILED
     record = STOP_RECORD
@@ -412,14 +442,28 @@ class Evidence:
 
 
 class Campaign:
-    def __init__(self, config, evidence, token):
+    def __init__(self, config, evidence, token, creator=False):
         # `token` is the Hetzner token, or a callable that fetches it. It is
         # fetched only for a Hetzner child, so its lookup cannot block AWS work.
+        # Only the creator, the first process ever started for this campaign,
+        # may start a run (see claim_first_start); every other is cleanup-only.
         self.config, self.evidence, self.token_source = config, evidence, token
+        self.creator = creator
         self.token = None
         self.state_path = ROOT / 'supervisor.json'
         if self.state_path.exists():
-            self.state = read_json(self.state_path)
+            try:
+                self.state = read_json(self.state_path)
+            except (ValueError, RuntimeError):
+                if creator:
+                    raise
+                # A cleanup-only process never stops for a damaged summary: it
+                # keeps the damaged bytes and inventories the run directories.
+                self.state_path.replace(self.state_path.with_name('supervisor.json.unreadable'))
+                self.state = {'format': 'wharfie.soak.supervisor.v1', 'specSha256': config['specSha256'],
+                              'campaignId': config['campaignId'], 'startedAt': time.time(), 'runs': {},
+                              'summaryUnreadable': True}
+                self.save()
             if self.state['specSha256'] != config['specSha256']:
                 raise RuntimeError('campaign-authority-changed')
         else:
@@ -455,24 +499,16 @@ class Campaign:
             self.token = token
         return self.token
 
-    def durable_stop(self):
-        """The stop a stop file records, or None when there is no stop file.
-
-        Any stop file means cleanup-only recovery. Only a complete record of
-        this spec supplies its cause; a temporary, truncated, empty, foreign or
-        otherwise unusable file is an ambiguous stop.
-        """
-        names = [path.name for path in ROOT.iterdir() if path.name.startswith('stop')]
-        if not names:
-            return None
+    def recorded_stop(self):
+        """Evidence for stopReason: this spec's complete stop record, or None."""
         try:
             record = read_json(stop_record_path(self.config['specSha256']))
-            if (record.get('specSha256') == self.config['specSha256'] and record.get('cause') in
-                    (*SIGNAL_CAUSES.values(), 'full-build-start-deadline')):
-                return {key: value for key, value in record.items() if key != 'specSha256'}
-        except (OSError, ValueError, RuntimeError, AttributeError):
-            pass
-        return {'cause': 'stop-record-ambiguous', 'signal': None}
+        except (OSError, ValueError, RuntimeError):
+            return None
+        if (isinstance(record, dict) and record.get('specSha256') == self.config['specSha256']
+                and record.get('cause') in (*SIGNAL_CAUSES.values(), 'full-build-start-deadline')):
+            return {key: value for key, value in record.items() if key != 'specSha256'}
+        return None
 
     def record_stop(self):
         """Persist the first campaign stop before any cleanup or network work.
@@ -684,8 +720,12 @@ class Campaign:
                 logger.addHandler(handler)
         except Exception:
             logger = None
-        child = subprocess.Popen([NODE, RUNNER, *arguments], cwd=HARNESS,
-                                 env=provider_environment(provider, self.token_for(provider)),
+        environment = provider_environment(provider, self.token_for(provider))
+        # The only gate on new work, checked after any blocking lookup and
+        # immediately before the spawn: only the creator, with no stop seen.
+        if not cleanup and (not self.creator or stop_observed()):
+            raise CampaignStopped('run-launch-refused', stop_cause() if stop_observed() else 'supervisor-restarted')
+        child = subprocess.Popen([NODE, RUNNER, *arguments], cwd=HARNESS, env=environment,
                                  stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                  stderr=subprocess.STDOUT, start_new_session=True)
         try:
@@ -871,12 +911,16 @@ class Campaign:
             outcome['settlementDeferred'] = 'external-stop-close-preserve-authority'
             self.put_outcome(label, outcome)
             return
-        outcome['settlementAttempts'] = outcome.get('settlementAttempts', 0) + 1
-        outcome['proofExported'] = False
-        self.put_outcome(label, outcome)
         try:
             if (run_dir / 'run.json').exists():
                 if not cleanup_verified(run_dir) and not never_created(run_dir):
+                    # Only a started cleanup child counts against the cap, so
+                    # a credential outage leaves every attempt for later.
+                    if not self.credentials_for_cleanup(label, outcome):
+                        return
+                    outcome['settlementAttempts'] = outcome.get('settlementAttempts', 0) + 1
+                    outcome['proofExported'] = False
+                    self.put_outcome(label, outcome)
                     outcome['cleanupExitCode'] = self.invoke(label, ['--cleanup', str(run_dir)], cleanup=True)
                     cause = self.terminations.pop(label, None)
                     if outcome['cleanupExitCode'] == 124 and cause is not None:
@@ -886,6 +930,23 @@ class Campaign:
         except Exception as error:
             outcome['cleanupFailureType'] = type(error).__name__
         self.put_outcome(label, outcome)
+
+    def credentials_for_cleanup(self, label, outcome):
+        """Fetch the provider credential, retrying with capped backoff within the reserve."""
+        backoff = 5
+        while True:
+            try:
+                self.token_for(label.split('-')[-1])
+                outcome.pop('credentialFailureType', None)
+                return True
+            except Exception as error:
+                outcome['credentialFailureType'] = type(error).__name__
+                outcome['credentialFailures'] = outcome.get('credentialFailures', 0) + 1
+            if self.config['stopAt'] - time.time() - backoff < 2400 or backoff > 60:
+                self.put_outcome(label, outcome)
+                return False
+            time.sleep(backoff)
+            backoff *= 2
 
     def export_attempt(self, label):
         """One proof export; not limited by the cleanup cap, so every activation retries."""
@@ -938,21 +999,7 @@ class Campaign:
         return outcome
 
     def run(self):
-        terminal = 'finishedAt' in self.state or self.state.get('status') in ('passed', 'failed')
-        saved = self.state.get('stopReason')
-        recorded = self.durable_stop()
-        if not terminal and not saved and recorded:
-            with self.lock:
-                self.state['stopReason'] = recorded
-                self.save()
-            saved = recorded
-        if saved:
-            # A stop recorded by an earlier process stays latched.
-            request_stop(saved['cause'], saved.get('signal'))
-        # Only a fresh, unstopped, non-terminal campaign may create runs. Any
-        # doubt (a terminal summary, a saved or recorded stop of any kind, a
-        # signal already observed) is cleanup-only recovery.
-        if saved or terminal or recorded or stop_observed():
+        if not self.creator:
             return self.conclude()
         # Native rehearsal builds and short runs are sequential on the 4GiB host.
         for provider in ('aws', 'hetzner'):
@@ -984,6 +1031,14 @@ class Campaign:
         non-zero while any remains outstanding, so systemd restarts the
         supervisor and retries. `finish` keeps the first finish time and status.
         """
+        if not self.creator and 'finishedAt' not in self.state:
+            # A restart ends the campaign: keep the first recorded cause, or
+            # record the restart itself.
+            with self.lock:
+                self.state['stopReason'] = (self.state.get('stopReason') or self.recorded_stop()
+                                            or {'cause': 'supervisor-restarted', 'signal': None, 'at': time.time()})
+                self.state['restarted'] = True
+                self.save()
         saved = self.state.get('stopReason')
         pending = []
         for label in LABELS:
@@ -1019,6 +1074,8 @@ class Campaign:
             # stopReason, even a null one; its own signals go to diagnostics.
             self.state['replays'] = self.state.get('replays', 0) + 1
         else:
+            # A campaign a restarted process finishes is failed, whatever its runs show.
+            passed = passed and not self.state.get('restarted')
             self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
             self.state['stopReason'] = self.state.get('stopReason') or STOP_REASON
         self.save()
@@ -1070,6 +1127,10 @@ def main():
     options = parser.parse_args()
     ROOT.mkdir(mode=0o700, exist_ok=True)
     config = read_json(Path('/etc/wharfie-soak/campaign.json'))
+    # Before anything else: is this the first process ever started for this
+    # campaign? Only that process may create runs.
+    # A manual cleanup repair never claims it.
+    creator = not options.repair_cleanup and claim_first_start(config['specSha256'])
     # The stop record is bound, then signals are handled, before any lock,
     # network or credential work, so a stop during startup is never lost.
     bind_stop_record(config['specSha256'])
@@ -1085,7 +1146,7 @@ def main():
         return ssm.get_parameter(Name=config['tokenParameter'], WithDecryption=True)['Parameter']['Value']
 
     client = boto3.client('s3', region_name=config['region'], config=sdk_config)
-    campaign = Campaign(config, Evidence(config, client), fetch_token)
+    campaign = Campaign(config, Evidence(config, client), fetch_token, creator=creator)
     if options.repair_cleanup:
         return campaign.repair_cleanup(options.repair_cleanup)
     return campaign.run()
