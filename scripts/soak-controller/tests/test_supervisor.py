@@ -951,6 +951,98 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(outcome.get('settlementAttempts', 0), 0)
         self.assertTrue((hetzner / 'workspace').exists())
 
+    def test_a_restart_fails_the_campaign_even_after_every_run_passed(self):
+        # All four runs passed and were settled, but the creator died before
+        # finish(). The restarted process must still record a failed campaign.
+        campaign = self.campaign()
+        for label in LABELS_FOR_TEST:
+            self.run_fixture(label, passed=True, workspace=False)
+            self.saved_outcome(campaign, label, passed=True, settled=True)
+        self.reset_process()
+        restarted = self.campaign(creator=False)
+        with patch.object(restarted, 'invoke') as invoke:
+            self.assertEqual(restarted.run(), 0)
+        restarted.diagnostic_thread.join(5)
+        invoke.assert_not_called()
+        state = supervisor.read_json(restarted.state_path)
+        self.assertEqual(state['status'], 'failed')
+        self.assertTrue(state['restarted'])
+        self.assertEqual(state['stopReason']['cause'], 'supervisor-restarted')
+
+    def retried_within_one_activation(self, failure):
+        """Run one cleanup-only activation; return (failures, sleeps) for soak-hetzner."""
+        import errno
+        self.run_fixture('soak-hetzner')
+        restarted = self.campaign(creator=False)
+        failures = []
+        if failure == 'spawn':
+            def no_process(*_args, **_kwargs):
+                failures.append(1)
+                raise OSError(errno.EAGAIN, 'injected')
+            self.process_patch.stop()
+            spawn = patch.object(supervisor.subprocess, 'Popen', side_effect=no_process)
+        else:
+            def lookup():
+                failures.append(1)
+                raise TimeoutError('injected')
+            restarted.token_source = lookup
+            spawn = patch.object(restarted, 'invoke', side_effect=AssertionError('no child without a credential'))
+        with spawn, patch.object(supervisor.time, 'sleep') as sleep, \
+             self.assertRaisesRegex(RuntimeError, 'settlement-incomplete'):
+            restarted.run()
+        restarted.diagnostic_thread.join(5)
+        return len(failures), [call.args[0] for call in sleep.call_args_list]
+
+    def test_a_spawn_failure_is_retried_with_backoff_within_one_activation(self):
+        failures, sleeps = self.retried_within_one_activation('spawn')
+        # Each of the three rounds retries after 5, 10, 20 and 40 s, so far
+        # more spawns are tried than rounds.
+        self.assertGreater(failures, supervisor.CLEANUP_ATTEMPTS)
+        self.assertEqual(sleeps[:4], [5, 10, 20, 40])
+
+    def test_a_credential_failure_is_retried_with_backoff_within_one_activation(self):
+        failures, sleeps = self.retried_within_one_activation('credential')
+        self.assertGreater(failures, supervisor.CLEANUP_ATTEMPTS)
+        self.assertEqual(sleeps[:4], [5, 10, 20, 40])
+
+    def test_a_failed_stop_record_write_is_reported(self):
+        supervisor.bind_stop_record(self.config['specSha256'])
+        campaign = self.campaign()
+        with patch.object(supervisor, 'atomic_json', side_effect=OSError('injected-write-failure')), \
+             patch('sys.stdout', new_callable=io.StringIO) as output:
+            supervisor.request_stop('signal-SIGTERM', 15)
+        self.addCleanup(setattr, supervisor, 'STOP_RECORD_FAILED', False)
+        self.assertTrue(supervisor.STOP.is_set())
+        self.assertTrue(supervisor.STOP_RECORD_FAILED)
+        self.assertIn('stop-record-write-failed', output.getvalue())
+        campaign.export_controller()
+        diagnostics = json.loads(self.client.objects['fixture-campaign/supervisor-diagnostics.json'])
+        self.assertTrue(diagnostics['stopRecordFailed'])
+
+    def test_a_stop_record_of_another_spec_is_not_evidence(self):
+        # Our file name, another campaign's spec inside: the restart records
+        # itself as the cause, not the foreign stop.
+        supervisor.atomic_json(supervisor.stop_record_path(self.config['specSha256']),
+                               {'specSha256': 'b' * 64, 'cause': 'signal-SIGTERM'})
+        restarted = self.campaign(creator=False)
+        self.assertIsNone(restarted.recorded_stop())
+        self.assertEqual(restarted.run(), 0)
+        restarted.diagnostic_thread.join(5)
+        self.assertEqual(supervisor.read_json(restarted.state_path)['stopReason']['cause'], 'supervisor-restarted')
+
+    def test_a_marker_whose_fsync_fails_never_makes_a_creator(self):
+        real_fsync = os.fsync
+        calls = []
+        def marker_fsync_fails(descriptor):
+            calls.append(descriptor)
+            if len(calls) == 1:
+                raise OSError('injected-fsync-failure')
+            return real_fsync(descriptor)
+        # Only the marker's own fsync fails; the directory fsync succeeds.
+        with patch.object(supervisor.os, 'fsync', side_effect=marker_fsync_fails):
+            self.assertFalse(supervisor.claim_first_start(self.config['specSha256']))
+        self.assertEqual(len(calls), 1)
+
     def test_launch_gate_is_checked_after_the_credential_lookup(self):
         # A stop observed during the lazy Hetzner lookup refuses the spawn;
         # a non-creator never spawns new work at all.
