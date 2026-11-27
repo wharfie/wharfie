@@ -31,7 +31,8 @@ needrestart_override='$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;'
 # Print "LoadState ActiveState UnitFileState"; fail when systemd cannot answer.
 unit_states() {
   local output line load='' active='' file=''
-  output=$(timeout "${systemctl_seconds:-30}" systemctl show --property=LoadState \
+  # Read-only probes are hard-bounded: TERM at the limit, KILL 5 s later.
+  output=$(timeout -k 5 "${systemctl_seconds:-30}" systemctl show --property=LoadState \
     --property=ActiveState --property=UnitFileState -- "$1") || return 1
   while IFS= read -r line; do
     case $line in
@@ -93,7 +94,9 @@ apt_update() {
     fi
     printf '%s\n' "$output" >&2
     case $output in
-      *'Could not get lock'*) sleep 15 ;;
+      *'Could not get lock'*)
+        left=$((deadline - SECONDS))
+        if [ "$left" -gt 0 ]; then sleep $((left < 15 ? left : 15)); fi ;;
       *) maintenance_failure 'apt-get update failed' ;;
     esac
   done
@@ -104,7 +107,7 @@ disable_os_maintenance() {
   printf '%s\n' "$needrestart_override" > "$needrestart_dropin"
   chmod 0644 "$needrestart_dropin"
   # No new timer activation, then let any run already started finish.
-  timeout 120 systemctl stop $apt_timers
+  timeout -k 5 120 systemctl stop $apt_timers
   drain_apt_maintenance
   systemctl mask $apt_maintenance_units
   if systemctl list-unit-files unattended-upgrades.service --no-legend 2>/dev/null | \
@@ -149,9 +152,14 @@ def md5(path):
 if packaged.get(main) != md5(main):
     sys.exit('needrestart.conf differs from the packaged file')
 directory = os.path.dirname(dropin)
-for name in sorted(os.listdir(directory)):
+# The same names as the package lists, plus ours, and the same bytes.
+expected = {os.path.basename(path) for path in packaged if os.path.dirname(path) == directory}
+present = set(os.listdir(directory)) - {os.path.basename(dropin)}
+if present != expected:
+    sys.exit('needrestart snippets differ from the packaged set: ' + ' '.join(sorted(present ^ expected)))
+for name in sorted(present):
     path = os.path.join(directory, name)
-    if path != dropin and packaged.get(path) != md5(path):
+    if packaged.get(path) != md5(path):
         sys.exit('needrestart snippet is not an unmodified packaged file: ' + name)
 CONFFILES
   then

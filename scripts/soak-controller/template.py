@@ -44,12 +44,12 @@ done
 # time, for one already running; its dpkg is never killed. Every manager call
 # is limited to the time that remains. Bootstrap masks the units later.
 drain_deadline=$((SECONDS + 1500))
-timeout 120 systemctl stop apt-daily.timer apt-daily-upgrade.timer
+timeout -k 5 120 systemctl stop apt-daily.timer apt-daily-upgrade.timer
 while :; do
   left=$((drain_deadline - SECONDS))
   if [ "$left" -le 0 ]; then exit 1; fi
   # Both must report idle; a oneshot upgrade is "activating" while it runs.
-  states=$(timeout "$left" systemctl show -p ActiveState --value apt-daily.service apt-daily-upgrade.service) || states=unknown
+  states=$(timeout -k 5 "$left" systemctl show -p ActiveState --value apt-daily.service apt-daily-upgrade.service) || states=unknown
   idle=0
   for state in $states; do case $state in inactive|failed) idle=$((idle + 1)) ;; esac; done
   if [ "$idle" = 2 ]; then break; fi
@@ -66,7 +66,9 @@ while :; do
   if [ "$left" -le 0 ]; then exit 1; fi
   if output=$(timeout "$left" apt-get -o DPkg::Lock::Timeout=600 update -q 2>&1); then break; fi
   printf '%s\n' "$output" >&2
-  case $output in *'Could not get lock'*) sleep 15 ;; *) exit 1 ;; esac
+  case $output in *'Could not get lock'*) ;; *) exit 1 ;; esac
+  left=$((update_deadline - SECONDS))
+  if [ "$left" -gt 0 ]; then sleep $((left < 15 ? left : 15)); fi
 done
 # apt-update: end
 timeout 1500 apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends python3-boto3

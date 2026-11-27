@@ -78,8 +78,11 @@ else:
 # Enforces its duration, as coreutils timeout does: 124 on expiry.
 FAKE_TIMEOUT = r'''#!/usr/bin/env python3
 import subprocess, sys
+arguments = sys.argv[1:]
+if arguments[0] == '-k':
+    arguments = arguments[2:]
 try:
-    sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+    sys.exit(subprocess.run(arguments[1:], timeout=float(arguments[0])).returncode)
 except subprocess.TimeoutExpired:
     sys.exit(124)
 '''
@@ -141,7 +144,7 @@ class OsMaintenanceTests(unittest.TestCase):
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
         for name, body in (('systemctl', FAKE_SYSTEMCTL), ('timeout', FAKE_TIMEOUT), ('apt-get', FAKE_APT_GET),
-                           ('sleep', '#!/bin/sh\n'),
+                           ('sleep', '#!/bin/sh\necho "sleep $1" >> "$FAKE_SYSTEMD/log"\n'),
                            ('dpkg-query', '#!/bin/sh\n[ -z "$FAKE_DPKG_FAIL" ] || exit 1\n'
                                           '[ "$3" = needrestart ] || exit 2\ncat "$FAKE_SYSTEMD/conffiles"\n')):
             (bin_dir / name).write_text(body)
@@ -253,6 +256,14 @@ class OsMaintenanceTests(unittest.TestCase):
         self.package(self.conf)
         self.assert_refused(refused)
         snippet.unlink()
+        self.assert_verified()
+        # A packaged snippet that is missing refuses too.
+        self.package(snippet, "$nrconf{restart} = 'l';\n")
+        self.assert_verified()
+        snippet.unlink()
+        self.assert_refused(refused)
+        del self.conffiles[str(snippet)]
+        self.package(self.conf)
         self.assert_verified()
         # A modified or missing main file, or no package answer, refuses.
         original = self.conf.read_text()
@@ -390,10 +401,15 @@ class OsMaintenanceTests(unittest.TestCase):
                 result, calls = self.run_update(stage(60), 'fail')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(calls, 1)
-                # A lock that is never released fails within the budget.
+                # A lock that is never released fails within the budget, and
+                # no backoff sleep exceeds the time that remains.
+                (self.state / 'log').unlink(missing_ok=True)
                 result, calls = self.run_update(stage(2), 'lock:1000000')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertGreater(calls, 1)
+                sleeps = [int(line.split()[1]) for line in self.log() if line.startswith('sleep ')]
+                self.assertTrue(sleeps)
+                self.assertLessEqual(max(sleeps), 2)
 
     def test_slow_manager_calls_cannot_overrun_the_drain_budget(self):
         # Two idle lookups of 1.5 s each against a 2 s budget must fail, not
