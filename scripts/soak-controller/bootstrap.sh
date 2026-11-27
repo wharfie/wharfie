@@ -170,13 +170,12 @@ timeout 600 npm install --global --ignore-scripts --no-audit --no-fund \
 [ "$(npm --version)" = 11.12.0 ]
 chown -R root:root /opt/wharfie-soak/node
 chmod -R a+rX,go-w /opt/wharfie-soak/node
-if [ ! -d /opt/wharfie-soak/harness/.git ]; then
-  timeout 300 git clone --no-checkout --filter=blob:none \
-    https://github.com/wharfie/wharfie.git /opt/wharfie-soak/harness
-else
-  # A previous install attempt may have left this checkout owned by the service.
-  chown -R root:root /opt/wharfie-soak/harness
-fi
+# harness: begin
+# Every attempt installs a fresh disposable checkout, so no edit, file or
+# ownership left by an earlier attempt can reach the installed harness.
+rm -rf /opt/wharfie-soak/harness
+timeout 300 git clone --no-checkout --filter=blob:none \
+  https://github.com/wharfie/wharfie.git /opt/wharfie-soak/harness
 timeout 300 git -C /opt/wharfie-soak/harness fetch --depth=1 origin \
   "$harness_commit"
 git -C /opt/wharfie-soak/harness checkout --detach \
@@ -187,8 +186,19 @@ cd /opt/wharfie-soak/harness
 timeout 1200 /usr/sbin/runuser -u wharfie-soak -- env -i \
   HOME=/var/lib/wharfie-soak PATH="$PATH" LANG=C.UTF-8 \
   AWS_EC2_METADATA_DISABLED=true npm ci --no-audit --no-fund
+cd /
 chown -R root:root /opt/wharfie-soak/harness
+# After the install: the same commit, no tracked file changed, and nothing
+# new outside ignored paths such as node_modules. A git failure stops here.
+installed_head=$(git -C /opt/wharfie-soak/harness rev-parse HEAD)
+installed_changes=$(git -C /opt/wharfie-soak/harness status --porcelain --untracked-files=all)
+if [ "$installed_head" != "$harness_commit" ] || [ -n "$installed_changes" ] || \
+    ! git -C /opt/wharfie-soak/harness diff --quiet HEAD --; then
+  echo 'harness checkout changed during npm ci' >&2
+  exit 1
+fi
 chmod -R a+rX,go-w /opt/wharfie-soak/harness
+# harness: end
 timeout 900 python3 /opt/wharfie-soak/ops/download_candidate.py
 timeout 180 /usr/sbin/runuser -u wharfie-soak -- env -i \
   HOME=/var/lib/wharfie-soak PATH="$PATH" LANG=C.UTF-8 \

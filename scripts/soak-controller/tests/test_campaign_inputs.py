@@ -97,12 +97,12 @@ class CampaignInputTests(unittest.TestCase):
         root = self.root / 'controller'
         bin_dir = root / 'bin'
         bin_dir.mkdir(parents=True)
-        (root / 'harness/.git').mkdir(parents=True)
         config_path = root / 'campaign.json'
         config_path.write_text(json.dumps({**campaign, 'controllerIpv4': '192.0.2.15'}))
         log = root / 'git.log'
         for name, body in (
                 ('git', '#!/bin/sh\nprintf "%s\\n" "$*" >> "$TEST_GIT_LOG"\n'
+                        'if [ "$1" = clone ]; then for target; do :; done; mkdir -p "$target"; fi\n'
                         'if [ "$3" = rev-parse ]; then printf "%s\\n" "$TEST_FETCHED"; fi\n'),
                 ('timeout', '#!/bin/sh\nshift\nexec "$@"\n'), ('chown', '#!/bin/sh\n'), ('chmod', '#!/bin/sh\n'),
                 ('npm', '#!/bin/sh\necho npm-ci-reached\n'),
@@ -111,8 +111,7 @@ class CampaignInputTests(unittest.TestCase):
             (bin_dir / name).chmod(0o755)
         source = files['bootstrap.sh']
         selected = (source[source.index('harness_commit=$('):source.index('\n', source.index('harness_commit=$('))]
-                    + '\n' + source[source.index('if [ ! -d /opt/wharfie-soak/harness/.git ]; then'):
-                                    source.index('timeout 900 python3 /opt/wharfie-soak/ops/download_candidate.py')])
+                    + '\n' + source[source.index('# harness: begin\n'):source.index('# harness: end\n')])
         selected = (selected.replace('/etc/wharfie-soak/campaign.json', str(config_path))
                     .replace('/opt/wharfie-soak/harness', str(root / 'harness'))
                     .replace('/usr/sbin/runuser', str(bin_dir / 'runuser')))
