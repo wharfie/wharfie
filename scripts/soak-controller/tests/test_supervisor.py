@@ -841,11 +841,11 @@ class SupervisorTests(unittest.TestCase):
     def test_each_latch_alone_prevents_a_creator(self):
         spec = self.config['specSha256']
         latch = self.runtime_latch()
-        # No token: cleanup-only, even on an empty state directory, and no
-        # latch is taken from a later token holder.
+        # No token: cleanup-only, even on an empty state directory.
         self.assertFalse(supervisor.startup_creator(spec))
-        self.assertFalse(latch.exists())
+        self.assertTrue(latch.exists())
         self.clear_root()
+        latch.unlink()
         self.creator_token()
         self.assertTrue(supervisor.startup_creator(spec))
         # A reboot clears /run; the durable marker still applies.
@@ -858,12 +858,33 @@ class SupervisorTests(unittest.TestCase):
         latch.unlink()
         latch.parent.rmdir()
         self.creator_token()
+        # The in-boot latch cannot be created: cleanup-only, and the claim
+        # stops there, leaving the token and the marker untouched.
         self.assertFalse(supervisor.startup_creator(spec))
-        self.assertTrue((self.root / 'first-start.json').exists())
+        self.assertTrue(supervisor.creator_token_path(spec).exists())
+        self.assertFalse((self.root / 'first-start.json').exists())
         unit = (ROOT_DIR / 'wharfie-soak.service').read_text()
         for line in ('RuntimeDirectory=wharfie-soak\n', 'RuntimeDirectoryPreserve=yes\n'):
             self.assertIn(line, unit)
         self.assertEqual(str(ops_latch_parent()), '/run/wharfie-soak')
+
+    def test_a_failed_token_unlink_leaves_the_boot_latched(self):
+        # The reviewer's case: the state directory is briefly unwritable, so
+        # the unlink fails; a same-boot retry once it is writable again finds
+        # the latch and creates nothing, though the token is still there.
+        import errno
+        latch = self.runtime_latch()
+        spec = self.config['specSha256']
+        self.creator_token()
+        with patch.object(supervisor.os, 'unlink', side_effect=PermissionError(errno.EACCES, 'injected')):
+            self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue(latch.exists())
+        self.assertTrue(supervisor.creator_token_path(spec).exists())
+        self.assertFalse(supervisor.startup_creator(spec))
+        self.assertTrue(supervisor.creator_token_path(spec).exists())
+        self.assertFalse((self.root / 'first-start.json').exists())
+        latches = inspect.getsource(supervisor.startup_creator)
+        self.assertLess(latches.index('claim_runtime_latch()'), latches.index('consume_creator_token('))
 
     def test_concurrent_first_starts_give_exactly_one_creator(self):
         # Each competing process unlinks the same token; separate processes,

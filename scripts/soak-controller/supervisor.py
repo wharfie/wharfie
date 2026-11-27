@@ -156,18 +156,17 @@ def consume_creator_token(spec):
 
 
 def startup_creator(spec):
-    """The token consumed, both latches freshly created, no prior activity.
+    """The in-boot latch, then the token, then the durable marker, all fresh.
 
-    The token is consumed first, before anything else; only one process can.
-    A process without it is cleanup-only and claims nothing more, so it can
-    never take a latch from the one that has it. The token holder still
-    claims the durable marker even if the in-boot latch fails.
+    The tmpfs latch comes first, so a same-boot retry after any later failure
+    (an unwritable state directory, say) finds it and is cleanup-only. Each
+    step that fails makes this process cleanup-only and stops the claim.
     """
+    if not claim_runtime_latch():
+        return False
     if not consume_creator_token(spec):
         return False
-    runtime = claim_runtime_latch()
-    durable = claim_first_start(spec)
-    return runtime and durable
+    return claim_first_start(spec)
 
 
 def claim_first_start(spec):

@@ -366,19 +366,39 @@ with open(directory + '/campaign.json') as source:
 data = json.dumps({'ready': True, 'at': time.time(), 'specSha256': spec,
                    'node': '24.13.1', 'npm': '11.12.0'}).encode()
 # The one-shot creator token: the first supervisor start unlinks it, which
-# needs only write permission on the state directory and no free space.
-state = '/var/lib/wharfie-soak'
-token = os.open(state + '/creator-token-' + spec, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-try:
-    os.write(token, spec.encode())
-    os.fsync(token)
-finally:
-    os.close(token)
-descriptor = os.open(state, os.O_RDONLY)
-try:
-    os.fsync(descriptor)
-finally:
-    os.close(descriptor)
+# needs only write permission on the state directory and no free space. It
+# is issued at most once per spec: a durable root-only record, written before
+# the token, means a re-run republishes only the readiness receipt.
+def durable(path, data):
+    temporary = path + '.tmp'
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(descriptor, data)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, path)
+    descriptor = os.open(os.path.dirname(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+issued = directory + '/creator-token-issued-' + spec
+if not os.path.lexists(issued):
+    durable(issued, json.dumps({'specSha256': spec, 'at': time.time()}).encode())
+    state = '/var/lib/wharfie-soak'
+    token = os.open(state + '/creator-token-' + spec, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.write(token, spec.encode())
+        os.fsync(token)
+    finally:
+        os.close(token)
+    descriptor = os.open(state, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 temporary = directory + '/bootstrap-ready.json.tmp'
 descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
 try:

@@ -89,6 +89,31 @@ class ReadinessTests(unittest.TestCase):
         self.old_receipt.write_text(json.dumps({'ready': True, 'specSha256': SPEC}))
         self.assertFalse(self.ready())
 
+    def test_a_token_is_issued_at_most_once_per_spec(self):
+        result = self.bootstrap(block('readiness'), block('publish-readiness'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        issued = self.etc / ('creator-token-issued-' + SPEC)
+        self.assertEqual(json.loads(issued.read_text())['specSha256'], SPEC)
+        self.assertEqual(self.token.read_text(), SPEC)
+        # The reviewer's case: the first start spent the token; bootstrap is
+        # then re-run. It republishes the receipt for cleanup-only starts,
+        # but never a second token for this spec.
+        self.token.unlink()
+        result = self.bootstrap(block('readiness'), block('publish-readiness'))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.ready())
+        self.assertFalse(self.token.exists())
+        self.assertTrue(issued.exists())
+        # After /run is cleared by a reboot, the next start has no token, so
+        # it launches nothing.
+        sys.path.insert(0, str(ROOT / 'tests'))
+        from test_supervisor import supervisor
+        with tempfile.TemporaryDirectory() as run:
+            from unittest.mock import patch
+            with patch.object(supervisor, 'ROOT', self.home), \
+                 patch.object(supervisor, 'RUNTIME_LATCH', Path(run) / 'started'):
+                self.assertFalse(supervisor.startup_creator(SPEC))
+
     def test_publication_refuses_a_directory_other_users_can_write(self):
         self.etc.chmod(0o777)
         result = self.bootstrap(block('publish-readiness'))
