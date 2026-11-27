@@ -61,7 +61,7 @@ exec "$@"
         selected = source[start:stop]
         selected = selected.replace('/opt/wharfie-soak/harness', str(self.harness))
         selected = selected.replace('/usr/sbin/runuser', str(self.sbin / 'runuser'))
-        return 'set -euo pipefail\ncontroller_commit=' + COMMIT + '\n' + selected
+        return 'set -euo pipefail\nharness_commit=' + COMMIT + '\n' + selected
 
     def run_fragment(self, repaired):
         return subprocess.run(['/bin/bash', '-c', self.fragment(repaired)],

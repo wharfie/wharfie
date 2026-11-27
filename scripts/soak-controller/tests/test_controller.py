@@ -119,7 +119,9 @@ class PolicyTests(unittest.TestCase):
         user_data = resources['Controller']['Properties']['UserData']['Fn::Base64']['Fn::Sub']
         self.assertLessEqual(len(user_data.encode()), 16384)
         bundle = json.loads(lzma.decompress(template.runtime_bundle(c)))
-        self.assertIn('controller_commit', bundle['bootstrap.sh'])
+        # The harness is fetched at the candidate commit, never the controller commit.
+        self.assertIn('["sourceCommit"]', bundle['bootstrap.sh'])
+        self.assertNotIn('controllerCommit', bundle['bootstrap.sh'])
         self.assertIn(hashlib.sha256(template.runtime_bundle(c)).hexdigest(), user_data)
         self.assertIn('timeout 900 python3', bundle['bootstrap.sh'])
         self.assertNotIn('systemctl enable wharfie-soak.service', bundle['bootstrap.sh'])

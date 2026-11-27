@@ -35,6 +35,7 @@ PROVISION_BUDGET = 3600
 # `start` can still follow. Measured apply to start: 10 m 55 s on 2026-11-19.
 APPLY_START_MARGIN = 1200
 DEFAULT_SSM_KEY = 'alias/aws/ssm'
+OPERATIONS_FILES = (*RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py')
 
 
 def asset_names(version):
@@ -62,7 +63,31 @@ def canonical_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def controller_commit():
+    """The commit of the checkout these operations files come from.
+
+    The operations bundle is built from this checkout, so a tracked change, or
+    an operations file git does not track, would make the commit untrue.
+    """
+    try:
+        def git(*arguments):
+            return subprocess.run(['git', '-C', str(HERE), *arguments], stdin=subprocess.DEVNULL,
+                                  capture_output=True, text=True, timeout=30, check=True).stdout
+        head = git('rev-parse', '--verify', 'HEAD^{commit}').strip()
+        git('ls-files', '--error-unmatch', '--', *OPERATIONS_FILES)
+        changes = git('status', '--porcelain', '--untracked-files=no')
+    except (OSError, subprocess.SubprocessError):
+        raise RuntimeError('controller-checkout-commit-unavailable') from None
+    if not re.fullmatch(r'[0-9a-f]{40}', head):
+        raise RuntimeError('controller-checkout-commit-unavailable')
+    if changes:
+        raise RuntimeError('controller-checkout-has-uncommitted-changes')
+    return head
+
+
 def prepare(options):
+    # Refuse before writing anything when the operations provenance is unknown.
+    controller = controller_commit()
     root = options.state.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     preview = read_json(options.preview)
@@ -96,7 +121,9 @@ def prepare(options):
         'guestRootGiB': spec['image']['rootBlockDevice']['sizeGiB'],
         'vpcId': spec['network']['vpcId'], 'subnetId': spec['network']['subnet']['id'],
         'guestSubnetIds': [spec['network']['subnet']['id']],
-        'controllerCommit': options.commit, 'sourceCommit': options.commit,
+        # The candidate and its acceptance harness come from sourceCommit; the
+        # operations files hashed below come from the controller checkout.
+        'controllerCommit': controller, 'sourceCommit': options.commit,
         'version': options.version, 'soakHours': hours,
         # The controller window is the full soak plus six hours for setup,
         # rehearsals, the final observation, and settlement.
@@ -105,8 +132,7 @@ def prepare(options):
         'tokenParameter': '/wharfie-soak/' + options.campaign + '/hetzner-token',
         'assets': {name: {'size': (assets / name).stat().st_size, 'sha256': sha256(assets / name)}
                    for name in sorted(names)},
-        'operationsFiles': {name: sha256(HERE / name) for name in [
-            *RUNTIME_FILES, 'wharfie-soak.service', 'policy.py', 'template.py', 'ops.py']},
+        'operationsFiles': {name: sha256(HERE / name) for name in OPERATIONS_FILES},
     }
     config['specSha256'] = canonical_digest(config)
     # The same rule `apply` and `start` enforce, applied before anything is written.

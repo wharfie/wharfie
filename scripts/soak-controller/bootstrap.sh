@@ -3,7 +3,9 @@ set -euo pipefail
 umask 022
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
-controller_commit=$(python3 -c 'import json,re; c=json.load(open("/etc/wharfie-soak/campaign.json"))["controllerCommit"]; assert re.fullmatch("[0-9a-f]{40}",c); print(c)')
+# The acceptance harness is the candidate's own commit. The operations bundle,
+# identified by its hashes and the recorded controller commit, may be newer.
+harness_commit=$(python3 -c 'import json,re; c=json.load(open("/etc/wharfie-soak/campaign.json"))["sourceCommit"]; assert re.fullmatch("[0-9a-f]{40}",c); print(c)')
 
 # os-maintenance: begin
 # OS maintenance must not restart the supervisor during a campaign. On
@@ -112,10 +114,10 @@ else
   chown -R root:root /opt/wharfie-soak/harness
 fi
 timeout 300 git -C /opt/wharfie-soak/harness fetch --depth=1 origin \
-  "$controller_commit"
+  "$harness_commit"
 git -C /opt/wharfie-soak/harness checkout --detach \
-  "$controller_commit"
-[ "$(git -C /opt/wharfie-soak/harness rev-parse HEAD)" = "$controller_commit" ]
+  "$harness_commit"
+[ "$(git -C /opt/wharfie-soak/harness rev-parse HEAD)" = "$harness_commit" ]
 chown -R wharfie-soak:wharfie-soak /opt/wharfie-soak/harness
 cd /opt/wharfie-soak/harness
 timeout 1200 /usr/sbin/runuser -u wharfie-soak -- env -i \

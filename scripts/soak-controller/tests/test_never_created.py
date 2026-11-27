@@ -405,7 +405,7 @@ class SoakLengthPreparationTests(unittest.TestCase):
     def setUp(self):
         # Reuse the candidate fixture that exercises the real `prepare` checks.
         from test_campaign_inputs import CampaignInputTests
-        self.inputs = CampaignInputTests('test_parameterizes_identical_harness_and_candidate_commit')
+        self.inputs = CampaignInputTests('test_harness_is_the_candidate_commit_and_controller_is_the_checkout')
         self.inputs.setUp()
         self.addCleanup(self.inputs.doCleanups)
 
