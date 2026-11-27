@@ -4,6 +4,7 @@ Only the network origin, the install path, the privilege port and npm are
 replaced. No root access, network, npm installation, or cloud resources are
 required.
 """
+import json
 import os
 from pathlib import Path
 import shutil
@@ -22,6 +23,7 @@ class BootstrapRetryTests(unittest.TestCase):
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         self.harness = self.root / 'opt/harness'
+        self.manifest = self.root / 'opt/harness-manifest.json'
         self.harness.parent.mkdir()
         self.environment = {
             'PATH': str(self.bin) + ':' + os.environ['PATH'], 'HOME': str(self.root), 'LANG': 'C',
@@ -74,9 +76,16 @@ class BootstrapRetryTests(unittest.TestCase):
     def assert_installed(self, result):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('npm-ci-reached', result.stdout)
-        self.assertEqual(self.git(self.harness, 'rev-parse', 'HEAD'), self.commit)
         self.assertEqual((self.harness / 'package.json').read_text(), '{"name": "fixture"}\n')
         self.assertTrue((self.harness / 'node_modules/fixture/index.js').exists())
+        # The installer never owned git metadata; the manifest is outside the tree.
+        self.assertFalse((self.harness / '.git').exists())
+        self.assertEqual(sorted(json.loads(self.manifest.read_text())), ['.gitignore', 'package.json'])
+
+    def assert_refused(self, result, message):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('npm-ci-reached', result.stdout)
+        self.assertIn(message, result.stderr)
 
     def test_installs_the_pinned_commit_and_can_repeat(self):
         for _ in range(2):
@@ -88,28 +97,34 @@ class BootstrapRetryTests(unittest.TestCase):
         # exactly the pinned commit.
         (self.harness / 'package.json').write_text('{"name": "edited"}\n')
         (self.harness / 'stray.js').write_text('left behind\n')
-        self.assertEqual(self.git(self.harness, 'rev-parse', 'HEAD'), self.commit)
         self.assert_installed(self.install())
         self.assertFalse((self.harness / 'stray.js').exists())
 
     def test_install_that_changes_the_checkout_is_refused(self):
-        for action in ('echo changed > package.json',
-                       'echo new > generated.js',
-                       'git commit -q --allow-empty -m moved'):
+        for action, message in (
+                ('echo changed > package.json', 'harness file changed during npm ci: package.json'),
+                ('chmod +x package.json', 'harness file changed during npm ci: package.json'),
+                ('rm package.json && ln -s .gitignore package.json', 'harness file changed during npm ci: package.json'),
+                ('rm package.json', 'harness file removed during npm ci: package.json'),
+                ('echo new > generated.js', 'harness file added during npm ci: generated.js'),
+                ('mkdir -p build/cache', 'harness directory added during npm ci: build')):
             with self.subTest(action=action):
-                self.npm('export GIT_AUTHOR_NAME=f GIT_AUTHOR_EMAIL=f@example.invalid '
-                         'GIT_COMMITTER_NAME=f GIT_COMMITTER_EMAIL=f@example.invalid\n' + action)
-                result = self.install()
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('npm-ci-reached', result.stdout)
-                self.assertIn('harness checkout changed during npm ci', result.stderr)
+                self.npm(action)
+                self.assert_refused(self.install(), message)
 
-    def test_git_failure_after_install_is_not_read_as_clean(self):
-        self.npm('rm -rf .git')
+    def test_installer_git_metadata_has_no_effect_on_the_verdict(self):
+        marker = self.root / 'fsmonitor-ran'
+        tamper = ('mkdir -p .git/hooks && printf "[core]\\n\\tfsmonitor = touch %s\\n" > .git/config' % marker)
+        # With a tracked edit, tampered metadata cannot make the tree look clean.
+        self.npm(tamper + ' && echo changed > package.json')
         result = self.install()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('npm-ci-reached', result.stdout)
-
+        self.assertIn('during npm ci', result.stderr)
+        self.assertFalse(marker.exists())
+        # On its own it is an added directory, and nothing ever runs it.
+        self.npm(tamper)
+        self.assert_refused(self.install(), 'harness directory added during npm ci: .git')
+        self.assertFalse(marker.exists())
 
 if __name__ == '__main__':
     unittest.main()

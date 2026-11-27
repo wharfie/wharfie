@@ -171,9 +171,79 @@ timeout 600 npm install --global --ignore-scripts --no-audit --no-fund \
 chown -R root:root /opt/wharfie-soak/node
 chmod -R a+rX,go-w /opt/wharfie-soak/node
 # harness: begin
+# Record or verify the harness tree without git: tracked paths, their kind
+# (file, executable, symlink) and SHA-256. Only node_modules/ may be added.
+harness_manifest() {
+  python3 - "$@" <<'MANIFEST'
+import hashlib, json, os, stat, subprocess, sys
+action, root, manifest = sys.argv[1:4]
+GENERATED = 'node_modules'
+
+def describe(path):
+    info = os.lstat(path)
+    if stat.S_ISLNK(info.st_mode):
+        return ['link', hashlib.sha256(os.fsencode(os.readlink(path))).hexdigest()]
+    if not stat.S_ISREG(info.st_mode):
+        return ['other', '']
+    digest = hashlib.sha256()
+    with open(path, 'rb') as source:
+        for chunk in iter(lambda: source.read(1048576), b''):
+            digest.update(chunk)
+    return ['exec' if info.st_mode & 0o111 else 'file', digest.hexdigest()]
+
+if action == 'record':
+    # Root runs git once, on its own fresh clone, before the installer owns anything.
+    listing = subprocess.run(['git', '-C', root, 'ls-files', '-s', '-z'], check=True,
+                             capture_output=True, timeout=300).stdout
+    kinds = {b'100644': 'file', b'100755': 'exec', b'120000': 'link'}
+    files = {}
+    for entry in filter(None, listing.split(b'\0')):
+        meta, name = entry.split(b'\t', 1)
+        name = name.decode()
+        actual = describe(os.path.join(root, name))
+        if actual[0] != kinds.get(meta.split()[0]):
+            sys.exit('harness entry does not match its commit: ' + name)
+        files[name] = actual
+    with open(manifest, 'x') as output:
+        json.dump(files, output)
+    sys.exit(0)
+
+with open(manifest) as source:
+    files = json.load(source)
+directories = {os.path.dirname(name) for name in files}
+for name in list(directories):
+    while name:
+        name = os.path.dirname(name)
+        directories.add(name)
+seen = set()
+for base, dirnames, filenames in os.walk(root):
+    relative = os.path.relpath(base, root)
+    relative = '' if relative == '.' else relative
+    for name in list(dirnames):
+        path = os.path.join(relative, name)
+        if os.path.islink(os.path.join(base, name)):
+            filenames.append(name)
+            dirnames.remove(name)
+        elif path == GENERATED:
+            dirnames.remove(name)
+        elif path not in directories:
+            sys.exit('harness directory added during npm ci: ' + path)
+    for name in filenames:
+        path = os.path.join(relative, name)
+        if path not in files:
+            sys.exit('harness file added during npm ci: ' + path)
+        if describe(os.path.join(base, name)) != files[path]:
+            sys.exit('harness file changed during npm ci: ' + path)
+        seen.add(path)
+missing = sorted(set(files) - seen)
+if missing:
+    sys.exit('harness file removed during npm ci: ' + missing[0])
+MANIFEST
+}
+
 # Every attempt installs a fresh disposable checkout, so no edit, file or
 # ownership left by an earlier attempt can reach the installed harness.
-rm -rf /opt/wharfie-soak/harness
+rm -rf /opt/wharfie-soak/harness /opt/wharfie-soak/harness-manifest.json
 timeout 300 git clone --no-checkout --filter=blob:none \
   https://github.com/wharfie/wharfie.git /opt/wharfie-soak/harness
 timeout 300 git -C /opt/wharfie-soak/harness fetch --depth=1 origin \
@@ -181,6 +251,11 @@ timeout 300 git -C /opt/wharfie-soak/harness fetch --depth=1 origin \
 git -C /opt/wharfie-soak/harness checkout --detach \
   "$harness_commit"
 [ "$(git -C /opt/wharfie-soak/harness rev-parse HEAD)" = "$harness_commit" ]
+# The manifest lives outside the checkout, in root-owned /opt/wharfie-soak.
+# The git metadata is removed before the installer owns the tree, so no
+# privileged git ever reads anything the installer could write.
+harness_manifest record /opt/wharfie-soak/harness /opt/wharfie-soak/harness-manifest.json
+rm -rf /opt/wharfie-soak/harness/.git
 chown -R wharfie-soak:wharfie-soak /opt/wharfie-soak/harness
 cd /opt/wharfie-soak/harness
 timeout 1200 /usr/sbin/runuser -u wharfie-soak -- env -i \
@@ -188,15 +263,7 @@ timeout 1200 /usr/sbin/runuser -u wharfie-soak -- env -i \
   AWS_EC2_METADATA_DISABLED=true npm ci --no-audit --no-fund
 cd /
 chown -R root:root /opt/wharfie-soak/harness
-# After the install: the same commit, no tracked file changed, and nothing
-# new outside ignored paths such as node_modules. A git failure stops here.
-installed_head=$(git -C /opt/wharfie-soak/harness rev-parse HEAD)
-installed_changes=$(git -C /opt/wharfie-soak/harness status --porcelain --untracked-files=all)
-if [ "$installed_head" != "$harness_commit" ] || [ -n "$installed_changes" ] || \
-    ! git -C /opt/wharfie-soak/harness diff --quiet HEAD --; then
-  echo 'harness checkout changed during npm ci' >&2
-  exit 1
-fi
+harness_manifest verify /opt/wharfie-soak/harness /opt/wharfie-soak/harness-manifest.json
 chmod -R a+rX,go-w /opt/wharfie-soak/harness
 # harness: end
 timeout 900 python3 /opt/wharfie-soak/ops/download_candidate.py
