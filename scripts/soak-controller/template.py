@@ -39,8 +39,22 @@ for attempt in $(seq 1 60); do
   if [ "$attempt" = 60 ]; then exit 1; fi
   sleep 5
 done
-timeout 900 apt-get update -q
-timeout 900 apt-get install -y --no-install-recommends python3-boto3
+# apt-drain: begin
+# Suppress new apt timer runs at once, then wait, boundedly, for one already
+# running; its dpkg is never killed. Bootstrap masks the units later.
+systemctl stop apt-daily.timer apt-daily-upgrade.timer
+for attempt in $(seq 1 150); do
+  # Both must report idle; a oneshot upgrade is "activating" while it runs.
+  states=$(systemctl show -p ActiveState --value apt-daily.service apt-daily-upgrade.service) || states=unknown
+  idle=0
+  for state in $states; do case $state in inactive|failed) idle=$((idle + 1)) ;; esac; done
+  if [ "$idle" = 2 ]; then break; fi
+  if [ "$attempt" = 150 ]; then exit 1; fi
+  sleep 10
+done
+# apt-drain: end
+timeout 900 apt-get -o DPkg::Lock::Timeout=600 update -q
+timeout 1500 apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends python3-boto3
 timeout 1800 python3 - <<'WHARFIE_BUNDLE'
 import hashlib, lzma, json, pathlib, time
 import boto3

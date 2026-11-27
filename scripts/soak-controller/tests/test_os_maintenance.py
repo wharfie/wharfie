@@ -3,6 +3,7 @@
 No package, unit, or cloud operation runs. needrestart's configuration is
 evaluated by the real perl, as needrestart itself evaluates it.
 """
+import contextlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -107,7 +108,8 @@ class OsMaintenanceTests(unittest.TestCase):
         conf.write_text(NEEDRESTART_CONF.replace('@ROOT@', str(self.root)))
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
-        for name, body in (('systemctl', FAKE_SYSTEMCTL), ('timeout', '#!/bin/bash\nshift\nexec "$@"\n')):
+        for name, body in (('systemctl', FAKE_SYSTEMCTL), ('timeout', '#!/bin/bash\nshift\nexec "$@"\n'),
+                           ('sleep', '#!/bin/sh\n')):
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
         self.environment = {'PATH': str(bin_dir) + ':/usr/bin:/bin', 'FAKE_SYSTEMD': str(self.state), 'LANG': 'C'}
@@ -116,6 +118,20 @@ class OsMaintenanceTests(unittest.TestCase):
     def run_section(self, *steps):
         script = 'set -euo pipefail\n' + section().replace('/etc/', str(self.root) + '/etc/') + '\n'.join(steps) + '\n'
         return subprocess.run(['bash', '-c', script], env=self.environment, capture_output=True, text=True, timeout=60)
+
+    @contextlib.contextmanager
+    def unit_state(self, unit, kind, value):
+        """Set one fake unit property for the block, then restore it."""
+        path = self.state / (unit + '.' + kind)
+        original = path.read_text() if path.exists() else None
+        path.write_text(value + '\n')
+        try:
+            yield
+        finally:
+            if original is None:
+                path.unlink()
+            else:
+                path.write_text(original)
 
     def assert_verified(self):
         result = self.run_section('verify_os_maintenance')
@@ -135,7 +151,8 @@ class OsMaintenanceTests(unittest.TestCase):
         self.assertEqual(self.dropin.read_text(), OVERRIDE)
         for unit in UNITS:
             self.assertEqual((self.state / (unit + '.enabled')).read_text().strip(), 'masked')
-            self.assertEqual((self.state / (unit + '.active')).read_text().strip(), 'inactive')
+            active = self.state / (unit + '.active')
+            self.assertEqual(active.read_text().strip() if active.exists() else 'inactive', 'inactive')
         self.assertEqual((self.state / 'unattended-upgrades.service.enabled').read_text().strip(), 'disabled')
         self.assertEqual((self.state / 'unattended-upgrades.service.active').read_text().strip(), 'inactive')
         self.assert_verified()
@@ -147,28 +164,26 @@ class OsMaintenanceTests(unittest.TestCase):
         self.assert_refused('not masked and inactive')
 
     def test_verification_accepts_only_exact_maintenance_unit_states(self):
+        self.disable()
         for unit in UNITS:
             for kind, value in (('enabled', 'enabled'), ('enabled', 'disabled'), ('enabled', 'enabled-runtime'),
                                 ('active', 'active'), ('active', 'activating'), ('active', 'deactivating')):
                 with self.subTest(unit=unit, state=kind + '=' + value):
-                    self.disable()
-                    (self.state / (unit + '.' + kind)).write_text(value + '\n')
-                    self.assert_refused('not masked and inactive: ' + unit)
+                    with self.unit_state(unit, kind, value):
+                        self.assert_refused('not masked and inactive: ' + unit)
         # A unit that finished with an error is not running.
-        self.disable()
         (self.state / 'apt-daily-upgrade.service.active').write_text('failed\n')
         self.assert_verified()
 
     def test_verification_accepts_only_a_stopped_disabled_or_absent_unattended_unit(self):
         name = 'unattended-upgrades.service'
+        self.disable()
         for kind, value in (('enabled', 'enabled'), ('enabled', 'enabled-runtime'), ('enabled', 'static'),
                             ('active', 'active'), ('active', 'activating'), ('active', 'deactivating')):
             with self.subTest(state=kind + '=' + value):
-                self.disable()
-                (self.state / (name + '.' + kind)).write_text(value + '\n')
-                self.assert_refused('unattended-upgrades.service is not disabled')
+                with self.unit_state(name, kind, value):
+                    self.assert_refused('unattended-upgrades.service is not disabled')
         # An image without the unit is supported.
-        self.disable()
         (self.state / (name + '.enabled')).unlink()
         self.assert_verified()
 
@@ -216,11 +231,83 @@ class OsMaintenanceTests(unittest.TestCase):
                 (self.dropin.parent / 'zz-local.conf').write_text(content)
                 self.assert_refused('needrestart may still restart wharfie-soak.service')
 
+    def log(self):
+        return (self.state / 'log').read_text().splitlines()
+
+    def test_running_upgrade_is_waited_for_and_never_stopped(self):
+        # The upgrade is already running: "activating" for three more reads.
+        (self.state / 'apt-daily-upgrade.service.busy').write_text('3\n')
+        self.disable()
+        log = self.log()
+        self.assertEqual(log[0], 'stop apt-daily.timer apt-daily-upgrade.timer')
+        self.assertFalse([line for line in log if line.startswith('stop') and '.service' in line])
+        reads = [i for i, line in enumerate(log) if line.startswith('show') and 'apt-daily-upgrade.service' in line]
+        self.assertGreaterEqual(len(reads), 4)
+        masked = next(i for i, line in enumerate(log) if line.startswith('mask'))
+        self.assertGreater(masked, reads[-1])
+        self.assert_verified()
+
+    def test_upgrade_that_never_finishes_fails_within_the_bound(self):
+        for fail in ('', 'show'):
+            with self.subTest(lookup_failure=bool(fail)):
+                (self.state / 'apt-daily-upgrade.service.busy').write_text('1000000\n')
+                self.environment['FAKE_SYSTEMCTL_FAIL'] = fail
+                script = 'set -euo pipefail\n' + section().replace('/etc/', str(self.root) + '/etc/').replace(
+                    'apt_drain_seconds=1500', 'apt_drain_seconds=0') + 'disable_os_maintenance\n'
+                result = subprocess.run(['bash', '-c', script], env=self.environment, capture_output=True,
+                                        text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('apt maintenance still running after 0s: apt-daily-upgrade.service', result.stderr)
+                self.assertFalse([line for line in self.log() if line.startswith(('stop', 'mask')) and '.service' in line])
+
+    def userdata_drain(self):
+        import sys
+        sys.path.insert(0, str(ROOT))
+        import template
+        from test_controller import config
+        userdata = template.render(config())['Resources']['Controller']['Properties']['UserData']['Fn::Base64']['Fn::Sub']
+        start = userdata.index('# apt-drain: begin\n')
+        drain = userdata[start:userdata.index('# apt-drain: end\n')]
+        return userdata, drain
+
+    def test_userdata_suppresses_timers_and_waits_for_a_running_upgrade_before_apt(self):
+        userdata, drain = self.userdata_drain()
+        self.assertLess(userdata.index('# apt-drain: begin'), userdata.index('apt-get'))
+        (self.state / 'apt-daily-upgrade.service.busy').write_text('3\n')
+        result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + drain], env=self.environment,
+                                capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.log()
+        self.assertEqual(log[0], 'stop apt-daily.timer apt-daily-upgrade.timer')
+        self.assertEqual(len([line for line in log if line.startswith('show')]), 4)
+        self.assertFalse([line for line in log if line.startswith('stop') and '.service' in line])
+        # The real bound is 150 reads 10 s apart; three attempts show its behaviour.
+        self.assertIn('$(seq 1 150)', drain)
+        self.assertIn('"$attempt" = 150', drain)
+        self.assertIn('sleep 10', drain)
+        short = drain.replace('$(seq 1 150)', '$(seq 1 3)').replace('"$attempt" = 150', '"$attempt" = 3')
+        for busy, fail in (('1000000', ''), ('0', 'show')):
+            with self.subTest(busy=busy, fail=fail):
+                (self.state / 'apt-daily-upgrade.service.busy').write_text(busy + '\n')
+                self.environment['FAKE_SYSTEMCTL_FAIL'] = fail
+                result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + short], env=self.environment,
+                                        capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_every_apt_call_waits_for_the_package_lock(self):
+        userdata, _ = self.userdata_drain()
+        for name, text in (('bootstrap.sh', BOOTSTRAP), ('userdata', userdata)):
+            calls = [line for line in text.splitlines() if 'apt-get ' in line and not line.lstrip().startswith('#')]
+            with self.subTest(name=name):
+                self.assertEqual(len(calls), 2)
+                for line in calls:
+                    self.assertIn('apt-get -o DPkg::Lock::Timeout=600 ', line)
+
     def test_bootstrap_disables_maintenance_before_apt_and_verifies_before_ready(self):
         body = BOOTSTRAP[BOOTSTRAP.index('# os-maintenance: end\n'):]
-        self.assertLess(body.index('\ndisable_os_maintenance\n'), body.index('apt-get update'))
+        self.assertLess(body.index('\ndisable_os_maintenance\n'), body.index('apt-get '))
         self.assertLess(body.index('\nverify_os_maintenance\n'), body.index('bootstrap-ready.json'))
-        self.assertGreater(body.index('\nverify_os_maintenance\n'), body.index('apt-get install'))
+        self.assertGreater(body.index('\nverify_os_maintenance\n'), body.index(' install -y'))
 
 
 if __name__ == '__main__':

@@ -11,24 +11,15 @@ harness_commit=$(python3 -c 'import json,re; c=json.load(open("/etc/wharfie-soak
 # OS maintenance must not restart the supervisor during a campaign. On
 # 2026-11-27 apt-daily-upgrade ran unattended-upgrade, and needrestart then
 # restarted wharfie-soak.service, which stopped both full soaks (see README).
-apt_maintenance_units='apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service'
+apt_timers='apt-daily.timer apt-daily-upgrade.timer'
+apt_services='apt-daily.service apt-daily-upgrade.service'
+apt_maintenance_units="$apt_timers $apt_services"
+# Longest wait for an apt run already in progress; dpkg is never killed.
+apt_drain_seconds=1500
 needrestart_conf=/etc/needrestart/needrestart.conf
 needrestart_dropin=/etc/needrestart/conf.d/wharfie-soak.conf
 # needrestart matches each override_rc regex against the unit name.
 needrestart_override='$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;'
-
-disable_os_maintenance() {
-  install -d -m 0755 "$(dirname "$needrestart_dropin")"
-  printf '%s\n' "$needrestart_override" > "$needrestart_dropin"
-  chmod 0644 "$needrestart_dropin"
-  # Stopping the services waits for an upgrade already in progress.
-  timeout 1200 systemctl stop $apt_maintenance_units
-  systemctl mask $apt_maintenance_units
-  if systemctl list-unit-files unattended-upgrades.service --no-legend 2>/dev/null | \
-      awk '{print $1}' | grep -qx unattended-upgrades.service; then
-    timeout 600 systemctl disable --now unattended-upgrades.service
-  fi
-}
 
 # Print "LoadState ActiveState UnitFileState"; fail when systemd cannot answer.
 unit_states() {
@@ -48,6 +39,45 @@ unit_states() {
 maintenance_failure() {
   echo "$1" >&2
   exit 1
+}
+
+# Wait until neither daily service runs. A oneshot upgrade is "activating"
+# while it works, so only inactive or failed counts as finished. Stopping the
+# service would not join it: with KillMode=process its upgrade can outlive it.
+drain_apt_maintenance() {
+  local deadline=$((SECONDS + apt_drain_seconds)) unit states busy
+  while :; do
+    busy=
+    for unit in $apt_services; do
+      if ! states=$(unit_states "$unit"); then
+        busy=$unit
+        continue
+      fi
+      case ${states#* } in
+        inactive\ *|failed\ *) ;;
+        *) busy=$unit ;;
+      esac
+    done
+    [ -z "$busy" ] && return 0
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      maintenance_failure "apt maintenance still running after ${apt_drain_seconds}s: $busy"
+    fi
+    sleep 10
+  done
+}
+
+disable_os_maintenance() {
+  install -d -m 0755 "$(dirname "$needrestart_dropin")"
+  printf '%s\n' "$needrestart_override" > "$needrestart_dropin"
+  chmod 0644 "$needrestart_dropin"
+  # No new timer activation, then let any run already started finish.
+  timeout 120 systemctl stop $apt_timers
+  drain_apt_maintenance
+  systemctl mask $apt_maintenance_units
+  if systemctl list-unit-files unattended-upgrades.service --no-legend 2>/dev/null | \
+      awk '{print $1}' | grep -qx unattended-upgrades.service; then
+    timeout 600 systemctl disable --now unattended-upgrades.service
+  fi
 }
 
 verify_os_maintenance() {
@@ -109,8 +139,9 @@ for attempt in $(seq 1 60); do
   if [ "$attempt" = 60 ]; then exit 1; fi
   sleep 5
 done
-timeout 600 apt-get update -q
-timeout 900 apt-get install -y --no-install-recommends \
+# The drain above leaves no daily run; the lock timeout covers any other holder.
+timeout 900 apt-get -o DPkg::Lock::Timeout=600 update -q
+timeout 1500 apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
   ca-certificates curl git xz-utils openssh-client python3 python3-boto3 \
   build-essential pkg-config libssl-dev
 if ! id wharfie-soak >/dev/null 2>&1; then

@@ -79,7 +79,9 @@ Leaving updates off is acceptable here. The controller is disposable: it lives a
 
   In each combination, every `override_rc` regex that matches `wharfie-soak.service` must deny the restart. Perl hash order is not precedence, so one denying key is not enough. Snippets that branch on any other state, such as other environment variables or files, are unsupported. The verification cannot see them, and the stock image ships none.
 
-Neither the userdata nor cloud-init runs a package upgrade. Both only `apt-get install` fixed packages, before the service is started.
+A daily run may already have started when the controller boots. Before its first `apt-get`, userdata stops the two timers so they start nothing new. It then waits up to 25 minutes for both daily services to report `inactive` or `failed`, and fails if they do not. `apt-daily-upgrade.service` is a oneshot unit, so it reports `activating` while it upgrades. Bootstrap repeats the same bounded wait before masking the units. Neither stage stops or kills a running upgrade: with `KillMode=process`, stopping the service would not end its dpkg work, and killing dpkg could leave packages half-configured. Every `apt-get` call also passes `-o DPkg::Lock::Timeout=600`, so it waits for any other lock holder instead of failing at once. These failures can only fail provisioning before `start`; they cannot stop a running soak.
+
+Neither the userdata nor cloud-init asks for a blanket upgrade. Both only `apt-get install` named packages before the service is started, but installing by name can still upgrade those packages and their dependencies.
 
 The guests are unaffected and left unchanged. Their Wharfie resident is a systemd user service under a lingering `user@UID.service`, which needrestart reports as a user session and never restarts.
 
