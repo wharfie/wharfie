@@ -63,6 +63,31 @@ def canonical_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def git(*arguments):
+    return subprocess.run(['git', '-C', str(HERE), *arguments], stdin=subprocess.DEVNULL,
+                          capture_output=True, timeout=30, check=True).stdout
+
+
+def frozen_operations(head):
+    """Read every operations file once and require the bytes committed at `head`.
+
+    git status compares stat data and index flags, not bytes, and a file can
+    change after it ran. These exact bytes supply both the recorded hashes and
+    the bundle, so `controllerCommit` contains what the controller runs.
+    """
+    contents = {}
+    for name in OPERATIONS_FILES:
+        data = (HERE / name).read_bytes()
+        try:
+            committed = git('cat-file', 'blob', head + ':./' + name)
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError('controller-checkout-commit-unavailable') from None
+        if data != committed:
+            raise RuntimeError('controller-operations-differ-from-commit')
+        contents[name] = data
+    return contents
+
+
 def controller_commit():
     """The commit of the checkout these operations files come from.
 
@@ -70,13 +95,10 @@ def controller_commit():
     an operations file git does not track, would make the commit untrue.
     """
     try:
-        def git(*arguments):
-            return subprocess.run(['git', '-C', str(HERE), *arguments], stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, timeout=30, check=True).stdout
-        head = git('rev-parse', '--verify', 'HEAD^{commit}').strip()
+        head = git('rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
         git('ls-files', '--error-unmatch', '--', *OPERATIONS_FILES)
         changes = git('status', '--porcelain', '--untracked-files=no')
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         raise RuntimeError('controller-checkout-commit-unavailable') from None
     if not re.fullmatch(r'[0-9a-f]{40}', head):
         raise RuntimeError('controller-checkout-commit-unavailable')
@@ -88,6 +110,7 @@ def controller_commit():
 def prepare(options):
     # Refuse before writing anything when the operations provenance is unknown.
     controller = controller_commit()
+    operations = frozen_operations(controller)
     root = options.state.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     preview = read_json(options.preview)
@@ -132,7 +155,7 @@ def prepare(options):
         'tokenParameter': '/wharfie-soak/' + options.campaign + '/hetzner-token',
         'assets': {name: {'size': (assets / name).stat().st_size, 'sha256': sha256(assets / name)}
                    for name in sorted(names)},
-        'operationsFiles': {name: sha256(HERE / name) for name in OPERATIONS_FILES},
+        'operationsFiles': {name: hashlib.sha256(data).hexdigest() for name, data in operations.items()},
     }
     config['specSha256'] = canonical_digest(config)
     # The same rule `apply` and `start` enforce, applied before anything is written.
@@ -141,7 +164,7 @@ def prepare(options):
     if latest_start(config) - created < PROVISION_BUDGET:
         raise RuntimeError('campaign-window-cannot-hold-setup-and-full-soak')
     atomic_json(root / 'campaign.json', config)
-    template = render(config)
+    template = render(config, contents=operations)
     atomic_json(root / 'cloudformation.json', template)
     atomic_json(root / 'ownership.json', {
         'campaignId': config['campaignId'], 'specSha256': config['specSha256'],

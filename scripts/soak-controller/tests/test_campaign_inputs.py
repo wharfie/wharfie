@@ -53,6 +53,11 @@ class CampaignInputTests(unittest.TestCase):
         checkout = patch.object(ops, 'controller_commit', return_value=self.controller)
         checkout.start()
         self.addCleanup(checkout.stop)
+        # The working files stand in for the blobs at that commit.
+        frozen = patch.object(ops, 'frozen_operations', side_effect=lambda _head: {
+            name: (ops.HERE / name).read_bytes() for name in ops.OPERATIONS_FILES})
+        frozen.start()
+        self.addCleanup(frozen.stop)
 
     def prepare(self):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -127,6 +132,22 @@ class CampaignInputTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=30)
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn('npm-ci-reached', result.stdout)
+
+    def test_prepare_hashes_and_bundles_the_frozen_bytes_not_a_later_file(self):
+        committed = {name: (ops.HERE / name).read_bytes() for name in ops.OPERATIONS_FILES}
+        committed['bootstrap.sh'] = b'# committed bytes\n' + committed['bootstrap.sh']
+        ops.frozen_operations.side_effect = lambda head: dict(committed)
+        operator = self.prepare()
+        ops.frozen_operations.assert_called_once_with(self.controller)
+        self.assertEqual(operator.config['operationsFiles']['bootstrap.sh'],
+                         hashlib.sha256(committed['bootstrap.sh']).hexdigest())
+        rendered = template.render(operator.config, contents=committed)
+        self.assertEqual(rendered, ops.read_json(operator.root / 'cloudformation.json'))
+        bundle = json.loads(lzma.decompress(template.runtime_bundle(operator.config, contents=committed)))
+        self.assertEqual(bundle['bootstrap.sh'].encode(), committed['bootstrap.sh'])
+        # The checkout on disk differs from those bytes, so later commands refuse.
+        with self.assertRaisesRegex(RuntimeError, 'reviewed-operations-files-changed'):
+            operator.verify_operations_files()
 
     def test_rejects_wrong_candidate_commit_and_wrong_aws_account(self):
         self.options.commit = '8' * 40
@@ -207,6 +228,27 @@ class ControllerCheckoutCommitTests(unittest.TestCase):
         # Untracked files outside the operations set do not change the commit's content.
         (self.repo / 'notes.txt').write_text('local notes\n')
         self.assertEqual(ops.controller_commit(), self.git('rev-parse', 'HEAD'))
+
+    def test_frozen_bytes_are_the_committed_blobs(self):
+        head = ops.controller_commit()
+        frozen = ops.frozen_operations(head)
+        self.assertEqual(set(frozen), set(ops.OPERATIONS_FILES))
+        for name, data in frozen.items():
+            self.assertEqual(data, (self.here / name).read_bytes())
+
+    def test_operations_bytes_that_differ_from_the_commit_are_refused(self):
+        # An edit after the clean check, as an editor save during prepare.
+        head = ops.controller_commit()
+        (self.here / 'bootstrap.sh').write_text('edited during prepare\n')
+        with self.assertRaisesRegex(RuntimeError, 'controller-operations-differ-from-commit'):
+            ops.frozen_operations(head)
+        self.git('checkout', '--', '.')
+        # git status trusts index flags; the byte comparison does not.
+        self.git('update-index', '--assume-unchanged', 'scripts/soak-controller/supervisor.py')
+        (self.here / 'supervisor.py').write_text('hidden from git status\n')
+        head = ops.controller_commit()
+        with self.assertRaisesRegex(RuntimeError, 'controller-operations-differ-from-commit'):
+            ops.frozen_operations(head)
 
     def test_modified_or_staged_checkout_is_refused(self):
         for staged in (False, True):

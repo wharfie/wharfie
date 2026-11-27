@@ -10,20 +10,24 @@ from policy import document, allow, infrastructure_policy, guest_policy
 RUNTIME_FILES = ('supervisor.py', 'gate.mjs', 'gate_probe.py', 'download_candidate.py', 'bootstrap.sh', 'check_bootstrap.py')
 
 
-def runtime_bundle(config, root=None):
+def runtime_bundle(config, root=None, contents=None):
+    """`contents` holds the operations bytes `prepare` froze; otherwise read `root`."""
     root = root or Path(__file__).resolve().parent
-    contents = {name: (root / name).read_text() for name in RUNTIME_FILES}
+    frozen = contents
+    def text(name):
+        return frozen[name].decode() if frozen is not None else (root / name).read_text()
+    contents = {name: text(name) for name in RUNTIME_FILES}
     # Local source-file hashes validate the operator bundle before launch. They
     # are not runtime inputs; omitting that duplicate high-entropy map keeps the
     # EC2 userdata below its hard16KiB limit without changing executable bytes.
     contents['campaign.json'] = json.dumps({key: value for key, value in config.items()
                                          if key != 'operationsFiles'}, sort_keys=True)
-    contents['wharfie-soak.service'] = (root / 'wharfie-soak.service').read_text()
+    contents['wharfie-soak.service'] = text('wharfie-soak.service')
     return lzma.compress(json.dumps(contents, sort_keys=True).encode(), preset=9)
 
 
-def render(config, root=None):
-    bundle = runtime_bundle(config, root)
+def render(config, root=None, contents=None):
+    bundle = runtime_bundle(config, root, contents)
     expected = {'bucket': config['bucket'], 'key': config['campaignId'] + '/inputs/operations.json.xz',
                 'size': len(bundle), 'sha256': hashlib.sha256(bundle).hexdigest()}
     userdata = '''#!/bin/bash
