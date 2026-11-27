@@ -87,13 +87,9 @@ Leaving the daily APT run off is acceptable here. The controller is disposable: 
 - `systemctl show` answers for every unit. A lookup failure refuses; it is never read as "off".
 - Each of the four units is exactly `LoadState=masked`, `UnitFileState=masked` and `ActiveState` `inactive` (or `failed`, which is not running).
 - `unattended-upgrades.service` is absent (`not-found`), or loaded with `disabled` or `masked` and `inactive`. Any other state refuses, including `enabled-runtime`, `static`, `activating` and `deactivating`.
-- `/etc/needrestart/needrestart.conf` exists and is readable, and the drop-in matches the expected bytes exactly.
-- Perl loads the main configuration, which includes every `conf.d/*.conf`, as needrestart does. It repeats this for every combination of the loader variables a snippet could branch on:
-  - `$opt_m`: `u` (the apt hook's `-m u`), `a` or `e`;
-  - `$opt_r` and `NEEDRESTART_MODE`: unset, `a`, `l` or `i`;
-  - `$opt_b`, `$is_tty` and `$has_pam_systemd`.
-
-  In each combination, every `override_rc` regex that matches `wharfie-soak.service` must deny the restart. Perl hash order is not precedence, so one denying key is not enough. Snippets that branch on any other state, such as other environment variables or files, are unsupported. The verification cannot see them, and the stock image ships none.
+- The drop-in matches the expected bytes exactly.
+- The needrestart configuration is constrained to what can be checked exactly. `/etc/needrestart/needrestart.conf` must have the MD5 recorded for it in the package's conffiles (`dpkg-query -W -f='${Conffiles}' needrestart`). Every other entry in `conf.d/` must be an unmodified packaged conffile; only the drop-in is added. Any local edit, extra snippet, missing file or failed package query fails bootstrap. To change needrestart on the controller, change this rule first.
+- As a positive control, Perl loads that exact configuration as the apt hook does: `$opt_m = 'u'`, `NEEDRESTART_MODE=a`, `$opt_r` unset and `$nrconf{has_pam_systemd}` set, as observed on Noble with needrestart 3.6-7ubuntu4.6. Every `override_rc` regex that matches `wharfie-soak.service` must deny the restart, because Perl hash order is not precedence.
 
 A daily run may already have started when the controller boots. Before its first `apt-get`, userdata stops the two timers so they start nothing new. It then waits up to 25 minutes for both daily services to report `inactive` or `failed`, and fails if they do not. `apt-daily-upgrade.service` is a oneshot unit, so it reports `activating` while it upgrades. Bootstrap repeats the same bounded wait before masking the units. Neither stage stops or kills a running upgrade: with `KillMode=process`, stopping the service would not end its dpkg work, and killing dpkg could leave packages half-configured. Every `apt-get` call also passes `-o DPkg::Lock::Timeout=600`, so it waits for any other lock holder instead of failing at once. These failures can only fail provisioning before `start`; they cannot stop a running soak.
 

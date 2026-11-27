@@ -4,6 +4,7 @@ No package, unit, or cloud operation runs. needrestart's configuration is
 evaluated by the real perl, as needrestart itself evaluates it.
 """
 import contextlib
+import hashlib
 from pathlib import Path
 import subprocess
 import tempfile
@@ -106,10 +107,15 @@ class OsMaintenanceTests(unittest.TestCase):
         conf = self.root / 'etc/needrestart/needrestart.conf'
         conf.parent.mkdir(parents=True)
         conf.write_text(NEEDRESTART_CONF.replace('@ROOT@', str(self.root)))
+        self.conf = conf
+        self.conffiles = {}
+        self.package(conf)
         bin_dir = self.root / 'bin'
         bin_dir.mkdir()
         for name, body in (('systemctl', FAKE_SYSTEMCTL), ('timeout', '#!/bin/bash\nshift\nexec "$@"\n'),
-                           ('sleep', '#!/bin/sh\n')):
+                           ('sleep', '#!/bin/sh\n'),
+                           ('dpkg-query', '#!/bin/sh\n[ -z "$FAKE_DPKG_FAIL" ] || exit 1\n'
+                                          '[ "$3" = needrestart ] || exit 2\ncat "$FAKE_SYSTEMD/conffiles"\n')):
             (bin_dir / name).write_text(body)
             (bin_dir / name).chmod(0o755)
         self.environment = {'PATH': str(bin_dir) + ':/usr/bin:/bin', 'FAKE_SYSTEMD': str(self.state), 'LANG': 'C'}
@@ -118,6 +124,18 @@ class OsMaintenanceTests(unittest.TestCase):
     def run_section(self, *steps):
         script = 'set -euo pipefail\n' + section().replace('/etc/', str(self.root) + '/etc/') + '\n'.join(steps) + '\n'
         return subprocess.run(['bash', '-c', script], env=self.environment, capture_output=True, text=True, timeout=60)
+
+    def package(self, path, content=None):
+        """Write `content` and record it as an unmodified packaged conffile."""
+        if content is not None:
+            # A fixture that does not compile would pass the control vacuously.
+            check = subprocess.run(['perl', '-c', '-e', content], capture_output=True, text=True)
+            self.assertEqual(check.returncode, 0, check.stderr)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.conffiles[str(path)] = hashlib.md5(path.read_bytes()).hexdigest()
+        (self.state / 'conffiles').write_text(
+            ''.join(' %s %s\n' % item for item in self.conffiles.items()))
 
     @contextlib.contextmanager
     def unit_state(self, unit, kind, value):
@@ -192,25 +210,48 @@ class OsMaintenanceTests(unittest.TestCase):
         self.environment['FAKE_SYSTEMCTL_FAIL'] = 'show'
         self.assert_refused('OS maintenance unit state unavailable: apt-daily.timer')
 
-    def test_verification_requires_the_main_needrestart_configuration(self):
+    def test_only_the_packaged_configuration_plus_the_override_is_supported(self):
+        refused = 'needrestart configuration is not the packaged set plus the override'
+        snippet = self.conf.parent / 'conf.d/local.conf'
         self.disable()
-        (self.root / 'etc/needrestart/needrestart.conf').unlink()
-        self.assert_refused('needrestart configuration is not readable')
-
-    def test_verification_evaluates_conditional_snippets_in_every_loader_context(self):
-        # The apt hook runs `needrestart -m u`; a snippet that undoes the
-        # override only there, or only without a TTY, must still refuse.
-        for content in ("$nrconf{override_rc} = {} if $opt_m eq 'u';\n",
-                        "delete $nrconf{override_rc}->{$_} for grep { /wharfie/ } keys %{$nrconf{override_rc}} unless $is_tty;\n",
-                        "$nrconf{override_rc} = {} if ($ENV{NEEDRESTART_MODE} // '') eq 'a';\n"):
-            with self.subTest(content=content):
-                self.disable()
-                (self.dropin.parent / 'zz-local.conf').write_text(content)
-                self.assert_refused('needrestart may still restart wharfie-soak.service')
-        # A conditional snippet that keeps the override everywhere passes.
-        self.disable()
-        (self.dropin.parent / 'zz-local.conf').write_text("$nrconf{restart} = 'l' if $opt_m eq 'u';\n")
         self.assert_verified()
+        # An unmodified packaged snippet is allowed.
+        self.package(snippet, "$nrconf{restart} = 'l';\n")
+        self.assert_verified()
+        # A modified packaged snippet, or any unpackaged one, is not.
+        snippet.write_text("$nrconf{restart} = 'a';\n")
+        self.assert_refused(refused)
+        del self.conffiles[str(snippet)]
+        self.package(self.conf)
+        self.assert_refused(refused)
+        snippet.unlink()
+        self.assert_verified()
+        # A modified or missing main file, or no package answer, refuses.
+        original = self.conf.read_text()
+        self.conf.write_text(original + '# local edit\n')
+        self.assert_refused(refused)
+        self.conf.unlink()
+        self.assert_refused(refused)
+        self.conf.write_text(original)
+        self.environment['FAKE_DPKG_FAIL'] = '1'
+        self.assert_refused(refused)
+
+    def test_positive_control_evaluates_the_apt_hook_context(self):
+        # The packaged main file is trusted only as far as this evaluation:
+        # a rule that undoes the override in the apt hook's context refuses.
+        self.disable()
+        original = self.conf.read_text()
+        for condition, refused in (("$opt_m eq 'u'", True),
+                                   ("($ENV{NEEDRESTART_MODE} // '') eq 'a'", True),
+                                   ("$nrconf{has_pam_systemd}", True),
+                                   ("!defined $opt_r", True),
+                                   ("$opt_m eq 'e'", False)):
+            with self.subTest(condition=condition):
+                self.package(self.conf, original + '$nrconf{override_rc} = {} if ' + condition + ';\n')
+                if refused:
+                    self.assert_refused('needrestart may still restart wharfie-soak.service')
+                else:
+                    self.assert_verified()
 
     def test_verification_fails_when_the_override_is_missing_or_not_exact(self):
         for content in (None, OVERRIDE.replace('= 0', '= 1'), OVERRIDE.replace('^wharfie', 'wharfie'),
@@ -229,7 +270,8 @@ class OsMaintenanceTests(unittest.TestCase):
             with self.subTest(content=content):
                 self.disable()
                 (self.dropin.parent / 'zz-local.conf').write_text(content)
-                self.assert_refused('needrestart may still restart wharfie-soak.service')
+                self.assert_refused('needrestart configuration is not the packaged set plus the override')
+                (self.dropin.parent / 'zz-local.conf').unlink()
 
     def log(self):
         return (self.state / 'log').read_text().splitlines()

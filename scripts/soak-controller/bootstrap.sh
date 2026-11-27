@@ -97,31 +97,48 @@ verify_os_maintenance() {
     'not-found inactive -'|'loaded inactive disabled'|'loaded inactive masked'|'masked inactive masked') ;;
     *) maintenance_failure "unattended-upgrades.service is not disabled ($states)" ;;
   esac
-  [ -f "$needrestart_conf" ] && [ -r "$needrestart_conf" ] || \
-    maintenance_failure "needrestart configuration is not readable: $needrestart_conf"
   if ! printf '%s\n' "$needrestart_override" | cmp -s - "$needrestart_dropin"; then
     maintenance_failure "needrestart override is not exact: $needrestart_dropin"
   fi
-  # Evaluate the configuration as needrestart loads it: every override_rc
-  # regex that matches the unit must deny the restart. The apt hook runs
-  # `needrestart -m u`; other callers differ. A snippet that branches on these
-  # loader variables is evaluated in every combination of them; snippets that
-  # branch on anything else are unsupported (see README).
+  # Only a configuration we can evaluate exactly is supported: the packaged
+  # main file, unmodified, and in conf.d only unmodified packaged files plus
+  # our drop-in. Anything else fails bootstrap (see README).
+  if ! python3 - "$needrestart_conf" "$needrestart_dropin" <<'CONFFILES'
+import hashlib, os, subprocess, sys
+main, dropin = sys.argv[1:3]
+listing = subprocess.run(['dpkg-query', '-W', '-f=${Conffiles}\n', 'needrestart'], check=True,
+                         capture_output=True, text=True, timeout=60).stdout
+# " <path> <md5>"; obsolete or remove-on-upgrade entries carry a third field.
+packaged = {fields[0]: fields[1] for fields in map(str.split, listing.splitlines()) if len(fields) == 2}
+def md5(path):
+    with open(path, 'rb') as source:
+        return hashlib.md5(source.read()).hexdigest()
+if packaged.get(main) != md5(main):
+    sys.exit('needrestart.conf differs from the packaged file')
+directory = os.path.dirname(dropin)
+for name in sorted(os.listdir(directory)):
+    path = os.path.join(directory, name)
+    if path != dropin and packaged.get(path) != md5(path):
+        sys.exit('needrestart snippet is not an unmodified packaged file: ' + name)
+CONFFILES
+  then
+    maintenance_failure 'needrestart configuration is not the packaged set plus the override'
+  fi
+  # Positive control: load that exact set as the apt hook does (`needrestart
+  # -m u`, NEEDRESTART_MODE=a, has_pam_systemd set on Noble). Every
+  # override_rc regex that matches the unit must deny the restart; Perl hash
+  # order is not precedence.
   if ! perl - "$needrestart_conf" <<'PERL'
-our (%nrconf, $opt_m, $opt_r, $opt_b, $is_tty, $has_pam_systemd);
+our (%nrconf, $opt_m, $opt_r);
 my $file = shift;
 my $config = do { local $/; open my $handle, '<', $file or die; <$handle> };
-for my $m ('u', 'a', 'e') { for my $r (undef, 'a', 'l', 'i') { for my $b (undef, 1) {
-for my $tty (0, 1) { for my $pam (0, 1) {
-  ($opt_m, $opt_r, $opt_b, $is_tty, $has_pam_systemd) = ($m, $r, $b, $tty, $pam);
-  local $ENV{NEEDRESTART_MODE} = $r if defined $r;
-  %nrconf = (override_rc => {}, override_cont => {}, blacklist_rc => [], restart => 'i');
-  eval $config;
-  die $@ if $@;
-  my @matches = grep { 'wharfie-soak.service' =~ /$_/ } keys %{$nrconf{override_rc}};
-  exit 1 unless @matches && !grep { $nrconf{override_rc}{$_} } @matches;
-} } } } }
-exit 0;
+$opt_m = 'u';
+$ENV{NEEDRESTART_MODE} = 'a';
+%nrconf = (override_rc => {}, override_cont => {}, blacklist_rc => [], restart => 'i', has_pam_systemd => 1);
+eval $config;
+die $@ if $@;
+my @matches = grep { 'wharfie-soak.service' =~ /$_/ } keys %{$nrconf{override_rc}};
+exit((@matches && !grep { $nrconf{override_rc}{$_} } @matches) ? 0 : 1);
 PERL
   then
     maintenance_failure 'needrestart may still restart wharfie-soak.service'
