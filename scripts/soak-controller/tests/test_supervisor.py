@@ -1,4 +1,5 @@
 """Local-only supervisor regressions: no SDK, network, or real credentials."""
+import contextlib
 import hashlib
 import inspect
 import importlib.util
@@ -8,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import signal
+import subprocess
 import tarfile
 import tempfile
 import threading
@@ -138,23 +140,79 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(supervisor.STOP_REASON['cause'], 'signal')
         self.assertEqual(supervisor.STOP_REASON['signal'], 15)
 
+    @contextlib.contextmanager
+    def signal_handlers(self):
+        """Install the service's real handlers, self-pipe and watcher; restore after."""
+        previous = {sig: signal.getsignal(sig) for sig in supervisor.SIGNAL_CAUSES}
+        watcher = supervisor.install_signal_handlers()
+        try:
+            yield watcher
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+            read_fd, write_fd = supervisor.SIGNAL_PIPE
+            supervisor.SIGNAL_PIPE = None
+            supervisor.FIRST_SIGNAL = None
+            os.close(write_fd)
+            watcher.join(5)
+            os.close(read_fd)
+
     def test_signal_handler_records_a_fixed_signal_reason(self):
         for signum, cause in ((signal.SIGTERM, 'signal-SIGTERM'), (signal.SIGINT, 'signal-SIGINT'),
                               (signal.SIGHUP, 'signal-SIGHUP')):
-            with self.subTest(cause=cause):
+            with self.subTest(cause=cause), self.signal_handlers():
                 supervisor.STOP.clear()
                 supervisor.STOP_REASON = None
                 supervisor.stop_for_signal(signum, None)
-                self.assertTrue(supervisor.STOP.is_set())
+                self.assertTrue(supervisor.STOP.wait(5))
                 self.assertEqual(supervisor.STOP_REASON['cause'], cause)
                 self.assertEqual(supervisor.STOP_REASON['signal'], int(signum))
-        # The service installs exactly this handler.
-        self.assertIn('signal.signal(sig, stop_for_signal)', inspect.getsource(supervisor.main))
+                # Only the first signal is the cause.
+                supervisor.stop_for_signal(signal.SIGINT if signum != signal.SIGINT else signal.SIGTERM, None)
+                self.assertEqual(supervisor.STOP_REASON['cause'], cause)
+        self.assertIn('install_signal_handlers()', inspect.getsource(supervisor.main))
 
-    def test_signal_stop_reason_reaches_the_outcome_and_survives_a_restarted_finish(self):
-        # 2026-11-27: needrestart restarted the service during a soak wait. The
-        # restarted supervisor finished again and erased the recorded reason.
-        label = 'soak-aws'
+    def test_signal_handler_never_takes_the_stop_event_lock(self):
+        # The handler can run while the main thread holds STOP's condition lock
+        # inside Event.wait or Event.set; it must still return.
+        script = (
+            'import importlib.util, signal, sys\n'
+            'spec = importlib.util.spec_from_file_location("s", sys.argv[1])\n'
+            's = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)\n'
+            's.install_signal_handlers()\n'
+            'with s.STOP._cond:\n'
+            '    s.stop_for_signal(signal.SIGTERM, None)\n'
+            'print("handler-returned", flush=True)\n'
+            'print(s.STOP.wait(5), s.STOP_REASON["cause"])\n')
+        self.process_patch.stop()
+        result = subprocess.run([sys.executable, '-c', script, str(MODULE_PATH)], capture_output=True,
+                                text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ['handler-returned', 'True', 'signal-SIGTERM'])
+
+    def test_real_signal_during_a_main_thread_wait_stops_with_its_cause(self):
+        campaign = self.campaign()
+        label = 'rehearsal-aws'
+        started = int(time.time() * 1000)
+        self.write(supervisor.safe_relative_run(label) / 'soak.json', {
+            'startedAt': started, 'endAt': started + 900000 + 300000, 'intervalMs': 900000,
+            'completed': [{}], 'pending': None, 'complete': False,
+        })
+        with self.signal_handlers():
+            timer = threading.Timer(0.5, os.kill, (os.getpid(), signal.SIGTERM))
+            timer.start()
+            began = time.monotonic()
+            try:
+                with self.assertRaises(supervisor.CampaignStopped) as raised:
+                    campaign.wait_for_tick(label)
+            finally:
+                timer.cancel()
+        self.assertLess(time.monotonic() - began, 10)
+        self.assertEqual(raised.exception.cause, 'signal-SIGTERM')
+        # Persisted when observed, before any settlement.
+        self.assertEqual(supervisor.read_json(campaign.state_path)['stopReason']['cause'], 'signal-SIGTERM')
+
+    def running_rehearsal(self, label='rehearsal-aws'):
         run_dir = self.run_fixture(label)
         self.write(run_dir / 'report.json', {'status': 'running', 'workspaceRemoved': False,
                                              'cleanup': {'status': 'unknown'}})
@@ -162,38 +220,222 @@ class SupervisorTests(unittest.TestCase):
         self.write(run_dir / 'soak.json', {'startedAt': started, 'endAt': started + 3600000,
                                            'intervalMs': 900000, 'completed': [{}], 'pending': None,
                                            'complete': False})
+        return run_dir
+
+    def reset_process(self):
+        """A fresh supervisor process: no stop requested in memory."""
+        supervisor.STOP.clear()
+        supervisor.STOP_REASON = None
+
+    def test_signal_stop_reason_reaches_the_outcome_and_survives_a_restarted_run(self):
+        # 2026-11-27: needrestart restarted the service during a soak wait. The
+        # restarted supervisor finished again and erased the recorded reason.
+        label = 'soak-aws'
+        run_dir = self.running_rehearsal(label)
         campaign = self.campaign()
+        saved_at_cleanup = []
 
         def clean(_label, _arguments, cleanup=False):
             self.assertTrue(cleanup)
+            # The campaign cause is on disk before any cleanup or export.
+            saved_at_cleanup.append(supervisor.read_json(campaign.state_path).get('stopReason'))
             self.cleanup_success(run_dir)
             return 0
 
+        def signalled(_seconds):
+            supervisor.request_stop('signal-SIGTERM', 15)
+
         with patch.object(campaign, 'export_observation'), \
              patch.object(campaign, 'invoke', side_effect=clean), \
-             patch.object(supervisor.STOP, 'wait', side_effect=lambda _seconds: supervisor.stop_for_signal(signal.SIGTERM)):
+             patch.object(supervisor.STOP, 'wait', side_effect=signalled):
             outcome = campaign.run_one(label)
+        self.assertEqual(saved_at_cleanup[0]['cause'], 'signal-SIGTERM')
         self.assertEqual(outcome['status'], 'failed')
-        self.assertEqual(outcome['failureType'], 'RuntimeError')
+        self.assertEqual(outcome['failureType'], 'CampaignStopped')
         self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
         self.assertTrue(outcome['cleanupVerifiedAbsent'])
-        campaign.export_controller()
-        diagnostics = json.loads(self.client.objects['fixture-campaign/supervisor-diagnostics.json'])
-        self.assertEqual(diagnostics['stopReason']['cause'], 'signal-SIGTERM')
         self.assertEqual(campaign.finish(), 0)
-        recorded = supervisor.read_json(campaign.state_path)['stopReason']
-        self.assertEqual(recorded['cause'], 'signal-SIGTERM')
-        self.assertEqual(recorded['signal'], 15)
+        first = supervisor.read_json(campaign.state_path)
+        self.assertEqual(first['stopReason']['cause'], 'signal-SIGTERM')
+        self.assertEqual(first['stopReason']['signal'], 15)
 
-        # The restarted process was never asked to stop and finishes again.
-        supervisor.STOP.clear()
-        supervisor.STOP_REASON = None
+        # The restarted process was never asked to stop. It enters through run().
+        self.reset_process()
         restarted = self.campaign()
-        self.assertEqual(restarted.finish(), 0)
+        with patch.object(restarted, 'invoke') as invoke:
+            self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        restarted.diagnostic_thread.join(5)
         for summary in (supervisor.read_json(restarted.state_path),
                         json.loads(self.client.objects['fixture-campaign/supervisor.json'])):
-            self.assertEqual(summary['stopReason'], recorded)
-            self.assertEqual(summary['runs'][label]['stopReason'], 'signal-SIGTERM')
+            self.assertEqual(summary['stopReason'], first['stopReason'])
+            self.assertEqual((summary['finishedAt'], summary['status']), (first['finishedAt'], 'failed'))
+            self.assertEqual(summary['runs'], first['runs'])
+            self.assertEqual(summary['replays'], 1)
+        # The post-restart diagnostics keep the campaign cause.
+        diagnostics = json.loads(self.client.objects['fixture-campaign/supervisor-diagnostics.json'])
+        self.assertEqual(diagnostics['pid'], os.getpid())
+        self.assertEqual(diagnostics['stopReason'], first['stopReason'])
+        self.assertEqual(diagnostics['status'], 'failed')
+        self.assertTrue(diagnostics['processStopRequested'])
+        self.assertNotIn('stopRequested', diagnostics)
+
+    def test_terminal_campaign_restart_never_launches_a_missing_run(self):
+        # Finished failed: rehearsals passed, the AWS soak failed with progress
+        # and an unexported proof, and the Hetzner soak never started.
+        campaign = self.campaign()
+        for label in ('rehearsal-aws', 'rehearsal-hetzner'):
+            self.saved_outcome(campaign, label, passed=True, settled=True)
+        run_dir = self.run_fixture('soak-aws')
+        self.cleanup_success(run_dir)
+        campaign.state['runs']['soak-aws'] = {
+            'provider': 'aws', 'label': 'soak-aws', 'status': 'failed', 'cleanupVerifiedAbsent': True,
+            'proofExported': False, 'settlementAttempts': 1}
+        campaign.state.update(status='failed', finishedAt=1795760500.0)
+        campaign.save()
+        restarted = self.campaign()
+        exports = []
+
+        def slow_export(label, recovery=False):
+            exports.append(label)
+            time.sleep(0.5)
+
+        with patch.object(restarted, 'invoke') as invoke, \
+             patch.object(restarted, 'export_run', side_effect=slow_export):
+            self.assertEqual(restarted.run(), 0)
+        invoke.assert_not_called()
+        self.assertEqual(exports, ['soak-aws'])
+        state = supervisor.read_json(restarted.state_path)
+        self.assertNotIn('soak-hetzner', state['runs'])
+        self.assertFalse(supervisor.safe_relative_run('soak-hetzner').exists())
+        self.assertEqual((state['status'], state['finishedAt']), ('failed', 1795760500.0))
+        self.assertTrue(state['runs']['soak-aws']['proofExported'])
+
+    def test_stop_latched_before_finish_survives_restart_and_allows_only_settlement(self):
+        label = 'rehearsal-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+
+        def dies_during_cleanup(_label, _arguments, cleanup=False):
+            raise SystemExit(143)
+
+        def interrupted(_seconds):
+            supervisor.request_stop('signal-SIGINT', 2)
+
+        # Restart before settlement completes: the process dies in cleanup.
+        with patch.object(campaign, 'export_observation'), \
+             patch.object(campaign, 'invoke', side_effect=dies_during_cleanup), \
+             patch.object(supervisor.STOP, 'wait', side_effect=interrupted), \
+             self.assertRaises(SystemExit):
+            campaign.run_one(label)
+        saved = supervisor.read_json(campaign.state_path)
+        self.assertEqual(saved['stopReason']['cause'], 'signal-SIGINT')
+        self.assertNotIn('finishedAt', saved)
+
+        self.reset_process()
+        restarted = self.campaign()
+        calls = []
+
+        def clean(request_label, arguments, cleanup=False):
+            calls.append((request_label, arguments, cleanup))
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(restarted, 'invoke', side_effect=clean):
+            self.assertEqual(restarted.run(), 0)
+        self.assertEqual(calls, [(label, ['--cleanup', str(run_dir)], True)])
+        self.assertTrue(supervisor.STOP.is_set())
+        state = supervisor.read_json(restarted.state_path)
+        self.assertEqual(state['stopReason']['cause'], 'signal-SIGINT')
+        self.assertEqual(state['status'], 'failed')
+        self.assertEqual(set(state['runs']), {label})
+        self.assertTrue(state['runs'][label]['cleanupVerifiedAbsent'])
+        self.assertTrue(state['runs'][label]['proofExported'])
+
+        # Restart after settlement is saved but before finish: nothing to do.
+        del state['finishedAt'], state['status']
+        supervisor.atomic_json(restarted.state_path, state)
+        self.reset_process()
+        again = self.campaign()
+        with patch.object(again, 'invoke') as invoke:
+            self.assertEqual(again.run(), 0)
+        invoke.assert_not_called()
+        final = supervisor.read_json(again.state_path)
+        self.assertEqual(final['stopReason']['cause'], 'signal-SIGINT')
+        self.assertEqual(final['status'], 'failed')
+        self.assertEqual(final['runs'], state['runs'])
+
+    def test_run_interrupted_before_its_outcome_was_saved_is_settled_never_resumed(self):
+        label = 'rehearsal-aws'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        supervisor.request_stop('signal-SIGTERM', 15)
+        campaign.record_stop()
+        self.reset_process()
+        restarted = self.campaign()
+        calls = []
+
+        def clean(request_label, arguments, cleanup=False):
+            calls.append(arguments)
+            self.cleanup_success(run_dir)
+            return 0
+
+        with patch.object(restarted, 'invoke', side_effect=clean):
+            restarted.run()
+        self.assertEqual(calls, [['--cleanup', str(run_dir)]])
+        outcome = supervisor.read_json(restarted.state_path)['runs'][label]
+        self.assertEqual(outcome['failureReason'], 'outcome-not-saved-before-stop')
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertEqual(outcome['status'], 'failed')
+
+    def fixture_runner(self, seconds):
+        runner = self.root / 'fixture-runner.py'
+        runner.write_text('import time\nprint("fixture-running", flush=True)\ntime.sleep(%d)\n' % seconds)
+        self.process_patch.stop()
+        return patch.multiple(supervisor, NODE=sys.executable, RUNNER=str(runner), HARNESS=str(self.root))
+
+    def test_signal_while_a_child_runs_reaches_the_run_outcome(self):
+        campaign = self.campaign()
+        timer = threading.Timer(0.5, supervisor.request_stop, ('signal-SIGTERM', 15))
+        with self.fixture_runner(30), patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            timer.start()
+            try:
+                outcome = campaign.run_one('rehearsal-aws')
+            finally:
+                timer.cancel()
+        self.assertEqual(outcome['stopReason'], 'signal-SIGTERM')
+        self.assertEqual(supervisor.read_json(campaign.state_path)['stopReason']['cause'], 'signal-SIGTERM')
+
+    def test_deadline_and_child_timeout_are_distinct_from_a_stop(self):
+        # Campaign deadline already passed at entry, with no signal.
+        campaign = self.campaign()
+        campaign.deadline = time.time() - 1
+        with patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome), \
+             patch.object(campaign, 'invoke') as invoke:
+            outcome = campaign.run_one('rehearsal-aws')
+        invoke.assert_not_called()
+        self.assertEqual((outcome['failureType'], outcome['stopReason']), ('CampaignStopped', 'campaign-deadline'))
+        self.assertFalse(supervisor.STOP.is_set())
+        self.assertNotIn('stopReason', supervisor.read_json(campaign.state_path))
+        # The campaign deadline expires while a child runs.
+        campaign = self.campaign()
+        campaign.deadline = time.time() + 1
+        campaign.monotonic_deadline = time.monotonic() + 1
+        with self.fixture_runner(30), patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            outcome = campaign.run_one('rehearsal-aws')
+        self.assertEqual(outcome['stopReason'], 'campaign-deadline')
+        # The child's own operation budget expires; the campaign continues.
+        label = 'soak-hetzner'
+        run_dir = self.running_rehearsal(label)
+        campaign = self.campaign()
+        with self.fixture_runner(30), patch.object(supervisor, 'RESUME_BUDGET', 1), \
+             patch.object(campaign, 'export_observation'), patch.object(campaign, 'wait_for_tick'), \
+             patch.object(campaign, 'settle', side_effect=lambda _label, outcome: outcome):
+            outcome = campaign.run_one(label)
+        self.assertEqual((outcome['observerExitCode'], outcome['stopReason']), (124, 'child-operation-timeout'))
+        self.assertFalse(supervisor.STOP.is_set())
+        self.assertNotIn('stopReason', supervisor.read_json(campaign.state_path))
+        self.assertTrue(run_dir.exists())
 
     def test_exports_bounded_real_log_bytes_and_fsynced_lifecycle_events(self):
         campaign = self.campaign()

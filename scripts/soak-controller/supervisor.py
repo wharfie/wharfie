@@ -25,6 +25,12 @@ CANDIDATE = '/opt/wharfie-soak/candidate'
 MAX_JSON = 262144
 STOP = threading.Event()
 STOP_REASON = None
+STOP_LOCK = threading.Lock()
+# The fixed cause recorded for each handled signal.
+SIGNAL_CAUSES = {signal.SIGTERM: 'signal-SIGTERM', signal.SIGINT: 'signal-SIGINT', signal.SIGHUP: 'signal-SIGHUP'}
+# Written only by the signal handler; read by the watcher thread.
+FIRST_SIGNAL = None
+SIGNAL_PIPE = None
 REPORT_NAMES = (
     'run.json', 'report.json', 'cleanup-report.json', 'retirement.json',
     'failure.json', 'soak-progress.json', 'soak.json', 'preview.json',
@@ -32,6 +38,7 @@ REPORT_NAMES = (
     'gate-request.json', 'gate-approved.json',
 )
 SOAK_HOURS = (48, 72)
+LABELS = ('rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner')
 # Observation exports retried after a failure, and the first backoff in seconds.
 # No retry starts once EXPORT_RETRY_ALLOWANCE has passed since the first attempt.
 EXPORT_ATTEMPTS = 4
@@ -62,17 +69,69 @@ NEVER_CREATED_PHASES = frozenset(PRE_APPLY_PHASES + ('prepare-removal', 'remove-
 
 
 def request_stop(cause, signum=None):
+    # Never called from a signal handler: it takes thread locks.
     global STOP_REASON
-    if STOP_REASON is None:
-        STOP_REASON = {'cause': cause, 'signal': signum, 'at': time.time(),
-                       'monotonicAt': time.monotonic()}
+    with STOP_LOCK:
+        if STOP_REASON is None:
+            STOP_REASON = {'cause': cause, 'signal': signum, 'at': time.time(),
+                           'monotonicAt': time.monotonic()}
     STOP.set()
 
 
+def stop_cause():
+    reason = STOP_REASON
+    return reason['cause'] if reason else 'campaign-stop'
+
+
 def stop_for_signal(signum, _frame=None):
-    # A fixed reason such as `signal-SIGTERM`: systemd and needrestart stop the
-    # service with SIGTERM, so the summary must say a signal ended the campaign.
-    request_stop('signal-' + signal.Signals(signum).name, signum)
+    """Record the first signal and wake the watcher; take no thread lock.
+
+    The handler runs on the main thread between bytecodes, possibly while that
+    thread holds STOP's condition lock inside Event.wait or Event.set, so
+    calling STOP.set() here could deadlock. The watcher thread sets STOP.
+    """
+    global FIRST_SIGNAL
+    if FIRST_SIGNAL is None:
+        FIRST_SIGNAL = signum
+    pipe = SIGNAL_PIPE
+    if pipe is not None:
+        try:
+            os.write(pipe[1], b'\0')
+        except OSError:
+            pass
+
+
+def install_signal_handlers():
+    """A self-pipe and one watcher thread turn signals into a fixed stop cause."""
+    global SIGNAL_PIPE
+    read_fd, write_fd = os.pipe()
+    os.set_blocking(write_fd, False)
+    SIGNAL_PIPE = (read_fd, write_fd)
+
+    def watch():
+        while True:
+            try:
+                if not os.read(read_fd, 64):
+                    return
+            except OSError:
+                return
+            signum = FIRST_SIGNAL
+            # systemd and needrestart stop the service with SIGTERM, so the
+            # summary must say a signal ended the campaign.
+            request_stop(SIGNAL_CAUSES.get(signum, 'signal'), None if signum is None else int(signum))
+
+    watcher = threading.Thread(target=watch, daemon=True, name='signal-watch')
+    watcher.start()
+    for sig in SIGNAL_CAUSES:
+        signal.signal(sig, stop_for_signal)
+    return watcher
+
+
+class CampaignStopped(RuntimeError):
+    """A campaign stop or deadline ended a run; `cause` is a fixed string."""
+    def __init__(self, message, cause):
+        super().__init__(message)
+        self.cause = cause
 
 
 class CampaignTimeRefused(RuntimeError):
@@ -319,6 +378,29 @@ class Campaign:
         self.diagnostic_lock = threading.Lock()
         self.diagnostic_thread = None
         self.diagnostic_start_lock = threading.Lock()
+        # The fixed cause of the latest supervisor-terminated child, per label.
+        self.terminations = {}
+
+    def deadline_reached(self):
+        return time.time() >= self.deadline or time.monotonic() >= self.monotonic_deadline
+
+    def campaign_cause(self):
+        """Why the campaign can no longer continue a run: a stop, else its deadline."""
+        return stop_cause() if STOP.is_set() else 'campaign-deadline'
+
+    def record_stop(self):
+        """Persist the first campaign stop before any cleanup or network work.
+
+        A later process restores it as a latched stop, so the cause survives a
+        restart even when this process dies before `finish`.
+        """
+        reason = STOP_REASON
+        if reason is None or self.state.get('stopReason'):
+            return
+        with self.lock:
+            if not self.state.get('stopReason'):
+                self.state['stopReason'] = reason
+                self.save()
 
     def event(self, label, kind, **fields):
         """Best-effort fixed diagnostics must never block lifecycle actions."""
@@ -375,7 +457,10 @@ class Campaign:
         usage = shutil.disk_usage(ROOT)
         value = {'campaignId': self.config['campaignId'], 'at': time.time(),
                  'monotonicAt': time.monotonic(), 'pid': os.getpid(),
-                 'stopRequested': STOP.is_set(), 'stopReason': STOP_REASON,
+                 # The campaign's persisted cause, then this process's own state.
+                 'status': self.state.get('status'),
+                 'stopReason': self.state.get('stopReason') or STOP_REASON,
+                 'processStopRequested': STOP.is_set(), 'processStopReason': STOP_REASON,
                  'deadline': self.deadline, 'monotonicDeadline': self.monotonic_deadline,
                  'memoryEvents': counters, 'diskAvailableBytes': usage.free}
         path = ROOT / 'supervisor-diagnostics.json'
@@ -421,8 +506,9 @@ class Campaign:
             if current < previous or time.monotonic() >= deadline:
                 raise RuntimeError('observer-wait-clock-failed')
             previous = current
-            if STOP.is_set() or current >= self.deadline or time.monotonic() >= self.monotonic_deadline:
-                raise RuntimeError('campaign-stop-during-wait')
+            if STOP.is_set() or self.deadline_reached():
+                self.record_stop()
+                raise CampaignStopped('campaign-stop-during-wait', self.campaign_cause())
             STOP.wait(min(5, next_at - current))
 
     def save(self):
@@ -473,12 +559,14 @@ class Campaign:
                 return self.export_run(label)
             except Exception as error:
                 backoff = EXPORT_BACKOFF * 2 ** attempt
-                if (attempt + 1 == EXPORT_ATTEMPTS or STOP.is_set()
+                if STOP.is_set():
+                    raise CampaignStopped('campaign-stop-during-export', stop_cause()) from None
+                if (attempt + 1 == EXPORT_ATTEMPTS
                         or time.monotonic() - started + backoff > EXPORT_RETRY_ALLOWANCE):
                     raise
                 self.event(label, 'export-retry', attempt=attempt + 1, failureType=type(error).__name__)
                 if STOP.wait(backoff):
-                    raise
+                    raise CampaignStopped('campaign-stop-during-export', stop_cause()) from None
 
     def transfer_gate(self, label):
         run_dir = safe_relative_run(label)
@@ -547,10 +635,21 @@ class Campaign:
                     self.schedule_diagnostics()
                     next_diagnostics = now + 60
                 expired = time.time() >= wall_limit or now >= mono_limit
-                if term_at is None and (expired or (STOP.is_set() and not cleanup)):
+                stopping = STOP.is_set() and not cleanup
+                if term_at is None and (expired or stopping):
                     term_at = now
+                    # Fixed and distinct: a campaign stop, the campaign
+                    # deadline, or this child operation's own budget.
+                    if stopping:
+                        cause = stop_cause()
+                    elif not cleanup and self.deadline_reached():
+                        cause = 'campaign-deadline'
+                    else:
+                        cause = 'child-operation-timeout'
+                    self.terminations[label] = cause
+                    self.record_stop()
                     self.event(label, 'child-term-requested', pid=child.pid,
-                               reason='operation-deadline' if expired else 'supervisor-stop',
+                               reason='supervisor-stop' if stopping else 'operation-deadline', cause=cause,
                                stopReason=STOP_REASON, wallLimit=wall_limit, monotonicLimit=mono_limit)
                     try:
                         os.killpg(child.pid, signal.SIGTERM)
@@ -595,7 +694,7 @@ class Campaign:
         outcome = {'provider': provider, 'label': label, 'status': 'failed'}
         try:
             if STOP.is_set() or time.time() >= self.deadline:
-                raise RuntimeError('campaign-deadline')
+                raise CampaignStopped('campaign-stop-before-run', self.campaign_cause())
             if not run_dir.exists():
                 if label.startswith('soak-') and time.time() + self.soak_hours * 3600 + FINAL_OBSERVATION_MARGIN > self.deadline:
                     raise CampaignTimeRefused('insufficient-campaign-time-for-full-soak-and-final-teardown')
@@ -605,6 +704,7 @@ class Campaign:
                     '--soak-hours', '0.25' if label.startswith('rehearsal-') else str(self.soak_hours),
                     '--artifact-dir', CANDIDATE, '--expected-commit', self.config['sourceCommit'],
                     '--output-dir', str(run_dir), '--step'])
+                self.note_termination(label, code, outcome)
             else:
                 # Never create a replacement when a response or process was lost.
                 progress = read_json(run_dir / 'soak-progress.json') if (run_dir / 'soak-progress.json').exists() else {}
@@ -623,6 +723,7 @@ class Campaign:
                 # A fresh packaged controller per observation; schedule remains
                 # anchored to the runner's immutable first-apply deadline.
                 code = self.invoke(label, ['--resume', str(run_dir), '--step'])
+                self.note_termination(label, code, outcome)
             progress = read_json(run_dir / 'soak-progress.json') if (run_dir / 'soak-progress.json').exists() else {}
             outcome.update(observerExitCode=code, complete=progress.get('complete', False),
                            completedRuns=progress.get('completedRuns', 0),
@@ -631,9 +732,9 @@ class Campaign:
                 outcome['status'] = 'passed'
         except Exception as error:
             outcome['failureType'] = type(error).__name__
-            if STOP.is_set() and STOP_REASON is not None:
+            if isinstance(error, CampaignStopped):
                 # The fixed cause that stopped this run, never a raw exception string.
-                outcome['stopReason'] = STOP_REASON['cause']
+                outcome['stopReason'] = error.cause
             if isinstance(error, CampaignTimeRefused):
                 # A fixed reason, never a raw exception string.
                 outcome['failureReason'] = str(error)
@@ -642,8 +743,15 @@ class Campaign:
             outcome = self.settle(label, outcome)
         return outcome
 
+    def note_termination(self, label, code, outcome):
+        """A child the supervisor terminated returns 124; keep its fixed cause."""
+        cause = self.terminations.pop(label, None)
+        if code == 124 and cause is not None:
+            outcome['stopReason'] = cause
+
     def settle(self, label, outcome):
         """Only cleanup/export on restart; never resume or recreate failed work."""
+        self.record_stop()
         run_dir = safe_relative_run(label)
         while outcome.get('settlementAttempts', 0) < 3:
             if self.config['stopAt'] - time.time() < 2400:
@@ -658,6 +766,9 @@ class Campaign:
                 if (run_dir / 'run.json').exists():
                     if not cleanup_verified(run_dir) and not never_created(run_dir):
                         outcome['cleanupExitCode'] = self.invoke(label, ['--cleanup', str(run_dir)], cleanup=True)
+                        cause = self.terminations.pop(label, None)
+                        if outcome['cleanupExitCode'] == 124 and cause is not None:
+                            outcome['cleanupStopReason'] = cause
                     outcome['cleanupVerifiedAbsent'] = cleanup_verified(run_dir)
                     outcome['neverCreated'] = never_created(run_dir)
                     self.export_run(label, recovery=not cleanup_settled(outcome))
@@ -676,6 +787,12 @@ class Campaign:
         return outcome
 
     def run(self):
+        saved = self.state.get('stopReason')
+        if saved:
+            # A stop recorded by an earlier process stays latched.
+            request_stop(saved['cause'], saved.get('signal'))
+        if saved or self.state.get('status') in ('passed', 'failed'):
+            return self.replay()
         # Native rehearsal builds and short runs are sequential on the 4GiB host.
         for provider in ('aws', 'hetzner'):
             result = self.run_one('rehearsal-' + provider)
@@ -688,6 +805,7 @@ class Campaign:
             while not first.done() and not (safe_relative_run('soak-aws') / 'soak-progress.json').exists():
                 if STOP.is_set() or time.monotonic() >= until:
                     request_stop('full-build-start-deadline')
+                    self.record_stop()
                     break
                 time.sleep(2)
             if not STOP.is_set() and (not first.done() or first.result()['status'] == 'passed'):
@@ -696,14 +814,40 @@ class Campaign:
             first.result()
         return self.finish()
 
+    def replay(self):
+        """A terminal or stop-latched campaign: never start or resume a run.
+
+        Only existing labels are settled, so cleanup and required exports are
+        retried within their attempt limits. A run directory without a saved
+        outcome was interrupted; it is settled as failed. `finish` keeps the
+        first finish time and status.
+        """
+        saved = self.state.get('stopReason')
+        for label in LABELS:
+            previous = self.state['runs'].get(label)
+            if previous is not None:
+                if not (cleanup_settled(previous) and previous.get('proofExported')):
+                    self.settle(label, dict(previous))
+            elif safe_relative_run(label).exists():
+                outcome = {'provider': label.split('-')[-1], 'label': label, 'status': 'failed',
+                           'failureReason': 'outcome-not-saved-before-stop'}
+                if saved:
+                    outcome['stopReason'] = saved['cause']
+                self.settle(label, outcome)
+        return self.finish()
+
     def finish(self):
-        required = {'rehearsal-aws', 'rehearsal-hetzner', 'soak-aws', 'soak-hetzner'}
+        required = set(LABELS)
         passed = set(self.state['runs']) == required and all(
             x.get('status') == 'passed' and x.get('complete') and x.get('cleanupVerifiedAbsent')
             and x.get('proofExported') for x in self.state['runs'].values())
-        self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
-        # A supervisor restarted after a stop finds every run settled and
-        # finishes again; it keeps the reason the first process recorded.
+        if 'finishedAt' in self.state:
+            # A restarted supervisor keeps the first terminal time and status.
+            self.state['replays'] = self.state.get('replays', 0) + 1
+        else:
+            self.state.update(status='passed' if passed else 'failed', finishedAt=time.time())
+        # A supervisor restarted after a stop keeps the reason the first
+        # process recorded.
         self.state['stopReason'] = self.state.get('stopReason') or STOP_REASON
         self.save()
         self.schedule_diagnostics()
@@ -756,8 +900,7 @@ def main():
     lock = open(ROOT / 'supervisor.lock', 'a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     config = read_json(Path('/etc/wharfie-soak/campaign.json'))
-    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(sig, stop_for_signal)
+    install_signal_handlers()
     sdk_config = Config(connect_timeout=10, read_timeout=30, retries={'max_attempts': 2})
     ssm = boto3.client('ssm', region_name=config['region'], config=sdk_config)
     # No token in userdata, command payload, environment file, logs, or receipts.

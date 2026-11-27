@@ -754,11 +754,12 @@ class SupervisorScheduleTests(unittest.TestCase):
         wait.assert_not_called()
 
     def test_stop_requested_before_a_failed_export_is_not_retried(self):
-        supervisor.STOP.set()
+        supervisor.request_stop('signal-SIGTERM', 15)
         with mock.patch.object(self.campaign, 'export_run', side_effect=RuntimeError('down')) as export, \
              mock.patch.object(supervisor.STOP, 'wait', return_value=False) as wait:
-            with self.assertRaisesRegex(RuntimeError, 'down'):
+            with self.assertRaisesRegex(supervisor.CampaignStopped, 'campaign-stop-during-export') as raised:
                 self.campaign.export_observation('soak-aws')
+        self.assertEqual(raised.exception.cause, 'signal-SIGTERM')
         self.assertEqual(export.call_count, 1)
         wait.assert_not_called()
 
@@ -766,9 +767,11 @@ class SupervisorScheduleTests(unittest.TestCase):
         self.running_soak()
         with mock.patch.object(self.campaign, 'export_run', side_effect=RuntimeError('down')) as export, \
              mock.patch.object(supervisor.STOP, 'wait', return_value=True):
+            supervisor.STOP_REASON = {'cause': 'signal-SIGTERM'}
             result = self.campaign.run_one('soak-aws')
         self.assertEqual(export.call_count, 1)
         self.assertEqual(result['status'], 'failed')
+        self.assertEqual(result['stopReason'], 'signal-SIGTERM')
 
 
 if __name__ == '__main__':
