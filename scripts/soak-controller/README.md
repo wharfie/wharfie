@@ -65,9 +65,21 @@ Guest SSH ingress is limited to the controller EIP `/32` by the runner (`--allow
 
 ## OS maintenance on the controller
 
-Bootstrap turns off the controller's automatic OS maintenance for its whole life. It masks `apt-daily.timer`, `apt-daily-upgrade.timer` and their two services, and disables `unattended-upgrades.service`. It also installs `/etc/needrestart/conf.d/wharfie-soak.conf`, which contains exactly `$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;`. needrestart matches each `override_rc` regex against the unit name, so it never restarts the supervisor, even after a package installed by hand over SSM. On 2026-11-27 the stock `apt-daily-upgrade` run upgraded `libexpat1`, which `python3` maps. needrestart then restarted `wharfie-soak.service`, and the stop failed both full soaks 2 h 18 m in, while Wharfie stayed healthy.
+Bootstrap closes the one automatic path known to have restarted the supervisor: Ubuntu's daily APT run, followed by needrestart's automatic restart of services. It does two things, for the controller's whole life:
+- It masks `apt-daily.timer`, `apt-daily-upgrade.timer` and their two services, and disables `unattended-upgrades.service`, so the stock daily APT update and upgrade no longer run.
+- It installs `/etc/needrestart/conf.d/wharfie-soak.conf`, which contains exactly `$nrconf{override_rc}->{qr(^wharfie-soak\.service$)} = 0;`. needrestart matches each `override_rc` regex against the unit name, so its automatic mode, as run by the apt hook, does not restart this unit. That holds even after a package installed by hand over SSM; an interactive needrestart user can still select the unit.
 
-Leaving updates off is acceptable here. The controller is disposable: it lives at most the soak length plus six hours (54 or 78 h), boots the newest pinned Ubuntu image selected by the fresh preflight at `prepare`, and its security group has no inbound rules. A security update that lands during a campaign waits for the next campaign's image. Before writing `bootstrap-ready.json`, bootstrap verifies all of this and fails if any check does not hold:
+This is not a freeze of all OS maintenance. Known paths it does not block:
+- snap refreshes, including the snap-packaged SSM agent on images that use it;
+- Ubuntu Pro and ESM activity;
+- fwupd metadata refresh;
+- any configured Landscape jobs;
+- a package maintainer script that restarts a service directly;
+- a host reboot.
+
+None of these is known to restart this locally installed unit. On 2026-11-27 the stock `apt-daily-upgrade` run upgraded `libexpat1`, which `python3` maps. needrestart then restarted `wharfie-soak.service`, and the stop failed both full soaks 2 h 18 m in, while Wharfie stayed healthy.
+
+Leaving the daily APT run off is acceptable here. The controller is disposable: it lives at most the soak length plus six hours (54 or 78 h), boots the newest pinned Ubuntu image selected by the fresh preflight at `prepare`, and its security group has no inbound rules. A security update that lands during a campaign waits for the next campaign's image. Before writing `bootstrap-ready.json`, bootstrap verifies all of this and fails if any check does not hold:
 - `systemctl show` answers for every unit. A lookup failure refuses; it is never read as "off".
 - Each of the four units is exactly `LoadState=masked`, `UnitFileState=masked` and `ActiveState` `inactive` (or `failed`, which is not running).
 - `unattended-upgrades.service` is absent (`not-found`), or loaded with `disabled` or `masked` and `inactive`. Any other state refuses, including `enabled-runtime`, `static`, `activating` and `deactivating`.
