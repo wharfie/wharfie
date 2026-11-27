@@ -3,6 +3,13 @@ set -euo pipefail
 umask 022
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C.UTF-8
+# readiness: begin
+# No earlier attempt's readiness survives this one, including the old receipt
+# in the service user's home. A fresh receipt is published only after every
+# check below, in root-owned /etc/wharfie-soak.
+rm -f /var/lib/wharfie-soak/bootstrap-ready.json /etc/wharfie-soak/bootstrap-ready.json \
+  /etc/wharfie-soak/bootstrap-ready.json.tmp
+# readiness: end
 # The acceptance harness is the candidate's own commit. The operations bundle,
 # identified by its hashes and the recorded controller commit, may be newer.
 harness_commit=$(python3 -c 'import json,re; c=json.load(open("/etc/wharfie-soak/campaign.json"))["sourceCommit"]; assert re.fullmatch("[0-9a-f]{40}",c); print(c)')
@@ -330,9 +337,29 @@ else
   snap start amazon-ssm-agent
 fi
 verify_os_maintenance
+# publish-readiness: begin
 python3 - <<'PY'
-import json, pathlib, time
-p = pathlib.Path('/var/lib/wharfie-soak/bootstrap-ready.json')
-p.write_text(json.dumps({'ready': True, 'at': time.time(), 'node': '24.13.1', 'npm': '11.12.0'}))
-p.chmod(0o644)
+import json, os, stat, time
+directory = '/etc/wharfie-soak'
+info = os.lstat(directory)
+# Root-only: a directory no other user can write, and no path to follow.
+assert stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+with open(directory + '/campaign.json') as source:
+    spec = json.load(source)['specSha256']
+data = json.dumps({'ready': True, 'at': time.time(), 'specSha256': spec,
+                   'node': '24.13.1', 'npm': '11.12.0'}).encode()
+temporary = directory + '/bootstrap-ready.json.tmp'
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+try:
+    os.write(descriptor, data)
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+os.replace(temporary, directory + '/bootstrap-ready.json')
+descriptor = os.open(directory, os.O_RDONLY)
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
 PY
+# publish-readiness: end

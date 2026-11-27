@@ -2,7 +2,7 @@
 Description=Fixed Wharfie AWS and Hetzner acceptance campaign
 After=network-online.target cloud-final.service
 Wants=network-online.target
-ConditionPathExists=/var/lib/wharfie-soak/bootstrap-ready.json
+ConditionPathExists=/etc/wharfie-soak/bootstrap-ready.json
 StartLimitIntervalSec=600
 StartLimitBurst=3
 

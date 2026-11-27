@@ -63,6 +63,18 @@ def canonical_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+READINESS_RECEIPT = '/etc/wharfie-soak/bootstrap-ready.json'
+
+
+def readiness_check(spec):
+    """A shell command: the root-owned receipt of this exact campaign spec exists."""
+    assert re.fullmatch(r'[0-9a-f]{64}', spec)
+    return ("python3 -c 'import json, os, stat, sys; path = sys.argv[1]; info = os.lstat(path); "
+            "receipt = json.load(open(path)); sys.exit(0 if stat.S_ISREG(info.st_mode) and info.st_uid == 0 "
+            "and receipt.get(\"ready\") is True and receipt.get(\"specSha256\") == sys.argv[2] else 1)' "
+            + READINESS_RECEIPT + ' ' + spec)
+
+
 def git(*arguments):
     return subprocess.run(['git', '-C', str(HERE), *arguments], stdin=subprocess.DEVNULL,
                           capture_output=True, timeout=30, check=True).stdout
@@ -541,7 +553,7 @@ class Operator:
         if not self.ownership.get('tokenStored'):
             raise RuntimeError('private-token-not-stored')
         instance = self.ownership['outputs']['ControllerId']
-        commands = ['test -f /var/lib/wharfie-soak/bootstrap-ready.json',
+        commands = [readiness_check(self.config['specSha256']),
                     'timeout 10 systemctl daemon-reload',
                     'active_state=$(timeout 5 systemctl show wharfie-soak.service --property=ActiveState --value)',
                     'case "$active_state" in failed) timeout 5 systemctl reset-failed wharfie-soak.service ;; active|inactive) ;; *) exit 1 ;; esac',

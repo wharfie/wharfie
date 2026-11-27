@@ -425,7 +425,7 @@ class OsMaintenanceTests(unittest.TestCase):
     def test_bootstrap_disables_maintenance_before_apt_and_verifies_before_ready(self):
         body = BOOTSTRAP[BOOTSTRAP.index('# os-maintenance: end\n'):]
         self.assertLess(body.index('\ndisable_os_maintenance\n'), body.index('apt-get '))
-        self.assertLess(body.index('\nverify_os_maintenance\n'), body.index('bootstrap-ready.json'))
+        self.assertLess(body.index('\nverify_os_maintenance\n'), body.index('# publish-readiness: begin'))
         self.assertGreater(body.index('\nverify_os_maintenance\n'), body.index(' install -y'))
 
 
