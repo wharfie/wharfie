@@ -197,6 +197,11 @@ Check public mobile/desktop rendering, keyboard navigation, links, and the feedb
 ## Update content or roll it back
 
 Prepare a new clean bundle/evidence directory and repeat immutable upload/readback before switching content.
+When updating the preview version, pin the landing page's installation,
+recipient, and known-issue links to the full commit SHA of the **reviewed
+guides for that published version**. The guides can land after the release
+tag. Check their version and linked headings at that commit. Keep the general
+docs index on `master` and the downloads on the matching release tag.
 Retain current `describe-stacks` output including `ContentSha256` and the accepted bundle for rollback. For **content-only** changes:
 
 ```bash
