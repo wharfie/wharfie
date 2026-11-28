@@ -29,6 +29,9 @@ An existing server uses the executable's `wharfie service` commands;
 provisioning through the same application. Cloud root-disk loss and automatic
 multi-node failover are outside this preview's persistence promise.
 
+In this checkout, the resident also supports [authenticated webhook triggers](docs/guides/workflow-webhooks.md):
+declare a route, enable it on the worker, and POST JSON to start a named workflow.
+
 Use the [minimal hello-world starter](examples/hello-world/README.md) to learn
 `defineApp({ id, main })`, or the [steady-file guide](docs/guides/golden-path.md)
 for the complete application and operator model. Verify builder release downloads

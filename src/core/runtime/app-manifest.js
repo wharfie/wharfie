@@ -24,6 +24,7 @@ const TOP_LEVEL_KEYS = new Set([
   'activities',
   'workflows',
   'schedules',
+  'webhooks',
 ]);
 const APP_KEYS = new Set(['id']);
 const CLI_KEYS = new Set(['entrypoint', 'durable']);
@@ -38,6 +39,7 @@ const TARGET_KEYS = new Set([
 const EXACT_RELEASE_SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const ACTIVITY_KEYS = new Set(['entrypoint', 'externalPackages']);
+const WEBHOOK_KEYS = new Set(['workflow', 'deliveryIdField']);
 const EXTERNAL_PACKAGE_KEYS = new Set(['name', 'version']);
 const NPM_PACKAGE_NAME_PATTERN =
   /^(?:@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$/;
@@ -376,6 +378,35 @@ export function validateAppManifest(value, valuePath = 'manifest') {
     }
   }
 
+  if (Object.hasOwn(manifest, 'webhooks')) {
+    const hookPath = `${valuePath}.webhooks`;
+    assertPlainObject(manifest.webhooks, hookPath);
+    const hooks = Object.entries(manifest.webhooks);
+    if (!hooks.length || hooks.length > 64) {
+      throw new TypeError(`${hookPath} must declare between 1 and 64 routes.`);
+    }
+    for (const [id, hook] of hooks) {
+      const label = `${hookPath}.${id}`;
+      assertLogicalId(id, label);
+      assertPlainObject(hook, label);
+      assertExactKeys(hook, WEBHOOK_KEYS, label, schemaVersion);
+      assertLogicalId(hook.workflow, `${label}.workflow`);
+      if (!Object.hasOwn(manifest.workflows || {}, hook.workflow)) {
+        throw new TypeError(
+          `${label}.workflow must reference a declared workflow.`,
+        );
+      }
+      if (
+        Object.hasOwn(hook, 'deliveryIdField') &&
+        (typeof hook.deliveryIdField !== 'string' ||
+          !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(hook.deliveryIdField))
+      ) {
+        throw new TypeError(
+          `${label}.deliveryIdField must name a top-level JSON field.`,
+        );
+      }
+    }
+  }
   assertManifestIsSecretFree(manifest, valuePath);
   return manifest;
 }

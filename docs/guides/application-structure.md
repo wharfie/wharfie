@@ -117,7 +117,7 @@ export default {
 
 `schemaVersion`, `app`, and `cli` are required in the expanded v4 object;
 the compact `defineApp({ id, main })` form supplies them mechanically.
-`activities`, `workflows`, `schedules`, and `targets` are optional,
+`activities`, `workflows`, `schedules`, `webhooks`, and `targets` are optional,
 although every declared map and the packaging target list must be nonempty.
 All entrypoints currently use
 `{ kind: 'node', path, export }`; both `path` and the named `export` are
@@ -220,6 +220,11 @@ transaction. Restart resumes the retained cursor and performs latest-only
 catch-up. Direct activity schedules, dynamic inputs, non-UTC timezones,
 schedule pause/resume controls, and managed-effect workflow successors remain
 later runtime slices.
+
+A `webhooks` entry exposes `POST /hooks/<id>` to start one declared workflow
+with the JSON body as input. The resident serves only explicitly enabled routes.
+See [Start a workflow with a webhook](./workflow-webhooks.md) for authentication,
+HTTPS, and retry semantics.
 
 The schema does not accept application- or activity-level `resources`; those
 are unknown fields. A property named `resources` inside caller metadata remains

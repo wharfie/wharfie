@@ -5,6 +5,9 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
+import { createServer } from 'node:net';
+import { ServerResponse } from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -79,12 +82,14 @@ function digest(value) {
 
 /**
  * @param {string} appId - Fixture application identity.
+ * @param {Record<string, any>} [triggers] - Additional revision-bound definitions.
  * @returns {{kind: 'embedded', manifest: any, embeddedRevision: import('../../../src/core/resources/builds/lib/revision-runtime-assets.js').EmbeddedRevisionRuntimePair}} - Valid embedded execution fixture.
  */
-function makeEmbeddedExecution(appId) {
+function makeEmbeddedExecution(appId, triggers = {}) {
   const contract = {
     schemaVersion: 4,
     app: { id: appId },
+    ...triggers,
     cli: {
       entrypoint: { kind: 'node', path: 'cli.js', export: 'main' },
     },
@@ -154,6 +159,184 @@ function createConfigurations() {
 }
 
 describe('local resident activity service', () => {
+  it.each([
+    [{ WHARFIE_WEBHOOK_PORT: '8443' }, /WHARFIE_WEBHOOK_TOKEN_ALERTS/],
+    [
+      {
+        WHARFIE_WEBHOOK_PORT: '8443',
+        WHARFIE_WEBHOOK_HOST: '0.0.0.0',
+        WHARFIE_WEBHOOK_TOKEN_ALERTS: 'x'.repeat(32),
+      },
+      /both TLS files/,
+    ],
+  ])(
+    'refuses to publish READY with incomplete webhook authentication or TLS',
+    async (env, message) => {
+      const stores = createConfigurations();
+      const appId = 'webhook-startup';
+      const execution = makeEmbeddedExecution(appId, {
+        workflows: { investigate: { steps: [{ id: 'hold', kind: 'signal' }] } },
+        webhooks: { alerts: { workflow: 'investigate' } },
+      });
+      await expect(
+        runLocalResidentActivityService(
+          { ...stores, execution },
+          /** @type {NodeJS.ProcessEnv} */ (env),
+        ),
+      ).rejects.toThrow(/** @type {RegExp} */ (message));
+      await withExecutionLedger(
+        async (ledger) => {
+          expect((await ledger.listRuns({ appId })).items).toEqual([]);
+        },
+        { configuration: stores.configuration, readOnly: true },
+      );
+    },
+  );
+
+  it('admits a webhook once even when the caller loses the receipt and retries after restart', async () => {
+    const appId = 'webhook-service';
+    const stores = createConfigurations();
+    const execution = makeEmbeddedExecution(appId, {
+      workflows: { investigate: { steps: [{ id: 'hold', kind: 'signal' }] } },
+      webhooks: {
+        datadog: { workflow: 'investigate', deliveryIdField: 'event_id' },
+        manual: { workflow: 'investigate' },
+      },
+    });
+    const reservation = createServer();
+    reservation.listen(0, '127.0.0.1');
+    await once(reservation, 'listening');
+    const { port } = /** @type {import('node:net').AddressInfo} */ (
+      reservation.address()
+    );
+    await new Promise((resolve) => reservation.close(resolve));
+    const env = {
+      WHARFIE_WEBHOOK_PORT: String(port),
+      WHARFIE_WEBHOOK_TOKEN_DATADOG: 'a'.repeat(32),
+      WHARFIE_WEBHOOK_TOKEN_MANUAL: 'b'.repeat(32),
+    };
+    const url = `http://127.0.0.1:${port}/hooks/datadog`;
+    const body = { event_id: 'event-17', service: 'api' };
+    /** @param {Record<string, any>} input */
+    const post = (input) =>
+      fetch(url, {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${env.WHARFIE_WEBHOOK_TOKEN_DATADOG}`,
+        },
+      });
+    let dropped = false;
+    /**
+     * @param {() => Promise<void>} exercise
+     * @param {boolean} [dropReceipt]
+     */
+    const withWorker = async (exercise, dropReceipt = false) => {
+      const controller = new AbortController();
+      // Cut the connection precisely after durable admission but before any
+      // response bytes. Don't replay in the first process.
+      const writeHead = ServerResponse.prototype.writeHead;
+      const fault = dropReceipt
+        ? jest.spyOn(ServerResponse.prototype, 'writeHead').mockImplementation(
+            /** @this {ServerResponse} */ function (...args) {
+              if (!dropped && args[0] === 202) {
+                dropped = true;
+                this.destroy();
+              }
+              return Reflect.apply(writeHead, this, args);
+            },
+          )
+        : undefined;
+      const worker = runLocalResidentActivityService(
+        { ...stores, execution, signal: controller.signal },
+        env,
+      );
+      try {
+        await Promise.race([
+          worker,
+          (async () => {
+            // Startup includes LMDB adoption and publishing the resident as READY.
+            for (let i = 0; i < 200 && !controller.signal.aborted; i++) {
+              const response = await post(body).catch(() => null);
+              if (!response && dropReceipt && dropped) return;
+              if (response && response.status !== 503) {
+                expect(response.status).toBe(202);
+                await response.body?.cancel();
+                return;
+              }
+              await delay(20);
+            }
+            throw new Error('Webhook did not become available.');
+          })(),
+        ]);
+        await exercise();
+      } finally {
+        fault?.mockRestore();
+        controller.abort();
+        await worker;
+      }
+    };
+    await withWorker(async () => {
+      expect(dropped).toBe(true);
+    }, true);
+    let runId = '';
+    let manualRunId = '';
+    await withWorker(async () => {
+      const replay = await post(body);
+      expect(replay.status).toBe(202);
+      ({ runId } = await replay.json());
+      const conflict = await post({ ...body, service: 'different' });
+      expect(conflict.status).toBe(409);
+      expect(await conflict.text()).toBe('');
+      expect((await post({ service: 'no-id' })).status).toBe(400);
+      expect((await fetch(url, { method: 'POST' })).status).toBe(401);
+      expect(
+        (await fetch(url.replace('datadog', 'investigate'), { method: 'POST' }))
+          .status,
+      ).toBe(404);
+      const manual = url.replace('datadog', 'manual');
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.WHARFIE_WEBHOOK_TOKEN_MANUAL}`,
+        'Idempotency-Key': body.event_id,
+      };
+      const delivery = { method: 'POST', headers, body: JSON.stringify(body) };
+      expect(
+        (
+          await fetch(manual, {
+            ...delivery,
+            headers: {
+              ...headers,
+              Authorization: `Bearer ${env.WHARFIE_WEBHOOK_TOKEN_DATADOG}`,
+            },
+          })
+        ).status,
+      ).toBe(401);
+      expect(
+        (await fetch(manual, { ...delivery, body: 'invalid JSON' })).status,
+      ).toBe(400);
+      expect(
+        (await fetch(manual, { ...delivery, body: 'x'.repeat(65537) })).status,
+      ).toBe(413);
+      const receipt = await fetch(manual, delivery);
+      expect(receipt.status).toBe(202);
+      manualRunId = (await receipt.json()).runId;
+      expect(runId).not.toBe(manualRunId);
+    });
+    await withExecutionLedger(
+      async (ledger) => {
+        expect(
+          (await ledger.listRuns({ appId })).items
+            .map((item) => item.runId)
+            .sort(),
+        ).toEqual([runId, manualRunId].sort());
+        expect(await ledger.getEvents(runId)).toHaveLength(1);
+      },
+      { configuration: stores.configuration, readOnly: true },
+    );
+  }, 15000);
+
   it('durably deduplicates offline submissions and records a clean idle stop', async () => {
     const { configuration, applicationStateConfiguration } =
       createConfigurations();
