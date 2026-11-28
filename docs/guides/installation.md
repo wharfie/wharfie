@@ -159,5 +159,5 @@ automated lifecycle coverage and completed the equivalent live slice in
 `fsn1`. Wharfie provisions only its fixed capability substrate and is not a
 general infrastructure-as-code system.
 
-See the [Quickstart](./quickstart.md) for the working local and experimental
-deployment command surfaces.
+See the [quickstart](quickstart.md) to package your first CLI, or the
+[CLI and runtime reference](cli-reference.md) for local and deployment commands.

@@ -25,6 +25,7 @@ const docsToCheck = [
   'docs/README.md',
   'docs/guides/golden-path.md',
   'docs/guides/quickstart.md',
+  'docs/guides/cli-reference.md',
   'docs/guides/installation.md',
   'docs/guides/application-structure.md',
   'contributing/FAQ.md',
@@ -304,6 +305,15 @@ describe('docs command surface', () => {
     expect(installationDoc).toContain(
       'npm install --save-dev @wharfie/wharfie@0.0.17',
     );
+    const version = installationDoc.match(
+      /npm install --save-dev @wharfie\/wharfie@(\d+\.\d+\.\d+)/u,
+    )?.[1];
+    for (const file of ['README.md', 'docs/guides/quickstart.md']) {
+      const entryPage = await fsp.readFile(path.join(repoRoot, file), 'utf8');
+      expect(entryPage).toContain(
+        `--branch v${version} https://github.com/wharfie/wharfie.git`,
+      );
+    }
     expect(installationDoc).toContain('not ready for production use');
     expect(installationDoc).not.toContain('releases/latest');
     expect(installationDoc).not.toContain('install.sh');
@@ -340,158 +350,155 @@ describe('docs command surface', () => {
     expect(packageJson.files).not.toContain('src/deployment-profile.d.ts');
   });
 
-  it('documents working onboarding commands in the quickstart', async () => {
-    const quickstart = await fsp.readFile(
-      path.join(repoRoot, 'docs/guides/quickstart.md'),
+  it('documents working source and packaged commands in the CLI reference', async () => {
+    const reference = await fsp.readFile(
+      path.join(repoRoot, 'docs/guides/cli-reference.md'),
       'utf8',
     );
 
-    expect(quickstart).toContain('wharfie.app.js');
-    expect(quickstart).toContain('wharfie app manifest ./path/to/app');
-    expect(quickstart).toContain(
+    expect(reference).toContain('wharfie.app.js');
+    expect(reference).toContain('wharfie app manifest ./path/to/app');
+    expect(reference).toContain(
       `wharfie app run <activity-id> --dir ./path/to/app --input '{"who":"cli-user"}'`,
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops run --activity <activity-id> --dir ./path/to/app',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops submit --activity <activity-id> --dir ./path/to/app',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops start --workflow <workflow-id> --dir ./path/to/app',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops signal --run-id <run-id> --signal <signal-step-id>',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops list --dir ./path/to/app --limit 50 --json',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id>',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops output --app-id <app-id> --run-id <run-id>',
     );
-    expect(quickstart).toContain('wharfie ops worker --dir ./path/to/app');
-    expect(quickstart).toContain(
+    expect(reference).toContain('wharfie ops worker --dir ./path/to/app');
+    expect(reference).toContain(
       '<app> wharfie submit --activity <activity-id>',
     );
-    expect(quickstart).toContain(
-      '<app> wharfie start --workflow <workflow-id>',
-    );
-    expect(quickstart).toContain(
+    expect(reference).toContain('<app> wharfie start --workflow <workflow-id>');
+    expect(reference).toContain(
       '<app> wharfie signal --run-id <run-id> --signal <signal-step-id>',
     );
-    expect(quickstart).toContain('<app> wharfie list --limit 50 --json');
-    expect(quickstart).toContain(
+    expect(reference).toContain('<app> wharfie list --limit 50 --json');
+    expect(reference).toContain(
       '<app> wharfie logs --run-id <run-id> --attempt-id <attempt-id>',
     );
-    expect(quickstart).toContain('<app> wharfie output --run-id <run-id>');
-    expect(quickstart).toContain('<app> wharfie worker');
-    expect(quickstart).toContain('<app> wharfie service install');
-    expect(quickstart).toContain('<app> wharfie service status --json');
-    expect(quickstart).toContain('<desired-app> wharfie service converge');
-    expect(quickstart).toContain('<next-app> wharfie service update');
-    expect(quickstart).toContain('<next-app> wharfie service rollback');
-    expect(quickstart).toContain('<next-app> wharfie service recover');
-    expect(quickstart).toContain('<app> wharfie service uninstall');
-    expect(quickstart).toContain(
+    expect(reference).toContain('<app> wharfie output --run-id <run-id>');
+    expect(reference).toContain('<app> wharfie worker');
+    expect(reference).toContain('<app> wharfie service install');
+    expect(reference).toContain('<app> wharfie service status --json');
+    expect(reference).toContain('<desired-app> wharfie service converge');
+    expect(reference).toContain('<next-app> wharfie service update');
+    expect(reference).toContain('<next-app> wharfie service rollback');
+    expect(reference).toContain('<next-app> wharfie service recover');
+    expect(reference).toContain('<app> wharfie service uninstall');
+    expect(reference).toContain(
       '<app> wharfie service purge --confirm-data-loss <app-id>',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment apply --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>...',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment apply --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment preview --deployment <logical-id> --provider aws --region <region> --allow-ssh-from <ipv4/32>...',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment preview --deployment <logical-id> --provider hetzner --location <name> --allow-ssh-from <ipv4/32>...',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment status --deployment-instance <id> [--data-root <absolute>] [--json]',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<next-app> wharfie deployment update --deployment-instance <id> [--data-root <absolute>] [--json]',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment recover --deployment-instance <id> [--data-root <absolute>] [--json]',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'joins it with an exact provider observation and the pinned guest',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       "authority is bound to the embedded app identity, not to the\nouter SEA's current revision",
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'It creates no missing local state and mutates neither cloud resources\nnor the guest',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'Status accepts no\n`--provider`, `--region`, or `--location`',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie deployment destroy --deployment-instance <id> [--data-root <absolute>] [--json]',
     );
-    expect(quickstart).not.toContain(
+    expect(reference).not.toContain(
       '<app> wharfie deployment destroy --deployment-instance <id> --provider',
     );
-    expect(quickstart).not.toContain(
+    expect(reference).not.toContain(
       '<app> wharfie deployment destroy --deployment-instance <id> --region',
     );
-    expect(quickstart).not.toContain(
+    expect(reference).not.toContain(
       '<app> wharfie deployment destroy --deployment-instance <id> --location',
     );
-    expect(quickstart).toContain('wharfie app package --self-deployable');
-    expect(quickstart).toContain('ordinary credential chain');
-    expect(quickstart).toContain('`HCLOUD_TOKEN`');
-    expect(quickstart).toContain(
+    expect(reference).toContain('wharfie app package --self-deployable');
+    expect(reference).toContain('ordinary credential chain');
+    expect(reference).toContain('`HCLOUD_TOKEN`');
+    expect(reference).toContain(
       'Packaged `deployment inspect` and `deployment reconcile` are not exposed',
     );
-    expect(quickstart).not.toContain('Update and rollback remain unavailable');
-    expect(quickstart).toContain('--idempotency-key <stable-key>');
-    expect(quickstart).not.toContain('--operation-id');
-    expect(quickstart).toContain('append-only run → invocation → attempt');
-    expect(quickstart).toContain('wharfie ops inspect --run-id <run-id>');
-    expect(quickstart).toContain(
+    expect(reference).not.toContain('Update and rollback remain unavailable');
+    expect(reference).toContain('--idempotency-key <stable-key>');
+    expect(reference).not.toContain('--operation-id');
+    expect(reference).toContain('append-only run → invocation → attempt');
+    expect(reference).toContain('wharfie ops inspect --run-id <run-id>');
+    expect(reference).toContain(
       'wharfie ops recover --run-id <run-id> --confirm-runner-stopped',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops cancel --run-id <run-id> --request-id <stable-request-id>',
     );
-    expect(quickstart).toContain('<app> wharfie inspect --run-id <run-id>');
-    expect(quickstart).toContain(
+    expect(reference).toContain('<app> wharfie inspect --run-id <run-id>');
+    expect(reference).toContain(
       '<app> wharfie recover --run-id <run-id> --confirm-runner-stopped',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie cancel --run-id <run-id> --request-id <stable-request-id>',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       'wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
     );
-    expect(quickstart).toContain(
+    expect(reference).toContain(
       '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
     );
-    expect(quickstart).not.toMatch(/^wharfie list(?:\s|$)/m);
-    expect(quickstart).not.toContain('<app> wharfie logs --app-id');
-    expect(quickstart).not.toContain('<app> wharfie output --app-id');
-    expect(quickstart).not.toContain('wharfie ops output --dir');
-    expect(quickstart).not.toContain('<app> wharfie ops cancel');
-    expect(quickstart).not.toContain('<app> wharfie ops start');
+    expect(reference).not.toMatch(/^wharfie list(?:\s|$)/m);
+    expect(reference).not.toContain('<app> wharfie logs --app-id');
+    expect(reference).not.toContain('<app> wharfie output --app-id');
+    expect(reference).not.toContain('wharfie ops output --dir');
+    expect(reference).not.toContain('<app> wharfie ops cancel');
+    expect(reference).not.toContain('<app> wharfie ops start');
   });
 
   it('documents the versioned local application-package handoff', async () => {
     const documents = await Promise.all(
       [
-        'README.md',
-        'docs/guides/quickstart.md',
+        'docs/guides/cli-reference.md',
         'src/cli/README.md',
         'docs/architecture/decisions/0030-versioned-application-package-receipt.md',
       ].map((relativePath) =>
@@ -508,27 +515,26 @@ describe('docs command surface', () => {
       );
     }
 
-    const quickstart = documents[1];
-    expect(quickstart).toContain(
+    const reference = documents[0];
+    expect(reference).toContain(
       'wharfie app package ./path/to/app --target linux-x64',
     );
-    expect(quickstart).toContain('--json --no-pretty > package-receipt.json');
-    expect(quickstart).toContain('package-receipt.json');
-    expect(quickstart).toContain('receipt.artifactCount');
-    expect(quickstart).toContain('receipt.artifacts[0].path');
-    expect(quickstart).toContain('"$artifact_path" wharfie service converge');
-    expect(quickstart).toContain('Bare `--no-pretty` still\nimplies JSON');
-    expect(quickstart).toContain(
+    expect(reference).toContain('--json --no-pretty > package-receipt.json');
+    expect(reference).toContain('package-receipt.json');
+    expect(reference).toContain('receipt.artifactCount');
+    expect(reference).toContain('receipt.artifacts[0].path');
+    expect(reference).toContain('"$artifact_path" wharfie service converge');
+    expect(reference).toContain('Bare `--no-pretty` still\nimplies JSON');
+    expect(reference).toContain(
       '`--target` filters only a matrix declared in the manifest',
     );
   });
 
   it('documents the reset-era packaged command and storage migration', async () => {
-    const [readme, quickstart, cliReadme, storageDecision, packageDecision] =
+    const [reference, cliReadme, storageDecision, packageDecision] =
       await Promise.all(
         [
-          'README.md',
-          'docs/guides/quickstart.md',
+          'docs/guides/cli-reference.md',
           'src/cli/README.md',
           'docs/architecture/decisions/0020-systemd-user-service-lifecycle.md',
           'docs/architecture/decisions/0030-versioned-application-package-receipt.md',
@@ -537,18 +543,18 @@ describe('docs command surface', () => {
         ),
       );
 
-    expect(quickstart).toContain('<app> wharfie run --name greet-ada -- Ada');
-    expect(quickstart).toContain('<app> wharfie activity run --activity greet');
-    expect(quickstart).toContain('exit with 130 and 143 respectively');
-    expect(quickstart).not.toMatch(/^<app> wharfie run --activity/m);
+    expect(reference).toContain('<app> wharfie run --name greet-ada -- Ada');
+    expect(reference).toContain('<app> wharfie activity run --activity greet');
+    expect(reference).toContain('exit with 130 and 143 respectively');
+    expect(reference).not.toMatch(/^<app> wharfie run --activity/m);
 
-    for (const document of [readme, quickstart, cliReadme, packageDecision]) {
+    for (const document of [reference, cliReadme, packageDecision]) {
       expect(document).toContain('--json --no-pretty');
       expect(document).toMatch(/bare `--no-pretty`/i);
       expect(document).toMatch(/compatibility/);
     }
 
-    for (const document of [readme, quickstart, cliReadme, storageDecision]) {
+    for (const document of [reference, cliReadme, storageDecision]) {
       expect(document).toContain('WHARFIE_DATA_ROOT');
       expect(document).toMatch(/canonical absolute/);
       expect(document).toMatch(/legacy|retired/i);
@@ -870,8 +876,7 @@ describe('docs command surface', () => {
   it('documents the explicit sensitive activity-log disclosure boundary', async () => {
     const documents = await Promise.all(
       [
-        'README.md',
-        'docs/guides/quickstart.md',
+        'docs/guides/cli-reference.md',
         'src/cli/README.md',
         'docs/architecture/decisions/0023-sensitive-activity-log-disclosure.md',
       ].map((relativePath) =>
@@ -892,8 +897,7 @@ describe('docs command surface', () => {
   it('documents the explicit sensitive logical run-output boundary', async () => {
     const documents = await Promise.all(
       [
-        'README.md',
-        'docs/guides/quickstart.md',
+        'docs/guides/cli-reference.md',
         'src/cli/README.md',
         'docs/architecture/decisions/0031-verified-sensitive-run-output.md',
       ].map((relativePath) =>
@@ -931,8 +935,7 @@ describe('docs command surface', () => {
   it('documents the public linear workflow operator boundary', async () => {
     const documents = await Promise.all(
       [
-        'README.md',
-        'docs/guides/quickstart.md',
+        'docs/guides/cli-reference.md',
         'docs/guides/application-structure.md',
         'src/cli/README.md',
       ].map((relativePath) =>
@@ -959,56 +962,50 @@ describe('docs command surface', () => {
       expect(document).toContain('schema-v8');
     }
 
-    const quickstart = documents[1];
-    expect(quickstart).toContain('schema-v8 redacted run view');
-    expect(quickstart).toContain('reused: true');
-    expect(quickstart).toContain('original uncertainty event');
-    expect(quickstart).not.toContain('schema-v5 redacted run view');
-    expect(quickstart).not.toContain('schema-v6 redacted run view');
+    const reference = documents[0];
+    expect(reference).toContain('schema-v8 redacted run view');
+    expect(reference).toContain('reused: true');
+    expect(reference).toContain('original uncertainty event');
+    expect(reference).not.toContain('schema-v5 redacted run view');
+    expect(reference).not.toContain('schema-v6 redacted run view');
   });
 
   it('documents the trusted redacted effect-reconciliation contract', async () => {
-    const documents = await Promise.all(
-      ['README.md', 'docs/guides/quickstart.md'].map((relativePath) =>
-        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
-      ),
+    const document = await fsp.readFile(
+      path.join(repoRoot, 'docs/guides/cli-reference.md'),
+      'utf8',
     );
 
-    for (const document of documents) {
-      expect(document).toContain(
-        'wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
-      );
-      expect(document).toContain(
-        '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
-      );
-      expect(document).toContain('app-scoped LMDB local-owner protocol');
-      expect(document).toContain('after a lost response');
-      expect(document).toContain('redacted');
-    }
+    expect(document).toContain(
+      'wharfie ops reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
+    );
+    expect(document).toContain(
+      '<app> wharfie reconcile-effect --run-id <run-id> --effect-id <effect-id> --reconciliation-id <stable-id> --confirm-runner-stopped',
+    );
+    expect(document).toContain('app-scoped LMDB local-owner protocol');
+    expect(document).toContain('after a lost response');
+    expect(document).toContain('redacted');
   });
 
   it('documents the finite public managed-effect successor contract', async () => {
-    const documents = await Promise.all(
-      ['README.md', 'docs/guides/quickstart.md'].map((relativePath) =>
-        fsp.readFile(path.join(repoRoot, relativePath), 'utf8'),
-      ),
+    const document = await fsp.readFile(
+      path.join(repoRoot, 'docs/guides/cli-reference.md'),
+      'utf8',
     );
 
-    for (const document of documents) {
-      expect(document).toContain(
-        'wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
-      );
-      expect(document).toContain(
-        '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
-      );
-      expect(document).toContain('after a lost response');
-      expect(document).toContain('one retained target');
-      expect(document).toContain('redacted `--json`');
-      expect(document).toContain('dedicated effect-only lifecycle');
-      expect(document).toMatch(
-        /never\s+redispatches\s+the\s+abandoned authored activity/,
-      );
-      expect(document).toContain('not generic handler\nretry or compensation');
-    }
+    expect(document).toContain(
+      'wharfie ops retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
+    );
+    expect(document).toContain(
+      '<app> wharfie retry-effect --run-id <run-id> --effect-id <effect-id> --successor-id <stable-id> --confirm-runner-stopped',
+    );
+    expect(document).toContain('after a lost response');
+    expect(document).toContain('one retained target');
+    expect(document).toContain('redacted `--json`');
+    expect(document).toContain('dedicated effect-only lifecycle');
+    expect(document).toMatch(
+      /never\s+redispatches\s+the\s+abandoned authored activity/,
+    );
+    expect(document).toContain('not generic handler\nretry or compensation');
   });
 });

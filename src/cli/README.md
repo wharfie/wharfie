@@ -110,6 +110,8 @@ non-authoritative discovery semantics, verified integrity, `scope`, redacted
 evidence, fences, and filesystem paths. The listing grants no scheduling,
 cancellation, or mutation authority.
 
+## Recover a local coordinator
+
 A coordinator that does not release gracefully remains ACTIVE. Choose exactly
 one alternative below. Each creates a private directory and a new, no-clobber
 inspection file, then generates fresh identities for this replacement attempt.
@@ -207,6 +209,8 @@ and request IDs. Diagnose every other explicit refusal or error at its cause; it
 does not authorize rebasing or a blind retry. Heartbeat age is diagnostic and
 never grants takeover permission.
 
+## Inspect logs and workflow output
+
 Read one exact physical attempt's retained logs with
 `wharfie ops logs --app-id <app-id> --run-id <run-id> --attempt-id <attempt-id> --confirm-sensitive-output [--limit <1..100>] [--cursor <opaque>] [--json]`
 or packaged
@@ -263,6 +267,8 @@ digests, and actor fields. The existing event history retains its safe actor
 metadata. Branches, loops, parallel workflow steps, an early-signal inbox,
 managed-effect workflow successors, schedule pause/resume controls, and public
 log tail/search remain unsupported.
+
+## Cloud deployment
 
 Package a cloud-capable operator SEA with `wharfie app package
 --self-deployable`. Its packaged deployment surface deliberately has only
@@ -347,6 +353,8 @@ Packaged `deployment inspect` and `deployment reconcile` are not exposed yet.
 AWS has completed a live packaged apply/activate/adopt/restart/destroy slice
 with independently verified cleanup. Hetzner completed the equivalent live
 slice in `fsn1`, including second-process adoption without replacement.
+
+## Linux services
 
 Packaged Linux artifacts additionally expose
 `<app> wharfie service install|converge|update|rollback|recover|prune|purge|start|stop|restart|status|uninstall`.

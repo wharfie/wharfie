@@ -23,7 +23,7 @@ separate from `latest`; use the exact version when reporting results.
 | Write your own application                         | [Quickstart](guides/quickstart.md) and [application structure](guides/application-structure.md) |
 | Inspect and recover a crashed cloud deployment     | [Remote recovery](guides/remote-recovery.md)                                                    |
 | Operate an existing Linux service                  | [Single-host developer preview](guides/developer-preview.md)                                    |
-| Look up packaged commands and persistence behavior | [CLI and runtime reference](../README.md)                                                       |
+| Look up packaged commands and persistence behavior | [CLI and runtime reference](guides/cli-reference.md)                                            |
 | Share what worked or where you got stuck           | [Preview feedback](https://github.com/wharfie/wharfie/issues/new?template=preview-feedback.yml) |
 
 ## Preview boundaries
@@ -59,8 +59,8 @@ these boundaries next to the version being tested.
   provider runs and independent cleanup evidence.
 - [Deployment journal capacity](guides/deployment-journal-capacity.md): limits,
   refusal behavior, and recovery reserve.
-- [Public docs publication plan](guides/docs-site.md): the prepared landing page,
-  legacy routes, and the remaining hosting work.
+- [Docs site runbook](guides/docs-site.md): how to publish, verify, or roll back
+  the live landing page and check its legacy routes.
 - [Architecture decisions](architecture/decisions/README.md),
   [product direction](product/magnetic-first-run.md), and
   [implementation checkpoints](../llm/checkpoints/): design and historical
