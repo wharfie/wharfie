@@ -74,6 +74,7 @@ import {
 import { LocalStoreWaitAbortedError } from '../../lib/db/lmdb-holder-lock.js';
 import { createLedgerService } from './ledger-service.js';
 import { runResidentScheduleObserver } from './resident-schedule-observer.js';
+import { openWorkflowWebhookServer } from './workflow-webhook-server.js';
 
 export const RESIDENT_ACTIVITY_SUBMIT_COMMAND = 'execution-ledger-submit';
 export const RESIDENT_WORKFLOW_START_COMMAND =
@@ -991,9 +992,13 @@ async function findRunnableWork(options) {
  * consumes exact ready work serially, and drains an active attempt during
  * graceful shutdown.
  * @param {{ledger: import('../../lib/db/tables/execution-ledger.js').ExecutionLedgerStore, execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, controlContext: {db: import('../../lib/db/base.js').DBClient, adapterName: import('../../lib/config/db.js').DBAdapterName, controlPath: string, tableName: string}, owner: Record<string, any>, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, runActivity?: typeof runPersistedDurableManifestActivity, runWorkflowActivity?: typeof runPersistedDurableManifestWorkflowActivity, fireTimer?: typeof fireWorkflowLedgerTimer, submitActivity?: typeof submitDurableManifestActivity, startWorkflow?: typeof startDurableManifestWorkflow, deliverSignal?: typeof deliverWorkflowLedgerSignal, recoverActivity?: typeof recoverManualLedgerActivity, recoverWorkflowActivity?: typeof recoverWorkflowLedgerActivity, requestWorkflowCancellation?: typeof requestWorkflowLedgerRunCancellation, recoverManagedEffects?: typeof recoverResidentManagedEffects, createCommandServer?: typeof createLocalOwnerCommandServer, runScheduleObserver?: typeof runResidentScheduleObserver, onReady?: () => void | Promise<void>, onStopping?: () => void | Promise<void>}} options - Held service dependencies.
+ * @param {NodeJS.ProcessEnv} [webhookEnv] - Host listener configuration.
  * @returns {Promise<Readonly<{processed: number}>>} - Graceful drain summary.
  */
-export async function runResidentActivityWorker(options) {
+export async function runResidentActivityWorker(
+  options,
+  webhookEnv = process.env,
+) {
   if (
     !options?.ledger ||
     typeof options.ledger.listReadyWork !== 'function' ||
@@ -1167,6 +1172,20 @@ export async function runResidentActivityWorker(options) {
     );
 
   /**
+   * @param {Omit<Parameters<typeof startDurableManifestWorkflow>[0], 'ledger' | 'execution'>} request - Bound workflow start.
+   * @returns {ReturnType<typeof startDurableManifestWorkflow>} - Committed start receipt.
+   */
+  const admitWorkflow = async (request) => {
+    const result = await startWorkflow({
+      ledger: options.ledger,
+      execution: binding.execution,
+      ...request,
+    });
+    wake();
+    return result;
+  };
+
+  /**
    * @param {Record<string, any>} command - Authenticated owner command.
    * @returns {Promise<Record<string, any>>} - Redacted command response.
    */
@@ -1209,13 +1228,7 @@ export async function runResidentActivityWorker(options) {
         revisionId: _revisionId,
         ...workflowRequest
       } = request;
-      const result = await startWorkflow({
-        ledger: options.ledger,
-        execution: binding.execution,
-        ...workflowRequest,
-      });
-      wake();
-      return result;
+      return await admitWorkflow(workflowRequest);
     }
     if (command.command === RESIDENT_WORKFLOW_SIGNAL_COMMAND) {
       const request = normalizeWorkflowSignalRequest(command.request);
@@ -1354,6 +1367,15 @@ export async function runResidentActivityWorker(options) {
 
   /** @type {{close: () => Promise<void>} | undefined} */
   let commandServer;
+  /** @type {{close: () => Promise<void>} | undefined} */
+  let webhookServer;
+  const stillOwnsService = async () =>
+    isCurrentOwner(
+      await ownershipStore.getOwnership({
+        serviceId: options.owner.ownership.serviceId,
+      }),
+      options.owner.ownership,
+    );
   /** @type {unknown} */
   let workerError;
   try {
@@ -1364,15 +1386,7 @@ export async function runResidentActivityWorker(options) {
         maxRequestBytes: LOCAL_OWNER_COMMAND_MAX_REQUEST_BYTES,
         isCurrentOwner: () => {
           if (!acceptingCommands) return Promise.resolve(false);
-          return trackOwnerCallback(
-            ownershipStore
-              .getOwnership({
-                serviceId: options.owner.ownership.serviceId,
-              })
-              .then((observed) =>
-                isCurrentOwner(observed, options.owner.ownership),
-              ),
-          );
+          return trackOwnerCallback(stillOwnsService());
         },
         handleCommand: (command) => {
           if (!acceptingCommands) {
@@ -1388,6 +1402,23 @@ export async function runResidentActivityWorker(options) {
         scheduleReady,
         signal,
       );
+      if (!signal.aborted && schedulesReady) {
+        webhookServer = await openWorkflowWebhookServer({
+          webhooks: binding.identity.manifest.webhooks,
+          env: webhookEnv,
+          start: async (request) => {
+            if (!acceptingCommands)
+              throw new Error('Resident not accepting work.');
+            return await trackOwnerCallback(
+              (async () => {
+                if (!(await stillOwnsService()) || !acceptingCommands)
+                  throw new Error('Resident unavailable.');
+                return await admitWorkflow(request);
+              })(),
+            );
+          },
+        });
+      }
       if (!signal.aborted && schedulesReady) {
         await options.onReady?.();
         if (!signal.aborted) acceptingCommands = true;
@@ -1569,7 +1600,11 @@ export async function runResidentActivityWorker(options) {
         createScheduleObserverDrainExpiredError(drainTimeoutMs);
     }
     await Promise.allSettled([...inFlightCommands]);
-    await commandServer?.close();
+    try {
+      await webhookServer?.close();
+    } finally {
+      await commandServer?.close();
+    }
   } catch (error) {
     closeError = error;
   }
@@ -1603,9 +1638,13 @@ export async function runResidentActivityWorker(options) {
  * cancellation path while workflow work is physically interrupted and then
  * settles conservatively without inventing cancellation authority.
  * @param {{execution: import('../durable-activity-host.js').ManifestActivityExecution, artifactId?: string, signal?: AbortSignal, pollIntervalMs?: number, drainTimeoutMs?: number, configuration?: ReturnType<typeof resolveExecutionLedgerStoreConfiguration>, applicationStateConfiguration?: ReturnType<typeof resolveApplicationStateStoreConfiguration>, onStoreHeld?: 'refuse'|'wait'}} options - Local resident service request. While another process holds the store, a resident refuses at once (LocalServiceSessionActiveError), or, when onStoreHeld is 'wait', waits a bounded time first.
+ * @param {NodeJS.ProcessEnv} [webhookEnv] - Host listener configuration; foreground drivers pass an empty environment.
  * @returns {Promise<Readonly<{processed: number}>>} - Worker drain summary.
  */
-export async function runLocalResidentActivityService(options) {
+export async function runLocalResidentActivityService(
+  options,
+  webhookEnv = process.env,
+) {
   if (!options || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('runLocalResidentActivityService requires options.');
   }
@@ -1720,27 +1759,30 @@ export async function runLocalResidentActivityService(options) {
             if (signal?.aborted) return Object.freeze({ processed: 0 });
             // Preparation precedes worker construction: its schedule observer
             // can admit work before the command endpoint publishes READY.
-            return await runResidentActivityWorker({
-              ledger: boundLedger,
-              execution: binding.execution,
-              ...(artifactId === undefined ? {} : { artifactId }),
-              controlContext,
-              owner,
-              ...(signal === undefined ? {} : { signal }),
-              ...(options.pollIntervalMs === undefined
-                ? {}
-                : { pollIntervalMs: options.pollIntervalMs }),
-              ...(options.drainTimeoutMs === undefined
-                ? {}
-                : { drainTimeoutMs: options.drainTimeoutMs }),
-              applicationStateConfiguration,
-              onReady: async () => {
-                if (!signal?.aborted) await service.markReady();
+            return await runResidentActivityWorker(
+              {
+                ledger: boundLedger,
+                execution: binding.execution,
+                ...(artifactId === undefined ? {} : { artifactId }),
+                controlContext,
+                owner,
+                ...(signal === undefined ? {} : { signal }),
+                ...(options.pollIntervalMs === undefined
+                  ? {}
+                  : { pollIntervalMs: options.pollIntervalMs }),
+                ...(options.drainTimeoutMs === undefined
+                  ? {}
+                  : { drainTimeoutMs: options.drainTimeoutMs }),
+                applicationStateConfiguration,
+                onReady: async () => {
+                  if (!signal?.aborted) await service.markReady();
+                },
+                onStopping: async () => {
+                  await service.beginStopping();
+                },
               },
-              onStopping: async () => {
-                await service.beginStopping();
-              },
-            });
+              webhookEnv,
+            );
           },
         });
         if (!signal?.aborted) {

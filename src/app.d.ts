@@ -215,6 +215,13 @@ export interface AppIdentity {
   id: LogicalId;
 }
 
+/** POST /hooks/<id> starts this workflow with the request body as JSON input. */
+export interface WorkflowWebhookDefinition {
+  workflow: LogicalId;
+  /** Read the delivery key from this top-level field instead of Idempotency-Key. */
+  deliveryIdField?: string;
+}
+
 interface WharfieAppDefinitionBase {
   app: AppIdentity;
   cli: AppCliDefinition;
@@ -222,6 +229,7 @@ interface WharfieAppDefinitionBase {
   activities?: Readonly<Record<LogicalId, ActivityDefinition>>;
   workflows?: Readonly<Record<LogicalId, WorkflowDefinition>>;
   schedules?: Readonly<Record<LogicalId, WorkflowScheduleDefinition>>;
+  webhooks?: Readonly<Record<LogicalId, WorkflowWebhookDefinition>>;
 }
 
 export type WharfieAppDefinition = WharfieAppDefinitionBase & {
@@ -253,6 +261,7 @@ export interface WharfieAppShorthand {
   activities?: Readonly<Record<LogicalId, AppActivityShorthand>>;
   workflows?: Readonly<Record<LogicalId, WorkflowDefinition>>;
   schedules?: Readonly<Record<LogicalId, WorkflowScheduleDefinition>>;
+  webhooks?: Readonly<Record<LogicalId, WorkflowWebhookDefinition>>;
 }
 
 type ExpandedShorthandActivity<
@@ -393,6 +402,9 @@ export type ExpandedWharfieAppShorthand<App extends WharfieAppShorthand> = {
     : unknown) &
   (App extends { readonly schedules: infer Schedules }
     ? { readonly schedules: Schedules }
+    : unknown) &
+  (App extends { readonly webhooks: infer Webhooks }
+    ? { readonly webhooks: Webhooks }
     : unknown);
 
 type StrictShape<Actual, Shape> = Shape extends unknown
@@ -424,20 +436,22 @@ type NonEmptyWhenDeclared<
     : unknown
   : unknown;
 
-type ScheduleReferencesDeclaredWorkflow<Actual> = Actual extends {
-  readonly schedules: infer Schedules;
-}
-  ? Actual extends { readonly workflows: infer Workflows }
-    ? Schedules extends Readonly<Record<string, { readonly workflow: string }>>
-      ? Exclude<
-          Schedules[keyof Schedules]['workflow'],
-          keyof Workflows
-        > extends never
-        ? unknown
+type TriggerReferencesDeclaredWorkflow<
+  Actual,
+  Key extends 'schedules' | 'webhooks',
+> =
+  Actual extends Readonly<Record<Key, infer Triggers>>
+    ? Actual extends { readonly workflows: infer Workflows }
+      ? Triggers extends Readonly<Record<string, { readonly workflow: string }>>
+        ? Exclude<
+            Triggers[keyof Triggers]['workflow'],
+            keyof Workflows
+          > extends never
+          ? unknown
+          : never
         : never
       : never
-    : never
-  : unknown;
+    : unknown;
 
 type DurableCliReferencesDeclaredWorkflow<Actual> = Actual extends {
   readonly cli: { readonly durable: infer Durable };
@@ -457,7 +471,9 @@ export declare function defineApp<const App>(
     StrictShape<App, WharfieAppDefinition> &
     NonEmptyWhenDeclared<App, 'workflows'> &
     NonEmptyWhenDeclared<App, 'schedules'> &
-    ScheduleReferencesDeclaredWorkflow<App> &
+    NonEmptyWhenDeclared<App, 'webhooks'> &
+    TriggerReferencesDeclaredWorkflow<App, 'webhooks'> &
+    TriggerReferencesDeclaredWorkflow<App, 'schedules'> &
     DurableCliReferencesDeclaredWorkflow<App>,
 ): App;
 
@@ -467,7 +483,9 @@ export declare function defineApp<const App extends WharfieAppShorthand>(
     NonEmptyWhenDeclared<App, 'activities'> &
     NonEmptyWhenDeclared<App, 'workflows'> &
     NonEmptyWhenDeclared<App, 'schedules'> &
-    ScheduleReferencesDeclaredWorkflow<App> &
+    NonEmptyWhenDeclared<App, 'webhooks'> &
+    TriggerReferencesDeclaredWorkflow<App, 'webhooks'> &
+    TriggerReferencesDeclaredWorkflow<App, 'schedules'> &
     ShorthandDurableReferencesDeclaredWorkflow<App> &
     ShorthandActivityModuleRequiresActivities<App> &
     ShorthandActivitiesHaveValidPresentStrings<App> &

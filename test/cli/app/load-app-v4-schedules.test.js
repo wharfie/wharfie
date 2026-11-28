@@ -125,6 +125,9 @@ describe('Wharfie app V4 schedule compiler', () => {
 
   it('compiles exact V4 schedules into the canonical portable manifest', async () => {
     const source = makeSource();
+    source.webhooks = {
+      alerts: { workflow: 'refresh', deliveryIdField: 'event_id' },
+    };
     const appDir = await makeApp(source);
 
     await expect(loadApp({ dir: appDir })).resolves.toEqual({
@@ -149,6 +152,24 @@ describe('Wharfie app V4 schedule compiler', () => {
         },
       },
     });
+  });
+
+  it.each([
+    [{ alerts: { workflow: 'unknown' } }, /must reference a declared workflow/],
+    [
+      { alerts: { workflow: 'refresh', token: 'not-portable' } },
+      /token is not supported/,
+    ],
+    [
+      { alerts: { workflow: 'refresh', deliveryIdField: 'nested.id' } },
+      /top-level JSON field/,
+    ],
+    [{ 'bad/path': { workflow: 'refresh' } }, /logical ID/],
+  ])('rejects invalid webhook declarations: %j', async (webhooks, error) => {
+    const dir = await makeApp({ ...makeSource(), webhooks });
+    await expect(loadApp({ dir })).rejects.toThrow(
+      /** @type {RegExp} */ (error),
+    );
   });
 
   it('rejects schemaVersion 3 instead of preserving a compatibility path', async () => {

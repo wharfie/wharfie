@@ -356,7 +356,10 @@ export function createDurableWorkflowRunCommand(options) {
   const output = resolveOutput(options.output);
   const startWorkflow =
     options.startWorkflow || startLocalDurableManifestWorkflow;
-  const runWorker = options.runWorker || runLocalResidentActivityService;
+  const runWorker =
+    options.runWorker ||
+    ((/** @type {Parameters<DurableWorkflowForegroundWorker>[0]} */ request) =>
+      runLocalResidentActivityService(request, {}));
   const readRunOutput = options.readRunOutput || readExecutionLedgerRunOutput;
   const inspectRun = options.inspectRun || inspectExecutionLedgerRun;
   const now = options.now || (() => Date.now());

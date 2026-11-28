@@ -18,6 +18,7 @@ const SOURCE_TOP_LEVEL_KEYS = new Set([
   'activities',
   'workflows',
   'schedules',
+  'webhooks',
 ]);
 const SOURCE_APP_KEYS = new Set(['id']);
 const SOURCE_CLI_KEYS = new Set(['entrypoint', 'durable']);
@@ -314,6 +315,9 @@ export async function compileAppManifest(sourceValue, options) {
   }
   if (Object.prototype.hasOwnProperty.call(source, 'schedules')) {
     manifest.schedules = source.schedules;
+  }
+  if (Object.hasOwn(source, 'webhooks')) {
+    manifest.webhooks = source.webhooks;
   }
 
   return validateAppManifest(manifest);

@@ -20,6 +20,7 @@ const APP_SHORTHAND_KEYS = new Set([
   'activities',
   'workflows',
   'schedules',
+  'webhooks',
 ]);
 const APP_SHORTHAND_ACTIVITY_KEYS = new Set([
   'path',
@@ -204,7 +205,7 @@ export function defineApp(definition) {
     }
   }
 
-  for (const key of ['workflows', 'schedules']) {
+  for (const key of ['workflows', 'schedules', 'webhooks']) {
     if (Object.prototype.hasOwnProperty.call(definition, key)) {
       expanded[key] = definition[key];
     }
