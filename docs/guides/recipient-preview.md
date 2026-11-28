@@ -173,7 +173,7 @@ Keep the recipient's application data directory across CLI and service
 updates. A fresh shell uses that existing state; a fresh empty machine has no
 copy of the run. An abrupt resident crash or host reboot can require explicit
 coordinator inspection and recovery; follow the
-[local resident operations reference](../../README.md#submit-durable-work-and-run-a-local-resident).
+[local coordinator recovery procedure](../../src/cli/README.md#recover-a-local-coordinator).
 Do not replace a healthy active coordinator just to reconnect. This single-host
 preview requires retained storage: loss of the host's root disk is not a
 supported automatic recovery path.
@@ -210,7 +210,7 @@ What to do:
   Check it with `wharfie service status --json`, or `deployment status` for a
   cloud host. If it does not return to health, or reports that the previous
   coordinator is still active, follow the coordinator recovery for a
-  [local resident](../../README.md#submit-durable-work-and-run-a-local-resident)
+  [local resident](../../src/cli/README.md#recover-a-local-coordinator)
   or a [cloud deployment](remote-recovery.md). Do not delete the data
   directory.
 - Report it through the
@@ -254,7 +254,7 @@ check that no other user service needs it first.
 ## Optional: provision an AWS or Hetzner host
 
 The `--self-deployable` executable above also exposes the
-[packaged AWS and Hetzner deployment commands](quickstart.md#try-the-experimental-deployment-lifecycle).
+[packaged AWS and Hetzner deployment commands](cli-reference.md#try-the-experimental-deployment-lifecycle).
 Follow that reference for read-only `preview`, provider credentials, placement,
 SSH access, and `apply`; this route creates chargeable cloud resources. Invoke
 the Linux executable from a matching Linux controller. AWS support was embedded
